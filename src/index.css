@@ -1,0 +1,190 @@
+@import "tailwindcss";
+
+/* ===== Custom CSS Variables ===== */
+:root {
+  --brand-green: #2F6B3B;
+  --brand-red: #C62828;
+  --brand-brown: #795548;
+  --brand-cream: #FFF8E7;
+  --brand-light-green: #E8F3E8;
+}
+
+/* ===== Base Styles ===== */
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  font-family: 'Inter', system-ui, sans-serif;
+  background-color: var(--brand-cream);
+  color: #1a1a1a;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ===== Telugu Font Helper ===== */
+.font-telugu {
+  font-family: 'Noto Sans Telugu', sans-serif;
+}
+
+/* ===== Scrollbar ===== */
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: var(--brand-cream);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--brand-green);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #1e4a27;
+}
+
+/* ===== Hero Gradient ===== */
+.hero-gradient {
+  background: linear-gradient(135deg, #1a3d22 0%, #2F6B3B 40%, #3d5c1e 70%, #4a2c0a 100%);
+}
+
+/* ===== Card Styles ===== */
+.product-card {
+  transition: transform 0.3s ease, box-shadow 0.3s ease;
+}
+.product-card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 20px 60px rgba(0,0,0,0.15);
+}
+
+/* ===== Shimmer Loading ===== */
+.shimmer {
+  background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+}
+
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+/* ===== Floating WhatsApp Button ===== */
+.whatsapp-float {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  z-index: 1000;
+  animation: float 3s ease-in-out infinite;
+}
+
+@keyframes float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-8px); }
+}
+
+/* ===== Sticky Cart Badge ===== */
+.cart-badge {
+  animation: bounceSubtle 2s ease-in-out infinite;
+}
+
+@keyframes bounceSubtle {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.1); }
+}
+
+/* ===== Page Transition ===== */
+.page-enter {
+  animation: fadeSlideUp 0.4s ease-out;
+}
+
+@keyframes fadeSlideUp {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* ===== Spice Background Pattern ===== */
+.spice-pattern {
+  background-image: 
+    radial-gradient(circle at 10% 90%, rgba(47,107,59,0.08) 0%, transparent 50%),
+    radial-gradient(circle at 90% 10%, rgba(198,40,40,0.06) 0%, transparent 50%),
+    radial-gradient(circle at 50% 50%, rgba(121,85,72,0.04) 0%, transparent 70%);
+}
+
+/* ===== Order Status Track ===== */
+.track-step.active .track-icon {
+  background-color: var(--brand-green);
+  color: white;
+  box-shadow: 0 0 0 4px rgba(47,107,59,0.2);
+}
+
+.track-step.completed .track-line {
+  background-color: var(--brand-green);
+}
+
+/* ===== Razorpay Button Override ===== */
+.razorpay-payment-button {
+  display: none !important;
+}
+
+/* ===== Mobile Optimization ===== */
+@media (max-width: 768px) {
+  .hero-heading {
+    font-size: clamp(2rem, 8vw, 3.5rem);
+  }
+  
+  .product-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+/* ===== Print Styles (Invoice) ===== */
+@media print {
+  .no-print {
+    display: none !important;
+  }
+  body {
+    background: white;
+    color: black;
+  }
+}
+
+/* ===== Focus Styles ===== */
+*:focus-visible {
+  outline: 2px solid var(--brand-green);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* ===== Selection Color ===== */
+::selection {
+  background-color: rgba(47,107,59,0.2);
+  color: var(--brand-green);
+}
+
+/* ===== Badge ===== */
+.badge-new {
+  background: linear-gradient(135deg, #2F6B3B, #3d8a4c);
+}
+
+.badge-hot {
+  background: linear-gradient(135deg, #C62828, #e53935);
+}
+
+/* ===== Toast ===== */
+.toast-success {
+  border-left: 4px solid var(--brand-green) !important;
+}
+
+.toast-error {
+  border-left: 4px solid var(--brand-red) !important;
+}
