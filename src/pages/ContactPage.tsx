@@ -8,7 +8,7 @@ import toast from 'react-hot-toast';
 import { useLanguageStore } from '@/hooks/useStore';
 import { translations } from '@/i18n/translations';
 
-const WHATSAPP_NUMBER = import.meta.env.VITE_WHATSAPP_BUSINESS_NUMBER || '919876543210';
+const WHATSAPP_NUMBER = import.meta.env.VITE_WHATSAPP_BUSINESS_NUMBER || '918374634989';
 
 export default function ContactPage() {
   const { language } = useLanguageStore();
@@ -42,7 +42,7 @@ export default function ContactPage() {
       icon: '📞',
       title: t.contact.phone,
       value: '+91 98765 43210',
-      href: 'tel:+919876543210',
+      href: 'tel:+918374634989',
       color: 'bg-blue-50 text-blue-600',
     },
     {
@@ -152,7 +152,7 @@ export default function ContactPage() {
                     value={form.mobile}
                     onChange={(e) => setForm({ ...form, mobile: e.target.value })}
                     className="w-full px-4 py-3 bg-white border border-gray-200 rounded-xl focus:outline-none focus:border-brand-green transition-all"
-                    placeholder="9876543210"
+                    placeholder="8374634989"
                     type="tel"
                     maxLength={10}
                   />

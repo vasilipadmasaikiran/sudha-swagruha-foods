@@ -7,7 +7,7 @@ import { CheckCircle, Package, MapPin, MessageCircle, ArrowRight, ShoppingBag } 
 import { useLanguageStore } from '@/hooks/useStore';
 import { translations } from '@/i18n/translations';
 
-const WHATSAPP_NUMBER = import.meta.env.VITE_WHATSAPP_BUSINESS_NUMBER || '919876543210';
+const WHATSAPP_NUMBER = import.meta.env.VITE_WHATSAPP_BUSINESS_NUMBER || '918374634989';
 
 interface OrderSuccessState {
   orderNumber: string;

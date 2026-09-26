@@ -157,7 +157,7 @@ export default function TrackOrderPage() {
               <input
                 {...register('mobile', { required: true })}
                 className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:outline-none focus:border-brand-green transition-all"
-                placeholder="9876543210"
+                placeholder="8374634989"
                 type="tel"
                 maxLength={10}
               />

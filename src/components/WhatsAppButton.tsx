@@ -2,7 +2,7 @@
 // WhatsApp Floating Button
 // ============================================================
 
-const WHATSAPP_NUMBER = import.meta.env.VITE_WHATSAPP_BUSINESS_NUMBER || '919876543210';
+const WHATSAPP_NUMBER = import.meta.env.VITE_WHATSAPP_BUSINESS_NUMBER || '918374634989';
 const MESSAGE = encodeURIComponent(
   'నమస్కారం! 🙏 Sudha Swagruha Foods గురించి సమాచారం కావాలి.'
 );

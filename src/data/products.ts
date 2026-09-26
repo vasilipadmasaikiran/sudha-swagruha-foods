@@ -43,6 +43,8 @@ export interface Category {
   color: string;
 }
 
+const getImg = (name: string) => import.meta.env.BASE_URL + 'images/' + name;
+
 export const categories: Category[] = [
   {
     id: '1',
@@ -52,7 +54,7 @@ export const categories: Category[] = [
     description_en: 'Traditional Andhra-style pickles with bold flavors',
     description_te: 'సంప్రదాయ ఆంధ్ర స్టైల్ ఊరగాయలు',
     icon: '🫙',
-    image: 'https://images.unsplash.com/photo-1589135233689-a74ce2e0ffae?w=800&q=80',
+    image: getImg('pickle.jpg'),
     color: '#C62828',
   },
   {
@@ -63,7 +65,7 @@ export const categories: Category[] = [
     description_en: 'Spicy chilli-based powders for everyday meals',
     description_te: 'రోజువారీ వంటకు కారమైన పొడులు',
     icon: '🌶️',
-    image: 'https://images.unsplash.com/photo-1596040033229-a9821ebd058d?w=800&q=80',
+    image: getImg('karam.jpg'),
     color: '#C62828',
   },
   {
@@ -74,7 +76,7 @@ export const categories: Category[] = [
     description_en: 'Aromatic spice blends for authentic Telugu cooking',
     description_te: 'అసలైన తెలుగు వంటకు సుగంధ మసాలాలు',
     icon: '🌿',
-    image: 'https://images.unsplash.com/photo-1612966809150-a0b4b3f3a2bd?w=800&q=80',
+    image: getImg('masala.jpg'),
     color: '#2F6B3B',
   },
   {
@@ -85,7 +87,7 @@ export const categories: Category[] = [
     description_en: 'Dry chutneys and rice powders for daily use',
     description_te: 'నిత్య వాడకానికి పొడి చట్నీలు & అన్నం పొడులు',
     icon: '🍚',
-    image: 'https://images.unsplash.com/photo-1585032226651-759b368d7246?w=800&q=80',
+    image: getImg('karam.jpg'),
     color: '#795548',
   },
 ];
@@ -99,10 +101,7 @@ export const sampleProducts: Product[] = [
     description_en: 'The king of all pickles! Our Andhra Avakaya is made with raw mangoes, mustard seeds, red chilli powder, salt, and sesame oil — just like Amma makes it. Bold, spicy, and utterly addictive.',
     description_te: 'అన్ని ఊరగాయలలో రాజు! మా ఆంధ్ర అవకాయ పచ్చి మామిడికాయలు, ఆవాలు, ఎర్ర మిర్చి పొడి, ఉప్పు మరియు నువ్వుల నూనెతో తయారు చేయబడింది — అమ్మ తయారు చేసిన విధంగా.',
     category: 'pickles',
-    images: [
-      'https://images.unsplash.com/photo-1589135233689-a74ce2e0ffae?w=800&q=80',
-      'https://images.unsplash.com/photo-1604908176997-125f25cc6f3d?w=800&q=80',
-    ],
+    images: [getImg('pickle.jpg')],
     ingredients_en: 'Raw Mango, Mustard Seeds, Red Chilli Powder, Salt, Sesame Oil, Fenugreek',
     ingredients_te: 'పచ్చి మామిడికాయ, ఆవాలు, ఎర్ర మిర్చి పొడి, ఉప్పు, నువ్వుల నూనె, మెంతులు',
     variants: [
@@ -125,10 +124,7 @@ export const sampleProducts: Product[] = [
     description_en: 'The pride of Andhra! Our Gongura (Sorrel leaves) pickle is tangy, spicy, and deeply flavorful. Made with freshly sourced gongura leaves, mustard, fenugreek and red chillies.',
     description_te: 'ఆంధ్ర గర్వం! మా గోంగూర పచ్చడి పులుపుగా, కారంగా, అద్భుతమైన రుచితో ఉంటుంది. తాజా గోంగూర ఆకులు, ఆవాలు, మెంతులు మరియు ఎర్ర మిర్చిలతో తయారు చేయబడింది.',
     category: 'pickles',
-    images: [
-      'https://images.unsplash.com/photo-1604908176997-125f25cc6f3d?w=800&q=80',
-      'https://images.unsplash.com/photo-1589135233689-a74ce2e0ffae?w=800&q=80',
-    ],
+    images: [getImg('pickle.jpg')],
     ingredients_en: 'Gongura Leaves, Red Chillies, Mustard Seeds, Fenugreek, Sesame Oil, Salt, Garlic',
     ingredients_te: 'గోంగూర ఆకులు, ఎర్ర మిర్చులు, ఆవాలు, మెంతులు, నువ్వుల నూనె, ఉప్పు, వెల్లుల్లి',
     variants: [
@@ -151,9 +147,7 @@ export const sampleProducts: Product[] = [
     description_en: 'Sunshine in a jar! Our Lemon Pickle is perfectly balanced with tangy lemon, spicy chillies, and aromatic spices. A perfect accompaniment to rice, chapati, or snacks.',
     description_te: 'జాడీలో సూర్యకిరణం! మా నిమ్మకాయ ఊరగాయ పులుపైన నిమ్మకాయ, కారమైన మిర్చులు మరియు సుగంధ మసాలాలతో సరిగ్గా సమతుల్యంగా ఉంటుంది.',
     category: 'pickles',
-    images: [
-      'https://images.unsplash.com/photo-1568909344668-6f14a07b56a0?w=800&q=80',
-    ],
+    images: [getImg('pickle.jpg')],
     ingredients_en: 'Lemon, Red Chilli Powder, Salt, Mustard Seeds, Sesame Oil, Fenugreek, Asafoetida',
     ingredients_te: 'నిమ్మకాయ, ఎర్ర మిర్చి పొడి, ఉప్పు, ఆవాలు, నువ్వుల నూనె, మెంతులు, ఇంగువ',
     variants: [
@@ -175,9 +169,7 @@ export const sampleProducts: Product[] = [
     description_en: 'A Telugu kitchen staple! This rich and tangy tomato pickle is cooked with fresh tomatoes, mustard, and a blend of aromatic spices that make every meal special.',
     description_te: 'తెలుగు వంటింటి అవసరం! ఈ రిచ్ మరియు పులుపైన టమాటా పచ్చడి తాజా టమాటాలు, ఆవాలు మరియు సుగంధ మసాలాల మిశ్రమంతో వండబడుతుంది.',
     category: 'pickles',
-    images: [
-      'https://images.unsplash.com/photo-1600803907087-f56d462fd26b?w=800&q=80',
-    ],
+    images: [getImg('pickle.jpg')],
     ingredients_en: 'Tomatoes, Red Chillies, Mustard Seeds, Sesame Oil, Salt, Garlic, Curry Leaves',
     ingredients_te: 'టమాటాలు, ఎర్ర మిర్చులు, ఆవాలు, నువ్వుల నూనె, ఉప్పు, వెల్లుల్లి, కరివేపాకు',
     variants: [
@@ -198,9 +190,7 @@ export const sampleProducts: Product[] = [
     description_en: 'The heart of Telugu breakfasts! Kandi Karam made with roasted toor dal, red chillies, garlic, and cumin. Perfect with idli, dosa, or rice and ghee.',
     description_te: 'తెలుగు అల్పాహారాల హృదయం! వేయించిన కంది పప్పు, ఎర్ర మిర్చులు, వెల్లుల్లి మరియు జీలకర్రతో తయారు చేసిన కంది కారం. ఇడ్లీ, దోశ లేదా అన్నం మరియు నెయ్యితో సరిపోతుంది.',
     category: 'karam',
-    images: [
-      'https://images.unsplash.com/photo-1596040033229-a9821ebd058d?w=800&q=80',
-    ],
+    images: [getImg('karam.jpg')],
     ingredients_en: 'Toor Dal, Red Chillies, Garlic, Cumin, Salt, Curry Leaves, Asafoetida',
     ingredients_te: 'కంది పప్పు, ఎర్ర మిర్చులు, వెల్లుల్లి, జీలకర్ర, ఉప్పు, కరివేపాకు, ఇంగువ',
     variants: [
@@ -223,9 +213,7 @@ export const sampleProducts: Product[] = [
     description_en: 'The ultimate idli companion! Our Idli Karam is a perfect blend of roasted chana dal, red chillies, garlic, and spices. Just a pinch with oil or ghee transforms your idli.',
     description_te: 'ఇడ్లీకి అత్యుత్తమ జోడీ! మా ఇడ్లీ కారం వేయించిన శెనగ పప్పు, ఎర్ర మిర్చులు, వెల్లుల్లి మరియు మసాలాల పరిపూర్ణ మిశ్రమం.',
     category: 'karam',
-    images: [
-      'https://images.unsplash.com/photo-1601050690597-df0568f70950?w=800&q=80',
-    ],
+    images: [getImg('karam.jpg')],
     ingredients_en: 'Chana Dal, Red Chillies, Garlic, Cumin, Salt, Sesame Seeds, Curry Leaves',
     ingredients_te: 'శెనగ పప్పు, ఎర్ర మిర్చులు, వెల్లుల్లి, జీలకర్ర, ఉప్పు, నువ్వులు, కరివేపాకు',
     variants: [
@@ -248,9 +236,7 @@ export const sampleProducts: Product[] = [
     description_en: 'Fragrant and nutritious! Our Curry Leaf Podi captures the earthy aroma and health benefits of fresh curry leaves combined with lentils and spices.',
     description_te: 'సుగంధమైన మరియు పోషకాహారం! మా కరివేపాకు పొడి తాజా కరివేపాకు యొక్క మట్టి వాసన మరియు ఆరోగ్య ప్రయోజనాలను పప్పు మరియు మసాలాలతో కలపుతుంది.',
     category: 'podi',
-    images: [
-      'https://images.unsplash.com/photo-1585032226651-759b368d7246?w=800&q=80',
-    ],
+    images: [getImg('karam.jpg')],
     ingredients_en: 'Curry Leaves, Urad Dal, Chana Dal, Red Chillies, Garlic, Salt, Sesame Seeds',
     ingredients_te: 'కరివేపాకు, మినప పప్పు, శెనగ పప్పు, ఎర్ర మిర్చులు, వెల్లుల్లి, ఉప్పు, నువ్వులు',
     variants: [
@@ -272,9 +258,7 @@ export const sampleProducts: Product[] = [
     description_en: 'Crunchy, nutty, and absolutely delicious! Our Peanut Podi is made from roasted peanuts, red chillies, garlic, and a touch of tamarind. Perfect with rice, dosa, or as a snack.',
     description_te: 'క్రంచీ, నట్టీ మరియు పూర్తిగా రుచికరం! మా పల్లీ పొడి వేయించిన వేరుశెనగలు, ఎర్ర మిర్చులు, వెల్లుల్లి మరియు చిన్న చింతపండుతో తయారు చేయబడింది.',
     category: 'podi',
-    images: [
-      'https://images.unsplash.com/photo-1597481499750-3e6b22637536?w=800&q=80',
-    ],
+    images: [getImg('karam.jpg')],
     ingredients_en: 'Roasted Peanuts, Red Chillies, Garlic, Tamarind, Salt, Cumin, Curry Leaves',
     ingredients_te: 'వేయించిన వేరుశెనగలు, ఎర్ర మిర్చులు, వెల్లుల్లి, చింతపండు, ఉప్పు, జీలకర్ర, కరివేపాకు',
     variants: [
@@ -296,9 +280,7 @@ export const sampleProducts: Product[] = [
     description_en: 'The soul of South Indian cooking! Our Sambar Powder is a carefully balanced blend of 16 roasted spices that gives your sambar the authentic village restaurant taste.',
     description_te: 'దక్షిణ భారత వంటపాకం యొక్క ఆత్మ! మా సాంబార్ పొడి 16 వేయించిన మసాలాల జాగ్రత్తగా సమతుల్యమైన మిశ్రమం.',
     category: 'masala',
-    images: [
-      'https://images.unsplash.com/photo-1612966809150-a0b4b3f3a2bd?w=800&q=80',
-    ],
+    images: [getImg('masala.jpg')],
     ingredients_en: 'Coriander, Cumin, Black Pepper, Red Chillies, Mustard, Fenugreek, Curry Leaves, Turmeric, Cinnamon, Cloves, Cardamom, Asafoetida',
     ingredients_te: 'కొత్తిమీర, జీలకర్ర, నల్ల మిరియాలు, ఎర్ర మిర్చులు, ఆవాలు, మెంతులు, కరివేపాకు, పసుపు, దాల్చిన చెక్క, లవంగాలు, యాలకులు, ఇంగువ',
     variants: [
@@ -321,9 +303,7 @@ export const sampleProducts: Product[] = [
     description_en: 'Restaurant-quality at home! Our Andhra-style Chicken Masala brings the bold, fiery flavors of Telugu cooking to your kitchen. Made with premium whole spices, slow roasted to perfection.',
     description_te: 'ఇంట్లో రెస్టారెంట్ నాణ్యత! మా ఆంధ్ర స్టైల్ చికెన్ మసాలా తెలుగు వంట యొక్క బోల్డ్, ఫైరీ రుచులను మీ వంటింటికి తీసుకువస్తుంది.',
     category: 'masala',
-    images: [
-      'https://images.unsplash.com/photo-1567188040759-fb8a883dc6d8?w=800&q=80',
-    ],
+    images: [getImg('masala.jpg')],
     ingredients_en: 'Red Chillies, Coriander, Cumin, Black Pepper, Cinnamon, Cloves, Cardamom, Fennel, Star Anise, Turmeric, Mace, Nutmeg',
     ingredients_te: 'ఎర్ర మిర్చులు, కొత్తిమీర, జీలకర్ర, నల్ల మిరియాలు, దాల్చిన చెక్క, లవంగాలు, యాలకులు, సోంపు, స్టార్ అనిస్, పసుపు, జాపత్రి, జాజికాయ',
     variants: [

@@ -1,5 +1,15 @@
 @import "tailwindcss";
 
+@theme {
+  --color-brand-green: #2F6B3B;
+  --color-brand-green-dark: #1e4a27;
+  --color-brand-light-green: #E8F3E8;
+  --color-brand-red: #C62828;
+  --color-brand-red-dark: #8b1a1a;
+  --color-brand-brown: #795548;
+  --color-brand-cream: #FFF8E7;
+}
+
 /* ===== Custom CSS Variables ===== */
 :root {
   --brand-green: #2F6B3B;

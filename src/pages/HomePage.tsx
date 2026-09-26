@@ -443,7 +443,7 @@ export default function HomePage() {
               Message us directly on WhatsApp and we'll help you place your order!
             </p>
             <a
-              href={`https://wa.me/${import.meta.env.VITE_WHATSAPP_BUSINESS_NUMBER || '919876543210'}?text=${encodeURIComponent('నమస్కారం! నేను ఆర్డర్ చేయాలనుకుంటున్నాను.')}`}
+              href={`https://wa.me/${import.meta.env.VITE_WHATSAPP_BUSINESS_NUMBER || '918374634989'}?text=${encodeURIComponent('నమస్కారం! నేను ఆర్డర్ చేయాలనుకుంటున్నాను.')}`}
               target="_blank"
               rel="noopener noreferrer"
               className="inline-flex items-center gap-3 bg-[#25D366] hover:bg-green-500 text-white px-8 py-4 rounded-2xl font-bold text-lg transition-all hover:scale-105 shadow-lg"

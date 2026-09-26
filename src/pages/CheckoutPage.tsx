@@ -266,7 +266,7 @@ export default function CheckoutPage() {
                   </div>
                   <div>
                     <label className={labelClass}>{t.checkout.mobile} *</label>
-                    <input {...register('mobile')} className={inputClass} placeholder="9876543210" type="tel" maxLength={10} />
+                    <input {...register('mobile')} className={inputClass} placeholder="8374634989" type="tel" maxLength={10} />
                     {errors.mobile && <p className={errorClass}>{errors.mobile.message}</p>}
                   </div>
                   <div>
@@ -285,7 +285,7 @@ export default function CheckoutPage() {
                         <input
                           {...register('whatsapp')}
                           className={inputClass}
-                          placeholder="9876543210"
+                          placeholder="8374634989"
                           type="tel"
                           maxLength={10}
                         />
