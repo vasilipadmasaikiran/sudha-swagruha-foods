@@ -16,6 +16,8 @@ import {
   CheckCircle2,
   Sparkles,
   ShoppingBag,
+  Tag,
+  X,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useCartStore, useLanguageStore } from '@/hooks/useStore';
@@ -63,12 +65,14 @@ export default function CheckoutPage() {
   const navigate = useNavigate();
   const { language } = useLanguageStore();
   const t = translations[language];
-  const { items, getSubtotal, getDeliveryCharge, getTotal, clearCart, discount } = useCartStore();
+  const { items, getSubtotal, getDeliveryCharge, getTotal, clearCart, discount, couponCode, applyCoupon } = useCartStore();
   const { settings } = useSettingsStore();
   const { addOrder } = useOrderStore();
 
   const [processing, setProcessing] = useState(false);
   const [sameAsPhone, setSameAsPhone] = useState(true);
+  const [couponInput, setCouponInput] = useState('');
+  const [couponError, setCouponError] = useState('');
 
   const {
     register,
@@ -589,6 +593,85 @@ export default function CheckoutPage() {
                   ))}
                 </div>
 
+                {/* ── Coupon Code Section ── */}
+                <div className="border-t border-gray-100 pt-4 mb-4">
+                  <p className="text-sm font-semibold text-gray-700 mb-2 flex items-center gap-1.5">
+                    <Tag className="w-4 h-4 text-brand-green" />
+                    Have a coupon code?
+                  </p>
+
+                  {couponCode ? (
+                    // Applied coupon badge
+                    <div className="flex items-center justify-between bg-green-50 border border-green-200 rounded-xl px-3 py-2">
+                      <div className="flex items-center gap-2">
+                        <CheckCircle2 className="w-4 h-4 text-green-600" />
+                        <span className="text-sm font-bold text-green-700 tracking-wide">{couponCode}</span>
+                        <span className="text-xs text-green-600 bg-green-100 px-2 py-0.5 rounded-full">{discount}% OFF</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          applyCoupon('__CLEAR__');
+                          useCartStore.setState({ couponCode: '', discount: 0 });
+                          setCouponInput('');
+                          setCouponError('');
+                        }}
+                        className="text-gray-400 hover:text-red-500 transition-colors p-0.5 rounded"
+                        title="Remove coupon"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+                  ) : (
+                    // Coupon input row
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={couponInput}
+                        onChange={(e) => {
+                          setCouponInput(e.target.value.toUpperCase());
+                          setCouponError('');
+                        }}
+                        placeholder="Enter coupon code"
+                        className="flex-1 px-3 py-2 bg-white border border-gray-200 rounded-xl focus:outline-none focus:border-brand-green focus:ring-2 focus:ring-brand-green/20 text-sm uppercase tracking-wide"
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            const ok = applyCoupon(couponInput);
+                            if (!ok) setCouponError('Invalid or expired coupon code.');
+                          }
+                        }}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (!couponInput.trim()) {
+                            setCouponError('Please enter a coupon code.');
+                            return;
+                          }
+                          const ok = applyCoupon(couponInput);
+                          if (ok) {
+                            setCouponError('');
+                            const appliedDiscount = useCartStore.getState().discount;
+                            toast.success(`Coupon "${couponInput}" applied! ${appliedDiscount}% off 🎉`);
+                          } else {
+                            setCouponError('Invalid or expired coupon code.');
+                          }
+                        }}
+                        className="px-4 py-2 bg-brand-green text-white rounded-xl text-sm font-semibold hover:bg-brand-green-dark transition-colors whitespace-nowrap"
+                      >
+                        Apply
+                      </button>
+                    </div>
+                  )}
+                  {couponError && (
+                    <p className="text-xs text-red-500 mt-1.5 flex items-center gap-1">
+                      <X className="w-3 h-3" />
+                      {couponError}
+                    </p>
+                  )}
+                </div>
+
                 <div className="border-t border-gray-100 pt-4 space-y-2">
                   <div className="flex justify-between text-sm text-gray-600">
                     <span>{t.cart.subtotal}</span>
@@ -596,7 +679,7 @@ export default function CheckoutPage() {
                   </div>
                   {discountAmount > 0 && (
                     <div className="flex justify-between text-sm text-green-600">
-                      <span>{t.cart.discount}</span>
+                      <span>{t.cart.discount} ({couponCode})</span>
                       <span>−₹{discountAmount}</span>
                     </div>
                   )}
