@@ -24,6 +24,21 @@
     <meta name="twitter:description" content="Authentic homemade Telugu pickles & masalas" />
     <meta name="twitter:image" content="/logo/logo.png" />
 
+    <!-- GitHub Pages SPA redirect handler -->
+    <script>
+      // This script reads the redirect URL stored by 404.html and restores it
+      // so that React Router can handle the route correctly on first load.
+      (function () {
+        var redirect = sessionStorage.getItem('spa-redirect');
+        if (redirect) {
+          sessionStorage.removeItem('spa-redirect');
+          var url = new URL(redirect);
+          var path = url.pathname + url.search + url.hash;
+          window.history.replaceState(null, '', path);
+        }
+      })();
+    </script>
+
     <!-- Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />

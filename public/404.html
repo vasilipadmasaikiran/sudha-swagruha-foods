@@ -1,23 +1,14 @@
-<!DOCTYPE html>
-<html>
+<!doctype html>
+<html lang="en">
   <head>
-    <meta charset="utf-8">
+    <meta charset="UTF-8" />
     <title>Sudha Swagruha Foods</title>
-    <script type="text/javascript">
-      // Single Page Apps for GitHub Pages
-      // MIT License
-      // https://github.com/rafgraph/spa-github-pages
-      var pathSegmentsToKeep = 1; // Assuming repo name is the base path e.g. /sudha-swagruha-foods/
-      var l = window.location;
-      l.replace(
-        l.protocol + '//' + l.hostname + (l.port ? ':' + l.port : '') +
-        l.pathname.split('/').slice(0, 1 + pathSegmentsToKeep).join('/') + '/?/' +
-        l.pathname.slice(1).split('/').slice(pathSegmentsToKeep).join('/').replace(/&/g, '~and~') +
-        (l.search ? '&' + l.search.slice(1).replace(/&/g, '~and~') : '') +
-        l.hash
-      );
+    <script>
+      // GitHub Pages SPA Fallback
+      // Saves the current URL and redirects to index.html so React Router can handle it.
+      sessionStorage.setItem('spa-redirect', window.location.href);
+      window.location.replace(window.location.origin + window.location.pathname.split('/').slice(0, 2).join('/'));
     </script>
   </head>
-  <body>
-  </body>
+  <body></body>
 </html>
