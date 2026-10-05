@@ -72,8 +72,8 @@ function AppRoutes() {
         <Route path="/about" element={<AboutPage />} />
         <Route path="/contact" element={<ContactPage />} />
         <Route path="/admin-console" element={<AdminConsolePage />} />
-        <Route path="/admin" element={<AdminPage />} />
-        <Route path="/admin/*" element={<AdminPage />} />
+        <Route path="/admin" element={<AdminConsolePage />} />
+        <Route path="/admin/*" element={<AdminConsolePage />} />
         {/* 404 */}
         <Route
           path="*"

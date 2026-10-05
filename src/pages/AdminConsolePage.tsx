@@ -27,12 +27,24 @@ import {
   ExternalLink,
   X,
   Save,
+  ShoppingBag,
+  LogOut,
+  Phone,
+  CreditCard,
 } from 'lucide-react';
 import { useProductStore, type DiscountAnnouncement, type CouponItem } from '@/hooks/useProductStore';
+import { useAuthStore } from '@/hooks/useStore';
+import { useOrderStore } from '@/hooks/useOrderStore';
+import { useSettingsStore } from '@/hooks/useSettingsStore';
+import { supabase } from '@/services/supabase';
+import AdminLoginForm from '@/components/admin/AdminLoginForm';
+import AdminOrdersTab from '@/components/admin/AdminOrdersTab';
+import AdminSettingsTab from '@/components/admin/AdminSettingsTab';
+import AdminPaymentsTab from '@/components/admin/AdminPaymentsTab';
 import { categories, type Product, type ProductVariant } from '@/data/products';
 import toast from 'react-hot-toast';
 
-type ActiveTab = 'products' | 'announcement' | 'coupons' | 'insights';
+type ActiveTab = 'orders' | 'products' | 'settings' | 'payments' | 'announcement' | 'coupons' | 'insights';
 
 // Image preset options for quick selection
 const IMAGE_PRESETS = [
@@ -58,6 +70,10 @@ const IMAGE_PRESETS = [
 ];
 
 export default function AdminConsolePage() {
+  const { isAdmin, userEmail, logout } = useAuthStore();
+  const { orders } = useOrderStore();
+  const { settings } = useSettingsStore();
+
   const {
     products,
     announcement,
@@ -75,7 +91,7 @@ export default function AdminConsolePage() {
     resetToDefaults,
   } = useProductStore();
 
-  const [activeTab, setActiveTab] = useState<ActiveTab>('products');
+  const [activeTab, setActiveTab] = useState<ActiveTab>('orders');
   const [searchQuery, setSearchQuery] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
@@ -125,6 +141,10 @@ export default function AdminConsolePage() {
     toast.success('Discount Announcement banner updated & published!');
   };
 
+  if (!isAdmin) {
+    return <AdminLoginForm />;
+  }
+
   return (
     <div className="min-h-screen bg-slate-900 text-slate-100 flex flex-col font-sans">
       {/* ─── Top Admin Bar ────────────────────────────────────────── */}
@@ -142,29 +162,47 @@ export default function AdminConsolePage() {
                 </span>
               </div>
               <p className="text-xs text-slate-400">
-                Sudha Swagruha Foods • Products, Pricing & Offers
+                Sudha Swagruha Foods • Order Processing, Products & Store Settings
               </p>
             </div>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 sm:gap-3">
+            <div className="hidden md:flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-slate-300 text-xs font-mono">
+              <span className="w-2 h-2 rounded-full bg-emerald-400" />
+              <span>{userEmail || 'admin@sudhaswagruha.com'}</span>
+            </div>
+
             <Link
               to="/"
               target="_blank"
-              className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white text-xs font-semibold border border-slate-700 transition-colors"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white text-xs font-semibold border border-slate-700 transition-colors"
             >
               <Store className="w-3.5 h-3.5 text-emerald-400" />
-              <span>View Storefront</span>
+              <span className="hidden sm:inline">View Store</span>
               <ExternalLink className="w-3 h-3 opacity-60" />
             </Link>
 
             <button
               onClick={() => setResetConfirmOpen(true)}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800/60 hover:bg-red-500/20 text-slate-400 hover:text-red-300 text-xs font-medium border border-slate-800 hover:border-red-500/30 transition-colors"
+              className="hidden lg:flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800/60 hover:bg-red-500/20 text-slate-400 hover:text-red-300 text-xs font-medium border border-slate-800 hover:border-red-500/30 transition-colors cursor-pointer"
               title="Reset catalog back to sample dataset"
             >
               <RefreshCw className="w-3 h-3" />
-              <span className="hidden sm:inline">Reset Defaults</span>
+              <span>Reset Catalog</span>
+            </button>
+
+            <button
+              onClick={async () => {
+                await supabase.auth.signOut();
+                logout();
+                toast.success('Logged out from Admin Console');
+              }}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-400 text-xs font-semibold border border-red-500/30 transition-colors cursor-pointer"
+              title="Sign out"
+            >
+              <LogOut className="w-3.5 h-3.5" />
+              <span>Logout</span>
             </button>
           </div>
         </div>
@@ -173,7 +211,21 @@ export default function AdminConsolePage() {
       {/* ─── Metric Badges ────────────────────────────────────────── */}
       <section className="bg-slate-950/40 border-b border-slate-800/80 px-4 sm:px-8 py-3">
         <div className="max-w-7xl mx-auto grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
-          <div className="bg-slate-850/60 border border-slate-800 rounded-xl px-4 py-2.5 flex items-center justify-between">
+          <div
+            onClick={() => setActiveTab('orders')}
+            className="bg-slate-850/60 hover:bg-slate-800 border border-slate-800 rounded-xl px-4 py-2.5 flex items-center justify-between cursor-pointer transition-colors"
+          >
+            <div>
+              <p className="text-slate-400">Customer Orders</p>
+              <p className="text-lg font-bold text-emerald-400 mt-0.5">{orders.length} Orders</p>
+            </div>
+            <ShoppingBag className="w-5 h-5 text-emerald-400/80" />
+          </div>
+
+          <div
+            onClick={() => setActiveTab('products')}
+            className="bg-slate-850/60 hover:bg-slate-800 border border-slate-800 rounded-xl px-4 py-2.5 flex items-center justify-between cursor-pointer transition-colors"
+          >
             <div>
               <p className="text-slate-400">Total Catalog</p>
               <p className="text-lg font-bold text-white mt-0.5">{stats.total} items</p>
@@ -181,36 +233,34 @@ export default function AdminConsolePage() {
             <Package className="w-5 h-5 text-blue-400/80" />
           </div>
 
-          <div className="bg-slate-850/60 border border-slate-800 rounded-xl px-4 py-2.5 flex items-center justify-between">
+          <div
+            onClick={() => setActiveTab('settings')}
+            className="bg-slate-850/60 hover:bg-slate-800 border border-slate-800 rounded-xl px-4 py-2.5 flex items-center justify-between cursor-pointer transition-colors"
+          >
             <div>
-              <p className="text-slate-400">Active Online</p>
-              <p className="text-lg font-bold text-emerald-400 mt-0.5">{stats.active} items</p>
+              <p className="text-slate-400">Business WhatsApp</p>
+              <p className="text-sm font-bold text-white font-mono mt-0.5">
+                +91 {settings.businessWhatsApp}
+              </p>
             </div>
-            <CheckCircle2 className="w-5 h-5 text-emerald-400/80" />
+            <Phone className="w-5 h-5 text-green-400/80" />
           </div>
 
-          <div className="bg-slate-850/60 border border-slate-800 rounded-xl px-4 py-2.5 flex items-center justify-between">
+          <div
+            onClick={() => setActiveTab('payments')}
+            className="bg-slate-850/60 hover:bg-slate-800 border border-slate-800 rounded-xl px-4 py-2.5 flex items-center justify-between cursor-pointer transition-colors"
+          >
             <div>
-              <p className="text-slate-400">Discount Announcement</p>
-              <p className="text-lg font-bold mt-0.5">
-                {announcement.enabled ? (
-                  <span className="text-amber-400">Active ({announcement.discountPercent}% OFF)</span>
+              <p className="text-slate-400">Payment Gateway</p>
+              <p className="text-sm font-bold mt-0.5">
+                {settings.paymentGatewayEnabled ? (
+                  <span className="text-emerald-400">Active (Razorpay)</span>
                 ) : (
-                  <span className="text-slate-500">Disabled</span>
+                  <span className="text-amber-400">Direct WhatsApp</span>
                 )}
               </p>
             </div>
-            <Sparkles className="w-5 h-5 text-amber-400/80" />
-          </div>
-
-          <div className="bg-slate-850/60 border border-slate-800 rounded-xl px-4 py-2.5 flex items-center justify-between">
-            <div>
-              <p className="text-slate-400">Active Coupons</p>
-              <p className="text-lg font-bold text-purple-400 mt-0.5">
-                {coupons.filter((c) => c.isActive).length} Coupons
-              </p>
-            </div>
-            <Tag className="w-5 h-5 text-purple-400/80" />
+            <CreditCard className="w-5 h-5 text-purple-400/80" />
           </div>
         </div>
       </section>
@@ -218,11 +268,28 @@ export default function AdminConsolePage() {
       {/* ─── Navigation Tabs ──────────────────────────────────────── */}
       <div className="bg-slate-900 border-b border-slate-800 px-4 sm:px-8">
         <div className="max-w-7xl mx-auto flex gap-2 overflow-x-auto py-2">
+          {/* Orders Tab */}
+          <button
+            onClick={() => setActiveTab('orders')}
+            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all flex-shrink-0 cursor-pointer ${
+              activeTab === 'orders'
+                ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-600/30'
+                : 'text-slate-400 hover:text-white hover:bg-slate-800'
+            }`}
+          >
+            <ShoppingBag className="w-4 h-4" />
+            <span>Customer Orders</span>
+            <span className="ml-1 px-2 py-0.5 rounded-full text-xs bg-slate-900/60 text-slate-300 font-mono">
+              {orders.length}
+            </span>
+          </button>
+
+          {/* Products Tab */}
           <button
             onClick={() => setActiveTab('products')}
-            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all flex-shrink-0 ${
+            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all flex-shrink-0 cursor-pointer ${
               activeTab === 'products'
-                ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-600/30'
+                ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/30'
                 : 'text-slate-400 hover:text-white hover:bg-slate-800'
             }`}
           >
@@ -233,24 +300,61 @@ export default function AdminConsolePage() {
             </span>
           </button>
 
+          {/* Contact & Store Settings Tab */}
+          <button
+            onClick={() => setActiveTab('settings')}
+            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all flex-shrink-0 cursor-pointer ${
+              activeTab === 'settings'
+                ? 'bg-green-600 text-white shadow-lg shadow-green-600/30'
+                : 'text-slate-400 hover:text-white hover:bg-slate-800'
+            }`}
+          >
+            <Phone className="w-4 h-4" />
+            <span>Contact & Store Info</span>
+          </button>
+
+          {/* Payment Gateway Configuration Tab */}
+          <button
+            onClick={() => setActiveTab('payments')}
+            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all flex-shrink-0 cursor-pointer ${
+              activeTab === 'payments'
+                ? 'bg-teal-600 text-white shadow-lg shadow-teal-600/30'
+                : 'text-slate-400 hover:text-white hover:bg-slate-800'
+            }`}
+          >
+            <CreditCard className="w-4 h-4" />
+            <span>Payment Gateway</span>
+            <span
+              className={`ml-1 px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                settings.paymentGatewayEnabled
+                  ? 'bg-emerald-400 text-emerald-950'
+                  : 'bg-amber-400 text-amber-950'
+              }`}
+            >
+              {settings.paymentGatewayEnabled ? 'Online' : 'Disabled'}
+            </span>
+          </button>
+
+          {/* Announcement Tab */}
           <button
             onClick={() => setActiveTab('announcement')}
-            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all flex-shrink-0 ${
+            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all flex-shrink-0 cursor-pointer ${
               activeTab === 'announcement'
                 ? 'bg-amber-600 text-white shadow-lg shadow-amber-600/30'
                 : 'text-slate-400 hover:text-white hover:bg-slate-800'
             }`}
           >
             <Sparkles className="w-4 h-4" />
-            <span>Discount Announcement Bar</span>
+            <span>Announcement Bar</span>
             {announcement.enabled && (
               <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping" />
             )}
           </button>
 
+          {/* Coupons Tab */}
           <button
             onClick={() => setActiveTab('coupons')}
-            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all flex-shrink-0 ${
+            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all flex-shrink-0 cursor-pointer ${
               activeTab === 'coupons'
                 ? 'bg-purple-600 text-white shadow-lg shadow-purple-600/30'
                 : 'text-slate-400 hover:text-white hover:bg-slate-800'
@@ -263,16 +367,17 @@ export default function AdminConsolePage() {
             </span>
           </button>
 
+          {/* Insights Tab */}
           <button
             onClick={() => setActiveTab('insights')}
-            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all flex-shrink-0 ${
+            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all flex-shrink-0 cursor-pointer ${
               activeTab === 'insights'
-                ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/30'
+                ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/30'
                 : 'text-slate-400 hover:text-white hover:bg-slate-800'
             }`}
           >
             <Layers className="w-4 h-4" />
-            <span>Catalog Insights</span>
+            <span>Insights</span>
           </button>
         </div>
       </div>
@@ -280,7 +385,22 @@ export default function AdminConsolePage() {
       {/* ─── Main Content Body ────────────────────────────────────── */}
       <main className="flex-1 max-w-7xl mx-auto w-full p-4 sm:p-8">
         {/* ============================================================ */}
-        {/* TAB 1: PRODUCTS & PRICING                                    */}
+        {/* TAB 0: ORDERS MANAGEMENT                                     */}
+        {/* ============================================================ */}
+        {activeTab === 'orders' && <AdminOrdersTab />}
+
+        {/* ============================================================ */}
+        {/* TAB 1: STORE & CONTACT SETTINGS                              */}
+        {/* ============================================================ */}
+        {activeTab === 'settings' && <AdminSettingsTab />}
+
+        {/* ============================================================ */}
+        {/* TAB 2: PAYMENT GATEWAY CONFIGURATION                         */}
+        {/* ============================================================ */}
+        {activeTab === 'payments' && <AdminPaymentsTab />}
+
+        {/* ============================================================ */}
+        {/* TAB 3: PRODUCTS & PRICING                                    */}
         {/* ============================================================ */}
         {activeTab === 'products' && (
           <div className="space-y-6">

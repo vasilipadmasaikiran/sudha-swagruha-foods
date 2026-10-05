@@ -1,16 +1,19 @@
 // ============================================================
-// WhatsApp Floating Button
+// WhatsApp Floating Button - Dynamic Business Number
 // ============================================================
+import { useSettingsStore } from '@/hooks/useSettingsStore';
 
-const WHATSAPP_NUMBER = import.meta.env.VITE_WHATSAPP_BUSINESS_NUMBER || '918374634989';
 const MESSAGE = encodeURIComponent(
   'నమస్కారం! 🙏 Sudha Swagruha Foods గురించి సమాచారం కావాలి.'
 );
 
 export default function WhatsAppButton() {
+  const { settings } = useSettingsStore();
+  const whatsappNumber = settings.businessWhatsApp || '8374634989';
+
   return (
     <a
-      href={`https://wa.me/${WHATSAPP_NUMBER}?text=${MESSAGE}`}
+      href={`https://wa.me/91${whatsappNumber}?text=${MESSAGE}`}
       target="_blank"
       rel="noopener noreferrer"
       className="whatsapp-float"
@@ -34,7 +37,7 @@ export default function WhatsAppButton() {
 
         {/* Tooltip */}
         <div className="absolute right-16 top-1/2 -translate-y-1/2 bg-gray-900 text-white text-xs px-3 py-1.5 rounded-lg whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none shadow-lg">
-          Chat with us!
+          Chat with us on WhatsApp!
           <div className="absolute left-full top-1/2 -translate-y-1/2 border-4 border-transparent border-l-gray-900" />
         </div>
       </div>

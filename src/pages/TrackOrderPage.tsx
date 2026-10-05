@@ -1,18 +1,32 @@
 // ============================================================
 // Order Tracking Page
 // ============================================================
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import { motion } from 'framer-motion';
-import { Search, Package, CheckCircle, Truck, Home, ChefHat, ShoppingCart as CartIcon } from 'lucide-react';
+import {
+  Search,
+  Package,
+  CheckCircle,
+  Truck,
+  Home,
+  ChefHat,
+  ShoppingCart as CartIcon,
+  RefreshCw,
+  Phone,
+  Clock,
+} from 'lucide-react';
 import { useLanguageStore } from '@/hooks/useStore';
+import { useOrderStore } from '@/hooks/useOrderStore';
+import { useSettingsStore } from '@/hooks/useSettingsStore';
 import { translations } from '@/i18n/translations';
 import { orderService } from '@/services/supabase';
 import type { DbOrder } from '@/services/supabase';
 
 interface TrackForm {
   orderNumber: string;
-  mobile: string;
+  mobile?: string;
 }
 
 const ORDER_STATUSES = [
@@ -33,81 +47,54 @@ const STATUS_INDEX: Record<string, number> = {
   delivered: 5,
 };
 
-// Demo order for testing
-const DEMO_ORDER: DbOrder = {
-  id: 'demo-1',
-  order_number: 'SSF-20260926-DEMO',
-  customer_id: null,
-  items: [
-    {
-      product_id: '1',
-      product_name_en: 'Andhra Avakaya',
-      product_name_te: 'ఆంధ్ర అవకాయ',
-      weight: '500g',
-      quantity: 2,
-      unit_price: 320,
-      total_price: 640,
-      sku: 'SSF-AVK-500',
-    },
-  ],
-  subtotal: 640,
-  delivery_charge: 0,
-  discount: 0,
-  total: 640,
-  payment_status: 'paid',
-  payment_id: 'pay_demo',
-  razorpay_order_id: 'order_demo',
-  order_status: 'preparing',
-  delivery_address: {
-    house_no: '5-6-789',
-    street: 'MG Road',
-    area: 'Banjara Hills',
-    city: 'Hyderabad',
-    district: 'Hyderabad',
-    state: 'Telangana',
-    pincode: '500001',
-  },
-  customer_name: 'Demo Customer',
-  customer_mobile: '9999999999',
-  customer_whatsapp: '9999999999',
-  customer_email: null,
-  notes: null,
-  created_at: new Date().toISOString(),
-  updated_at: new Date().toISOString(),
-};
-
 export default function TrackOrderPage() {
+  const [searchParams] = useSearchParams();
   const { language } = useLanguageStore();
+  const { orders } = useOrderStore();
+  const { settings } = useSettingsStore();
   const t = translations[language];
-  const [order, setOrder] = useState<DbOrder | null>(null);
+
+  const [trackedOrderNumber, setTrackedOrderNumber] = useState<string>('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
-  const { register, handleSubmit, formState: { errors } } = useForm<TrackForm>();
+  const { register, handleSubmit, setValue } = useForm<TrackForm>();
 
-  const onTrack = async (data: TrackForm) => {
+  // Check URL query param e.g. /track-order?order=SSF-20261005-1234
+  useEffect(() => {
+    const orderFromQuery = searchParams.get('order');
+    if (orderFromQuery) {
+      setValue('orderNumber', orderFromQuery);
+      handleTrackOrder(orderFromQuery);
+    }
+  }, [searchParams, setValue]);
+
+  const handleTrackOrder = async (orderNumber: string, mobile?: string) => {
+    if (!orderNumber.trim()) return;
     setLoading(true);
     setError('');
-    setOrder(null);
 
-    // Demo shortcut
-    if (
-      data.orderNumber.toUpperCase() === 'SSF-20260926-DEMO' &&
-      data.mobile === '9999999999'
-    ) {
-      setTimeout(() => {
-        setOrder(DEMO_ORDER);
-        setLoading(false);
-      }, 800);
-      return;
-    }
+    const cleanNum = orderNumber.trim().toUpperCase();
+    const cleanMob = mobile?.trim();
 
     try {
-      const result = await orderService.getByOrderNumberAndMobile(
-        data.orderNumber.toUpperCase(),
-        data.mobile
+      // 1. First look in live zustand orders
+      const local = orders.find(
+        (o) => o.order_number.trim().toUpperCase() === cleanNum
       );
-      setOrder(result);
+      if (local) {
+        setTrackedOrderNumber(local.order_number);
+        setLoading(false);
+        return;
+      }
+
+      // 2. Query service
+      const result = await orderService.getByOrderNumberAndMobile(cleanNum, cleanMob);
+      if (result) {
+        setTrackedOrderNumber(result.order_number);
+      } else {
+        setError(t.tracking.notFound);
+      }
     } catch {
       setError(t.tracking.notFound);
     } finally {
@@ -115,7 +102,18 @@ export default function TrackOrderPage() {
     }
   };
 
-  const currentStatusIdx = order ? (STATUS_INDEX[order.order_status] ?? 0) : -1;
+  const onTrack = (data: TrackForm) => {
+    handleTrackOrder(data.orderNumber, data.mobile);
+  };
+
+  // Find live order from zustand store so changes in Admin console update automatically!
+  const currentOrder = orders.find(
+    (o) => o.order_number.trim().toUpperCase() === trackedOrderNumber.trim().toUpperCase()
+  );
+
+  const currentStatusIdx = currentOrder
+    ? STATUS_INDEX[currentOrder.order_status] ?? 0
+    : -1;
 
   return (
     <div className="page-enter min-h-screen bg-brand-cream">
@@ -128,7 +126,9 @@ export default function TrackOrderPage() {
           >
             {t.tracking.title}
           </motion.h1>
-          <p className="text-green-200">Enter your order details to track status</p>
+          <p className="text-green-200">
+            Enter your order ID to track the real-time status of your homemade delicacies
+          </p>
         </div>
       </div>
 
@@ -137,40 +137,60 @@ export default function TrackOrderPage() {
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
-          className="bg-white rounded-2xl shadow-card p-6 mb-8"
+          className="bg-white rounded-2xl shadow-card p-6 mb-8 border border-gray-100"
         >
           <form onSubmit={handleSubmit(onTrack)} className="space-y-4">
             <div>
               <label className="block text-sm font-semibold text-gray-700 mb-1.5">
-                {t.tracking.orderNumber}
+                {t.tracking.orderNumber} *
               </label>
               <input
                 {...register('orderNumber', { required: true })}
-                className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:outline-none focus:border-brand-green uppercase transition-all"
-                placeholder="SSF-20260926-00125"
+                className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:outline-none focus:border-brand-green uppercase font-mono tracking-wider transition-all"
+                placeholder="e.g. SSF-20261005-00101"
               />
             </div>
             <div>
-              <label className="block text-sm font-semibold text-gray-700 mb-1.5">
-                {t.tracking.mobileNumber}
+              <label className="block text-sm font-semibold text-gray-700 mb-1.5 flex justify-between">
+                <span>{t.tracking.mobileNumber}</span>
+                <span className="text-xs text-gray-400 font-normal">(Optional)</span>
               </label>
               <input
-                {...register('mobile', { required: true })}
+                {...register('mobile')}
                 className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:outline-none focus:border-brand-green transition-all"
-                placeholder="8374634989"
+                placeholder="10-digit mobile number"
                 type="tel"
                 maxLength={10}
               />
             </div>
 
-            <p className="text-xs text-gray-400">
-              💡 Demo: Order# <code className="bg-gray-100 px-1 rounded">SSF-20260926-DEMO</code>, Mobile: <code className="bg-gray-100 px-1 rounded">9999999999</code>
-            </p>
+            {/* Quick Chips for Existing Orders */}
+            {orders.length > 0 && (
+              <div className="pt-1">
+                <p className="text-xs text-gray-400 mb-2 font-medium">Recent Sample Orders:</p>
+                <div className="flex flex-wrap gap-2">
+                  {orders.slice(0, 3).map((o) => (
+                    <button
+                      key={o.id}
+                      type="button"
+                      onClick={() => {
+                        setValue('orderNumber', o.order_number);
+                        if (o.customer_mobile) setValue('mobile', o.customer_mobile);
+                        handleTrackOrder(o.order_number, o.customer_mobile);
+                      }}
+                      className="text-xs bg-brand-light-green text-brand-green border border-brand-green/30 px-2.5 py-1 rounded-lg font-mono hover:bg-brand-green hover:text-white transition-colors"
+                    >
+                      {o.order_number} ({o.order_status})
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
 
             <button
               type="submit"
               disabled={loading}
-              className="w-full bg-brand-green text-white py-3.5 rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-brand-green-dark transition-colors"
+              className="w-full bg-brand-green text-white py-3.5 rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-brand-green-dark transition-colors shadow-green-glow disabled:opacity-60 cursor-pointer"
             >
               {loading ? (
                 <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
@@ -182,66 +202,102 @@ export default function TrackOrderPage() {
           </form>
 
           {error && (
-            <motion.p
+            <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
-              className="mt-4 text-brand-red text-sm text-center"
+              className="mt-4 p-3 bg-red-50 border border-red-200 rounded-xl text-brand-red text-sm text-center"
             >
-              {error}
-            </motion.p>
+              <p className="font-semibold">{error}</p>
+              <p className="text-xs text-gray-600 mt-1">
+                Please verify your Order Number or contact WhatsApp support at{' '}
+                <a
+                  href={`https://wa.me/91${settings.businessWhatsApp}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="font-bold underline text-brand-green"
+                >
+                  +91 {settings.businessWhatsApp}
+                </a>
+              </p>
+            </motion.div>
           )}
         </motion.div>
 
-        {/* Order Status */}
-        {order && (
+        {/* Live Order Status Display */}
+        {currentOrder && (
           <motion.div
             initial={{ opacity: 0, y: 30 }}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.5 }}
+            transition={{ duration: 0.4 }}
             className="space-y-6"
           >
             {/* Order Info Card */}
-            <div className="bg-white rounded-2xl shadow-card p-6">
-              <div className="flex justify-between items-start mb-4">
+            <div className="bg-white rounded-2xl shadow-card p-6 border border-gray-100">
+              <div className="flex flex-wrap justify-between items-start gap-3 mb-4">
                 <div>
-                  <p className="text-sm text-gray-500">Order Number</p>
-                  <p className="font-bold text-brand-green text-xl font-mono">{order.order_number}</p>
+                  <p className="text-xs text-gray-500 uppercase tracking-wider font-semibold">
+                    Order Number
+                  </p>
+                  <p className="font-bold text-brand-green text-2xl font-mono">
+                    {currentOrder.order_number}
+                  </p>
+                  <p className="text-xs text-gray-400 mt-1 flex items-center gap-1">
+                    <Clock className="w-3.5 h-3.5" />
+                    Placed on {new Date(currentOrder.created_at).toLocaleString()}
+                  </p>
                 </div>
-                <span
-                  className={`px-3 py-1 rounded-full text-xs font-bold uppercase ${
-                    order.payment_status === 'paid'
-                      ? 'bg-green-100 text-green-700'
-                      : 'bg-yellow-100 text-yellow-700'
-                  }`}
-                >
-                  {order.payment_status === 'paid' ? '✅ PAID' : 'PENDING'}
-                </span>
+                <div className="flex items-center gap-2">
+                  <span
+                    className={`px-3 py-1 rounded-full text-xs font-bold uppercase ${
+                      currentOrder.order_status === 'delivered'
+                        ? 'bg-green-100 text-green-700'
+                        : currentOrder.order_status === 'cancelled'
+                        ? 'bg-red-100 text-red-700'
+                        : 'bg-amber-100 text-amber-800'
+                    }`}
+                  >
+                    Status: {currentOrder.order_status.toUpperCase()}
+                  </span>
+                </div>
               </div>
-              <div className="grid sm:grid-cols-2 gap-3 text-sm">
+
+              <div className="grid sm:grid-cols-2 gap-4 text-sm pt-4 border-t border-gray-100">
                 <div>
-                  <p className="text-gray-500">Customer</p>
-                  <p className="font-semibold">{order.customer_name}</p>
+                  <p className="text-gray-500 text-xs">Customer Name</p>
+                  <p className="font-semibold text-gray-800">{currentOrder.customer_name}</p>
                 </div>
                 <div>
-                  <p className="text-gray-500">Total</p>
-                  <p className="font-bold text-brand-green text-lg">₹{order.total}</p>
+                  <p className="text-gray-500 text-xs">Total Amount</p>
+                  <p className="font-bold text-brand-green text-lg">₹{currentOrder.total}</p>
                 </div>
                 <div>
-                  <p className="text-gray-500">Delivery To</p>
-                  <p className="font-semibold">
-                    {order.delivery_address.city}, {order.delivery_address.state}
+                  <p className="text-gray-500 text-xs">Delivery To</p>
+                  <p className="font-medium text-gray-700">
+                    {currentOrder.delivery_address.city}, {currentOrder.delivery_address.state}
                   </p>
                 </div>
                 <div>
-                  <p className="text-gray-500">PIN</p>
-                  <p className="font-semibold">{order.delivery_address.pincode}</p>
+                  <p className="text-gray-500 text-xs">PIN Code</p>
+                  <p className="font-medium text-gray-700">{currentOrder.delivery_address.pincode}</p>
                 </div>
               </div>
+
+              {currentOrder.notes && (
+                <div className="mt-3 p-3 bg-yellow-50 rounded-xl text-xs text-yellow-800 border border-yellow-200">
+                  <span className="font-semibold">Order Notes:</span> {currentOrder.notes}
+                </div>
+              )}
             </div>
 
             {/* Status Timeline */}
-            <div className="bg-white rounded-2xl shadow-card p-6">
-              <h3 className="font-bold text-gray-900 mb-6">Order Status</h3>
+            <div className="bg-white rounded-2xl shadow-card p-6 border border-gray-100">
+              <div className="flex items-center justify-between mb-6">
+                <h3 className="font-bold text-gray-900 text-lg">Order Progress</h3>
+                <span className="text-xs bg-brand-light-green text-brand-green font-semibold px-2.5 py-1 rounded-full flex items-center gap-1">
+                  <RefreshCw className="w-3 h-3 animate-spin" /> Live Updates
+                </span>
+              </div>
+
               <div className="relative">
                 {ORDER_STATUSES.map((status, idx) => {
                   const isCompleted = idx <= currentStatusIdx;
@@ -251,17 +307,17 @@ export default function TrackOrderPage() {
                       {/* Icon & Line */}
                       <div className="flex flex-col items-center">
                         <div
-                          className={`w-10 h-10 rounded-full flex items-center justify-center text-lg flex-shrink-0 transition-all ${
+                          className={`w-11 h-11 rounded-full flex items-center justify-center text-lg flex-shrink-0 transition-all ${
                             isCompleted
                               ? isCurrent
-                                ? 'bg-brand-green text-white shadow-green-glow scale-110'
-                                : 'bg-green-100 text-green-600'
+                                ? 'bg-brand-green text-white shadow-green-glow scale-110 ring-4 ring-brand-green/20'
+                                : 'bg-green-100 text-green-700'
                               : 'bg-gray-100 text-gray-400'
                           }`}
                         >
                           {isCurrent ? (
                             <motion.span
-                              animate={{ scale: [1, 1.2, 1] }}
+                              animate={{ scale: [1, 1.25, 1] }}
                               transition={{ duration: 1.5, repeat: Infinity }}
                             >
                               {status.emoji}
@@ -272,7 +328,7 @@ export default function TrackOrderPage() {
                         </div>
                         {idx < ORDER_STATUSES.length - 1 && (
                           <div
-                            className={`w-0.5 h-8 mt-1 rounded-full transition-all ${
+                            className={`w-0.5 h-10 mt-1 rounded-full transition-all ${
                               idx < currentStatusIdx ? 'bg-brand-green' : 'bg-gray-200'
                             }`}
                           />
@@ -281,17 +337,30 @@ export default function TrackOrderPage() {
 
                       {/* Label */}
                       <div className="pt-2">
-                        <p
-                          className={`font-semibold text-sm ${
-                            isCurrent ? 'text-brand-green' : isCompleted ? 'text-gray-700' : 'text-gray-400'
-                          }`}
-                        >
-                          {language === 'te' ? status.labelTe : status.label}
+                        <div className="flex items-center gap-2">
+                          <p
+                            className={`font-semibold text-sm ${
+                              isCurrent
+                                ? 'text-brand-green text-base'
+                                : isCompleted
+                                ? 'text-gray-800'
+                                : 'text-gray-400'
+                            }`}
+                          >
+                            {language === 'te' ? status.labelTe : status.label}
+                          </p>
                           {isCurrent && (
-                            <span className="ml-2 text-xs bg-brand-green text-white px-2 py-0.5 rounded-full">
-                              Current
+                            <span className="text-xs bg-brand-green text-white font-bold px-2 py-0.5 rounded-full animate-pulse">
+                              Current Status
                             </span>
                           )}
+                        </div>
+                        <p className="text-xs text-gray-400 mt-0.5">
+                          {isCompleted
+                            ? isCurrent
+                              ? 'Your order is currently at this stage'
+                              : 'Completed'
+                            : 'Upcoming stage'}
                         </p>
                       </div>
                     </div>
@@ -301,19 +370,47 @@ export default function TrackOrderPage() {
             </div>
 
             {/* Items */}
-            <div className="bg-white rounded-2xl shadow-card p-6">
-              <h3 className="font-bold text-gray-900 mb-4">Items Ordered</h3>
+            <div className="bg-white rounded-2xl shadow-card p-6 border border-gray-100">
+              <h3 className="font-bold text-gray-900 mb-4 text-base">Items in this Order</h3>
               <div className="space-y-3">
-                {order.items.map((item, i) => (
-                  <div key={i} className="flex justify-between items-center py-2 border-b border-gray-50 last:border-0">
+                {currentOrder.items.map((item, i) => (
+                  <div
+                    key={i}
+                    className="flex justify-between items-center py-2.5 border-b border-gray-100 last:border-0"
+                  >
                     <div>
-                      <p className="font-medium text-gray-800">{language === 'te' ? item.product_name_te : item.product_name_en}</p>
-                      <p className="text-sm text-gray-500">{item.weight} × {item.quantity}</p>
+                      <p className="font-semibold text-gray-800">
+                        {language === 'te' ? item.product_name_te : item.product_name_en}
+                      </p>
+                      <p className="text-xs text-gray-500 font-medium">
+                        Weight: {item.weight} • Qty: {item.quantity} (₹{item.unit_price} each)
+                      </p>
                     </div>
-                    <p className="font-bold text-brand-green">₹{item.total_price}</p>
+                    <p className="font-bold text-brand-green text-base">₹{item.total_price}</p>
                   </div>
                 ))}
               </div>
+            </div>
+
+            {/* Help / WhatsApp Contact */}
+            <div className="bg-gradient-to-r from-emerald-50 to-green-50 rounded-2xl p-5 border border-emerald-200 flex flex-col sm:flex-row items-center justify-between gap-4">
+              <div>
+                <p className="font-bold text-emerald-950 text-sm">Need help with your order?</p>
+                <p className="text-xs text-emerald-800 mt-0.5">
+                  Contact our support team anytime on WhatsApp with your Order ID
+                </p>
+              </div>
+              <a
+                href={`https://wa.me/91${settings.businessWhatsApp}?text=${encodeURIComponent(
+                  `నమస్కారం! 🙏 నా ఆర్డర్ నంబర్: *${currentOrder.order_number}* గురించి విచారణ చేయాలనుకుంటున్నాను.`
+                )}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-2 bg-[#25D366] text-white px-4 py-2.5 rounded-xl font-bold text-xs hover:bg-green-600 transition-colors shadow-sm flex-shrink-0"
+              >
+                <Phone className="w-3.5 h-3.5" />
+                <span>WhatsApp Support</span>
+              </a>
             </div>
           </motion.div>
         )}

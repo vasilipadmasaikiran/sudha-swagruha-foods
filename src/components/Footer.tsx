@@ -1,16 +1,17 @@
 // ============================================================
-// Footer Component
+// Footer Component - Dynamic Contact Info
 // ============================================================
 import { Link } from 'react-router-dom';
 import { Phone, Mail, MapPin, Heart } from 'lucide-react';
 import { useLanguageStore } from '@/hooks/useStore';
+import { useSettingsStore } from '@/hooks/useSettingsStore';
 import { translations } from '@/i18n/translations';
 
 const logoPath = import.meta.env.BASE_URL + 'logo/logo.png';
-const WHATSAPP_NUMBER = import.meta.env.VITE_WHATSAPP_BUSINESS_NUMBER || '918374634989';
 
 export default function Footer() {
   const { language } = useLanguageStore();
+  const { settings } = useSettingsStore();
   const t = translations[language];
 
   const categories = [
@@ -101,26 +102,10 @@ export default function Footer() {
                 </Link>
               </li>
             ))}
-            <li>
-              <Link
-                to="/admin-console"
-                className="text-emerald-400/90 hover:text-emerald-300 transition-colors text-xs flex items-center gap-1 font-medium"
-              >
-                <span>⚙️ Admin Console</span>
-              </Link>
-            </li>
-            <li>
-              <Link
-                to="/admin"
-                className="text-gray-500 hover:text-gray-300 transition-colors text-xs"
-              >
-                Admin Login
-              </Link>
-            </li>
           </ul>
         </div>
 
-        {/* Contact */}
+        {/* Dynamic Contact Information */}
         <div>
           <h3 className="text-white font-bold mb-4 text-sm uppercase tracking-wider">
             {t.nav.contact}
@@ -128,7 +113,7 @@ export default function Footer() {
           <ul className="space-y-4">
             <li>
               <a
-                href={`https://wa.me/${WHATSAPP_NUMBER}`}
+                href={`https://wa.me/91${settings.businessWhatsApp}`}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="flex items-start gap-3 text-sm text-gray-400 hover:text-green-400 transition-colors"
@@ -136,7 +121,19 @@ export default function Footer() {
                 <span className="text-xl mt-0.5">📱</span>
                 <div>
                   <p className="font-medium text-gray-300">WhatsApp</p>
-                  <p>+91 98765 43210</p>
+                  <p className="font-mono text-emerald-400">+91 {settings.businessWhatsApp}</p>
+                </div>
+              </a>
+            </li>
+            <li>
+              <a
+                href={`tel:+91${settings.businessPhone}`}
+                className="flex items-start gap-3 text-sm text-gray-400 hover:text-brand-green transition-colors"
+              >
+                <Phone className="w-4 h-4 text-brand-green mt-0.5 flex-shrink-0" />
+                <div>
+                  <p className="font-medium text-gray-300">Call Us</p>
+                  <p className="font-mono">+91 {settings.businessPhone}</p>
                 </div>
               </a>
             </li>
@@ -144,8 +141,11 @@ export default function Footer() {
               <Mail className="w-4 h-4 text-brand-green mt-0.5 flex-shrink-0" />
               <div>
                 <p className="font-medium text-gray-300">Email</p>
-                <a href="mailto:info@sudhaswagruha.com" className="hover:text-brand-green transition-colors">
-                  info@sudhaswagruha.com
+                <a
+                  href={`mailto:${settings.businessEmail}`}
+                  className="hover:text-brand-green transition-colors break-all"
+                >
+                  {settings.businessEmail}
                 </a>
               </div>
             </li>
@@ -153,7 +153,7 @@ export default function Footer() {
               <MapPin className="w-4 h-4 text-brand-green mt-0.5 flex-shrink-0" />
               <div>
                 <p className="font-medium text-gray-300">Location</p>
-                <p>Andhra Pradesh, India</p>
+                <p className="text-xs leading-relaxed">{settings.businessAddress}</p>
               </div>
             </li>
           </ul>
@@ -167,11 +167,11 @@ export default function Footer() {
             © {new Date().getFullYear()} Sudha Swagruha Foods. All rights reserved.
           </p>
           <div className="flex items-center gap-4 text-xs text-gray-600">
-            <span>100% Natural</span>
+            <span>100% Traditional Telugu Recipes</span>
             <span>•</span>
-            <span>Secure Payments</span>
+            <span>Fast WhatsApp Dispatch</span>
             <span>•</span>
-            <span>Razorpay</span>
+            <span>Handmade with Love</span>
           </div>
         </div>
       </div>

@@ -138,14 +138,40 @@ export const productService = {
 
 // ─── Order Service ────────────────────────────────────────────
 export const orderService = {
-  async getByOrderNumberAndMobile(orderNumber: string, mobile: string) {
-    const { data, error } = await supabase
-      .from('orders')
-      .select('*')
-      .eq('order_number', orderNumber)
-      .eq('customer_mobile', mobile)
-      .single();
-    if (error) throw error;
+  async getByOrderNumberAndMobile(orderNumber: string, mobile?: string) {
+    const cleanNum = orderNumber.trim().toUpperCase();
+    const cleanMob = mobile?.trim();
+
+    // 1. Check local storage order store first (instant response for customer placed orders)
+    try {
+      if (typeof window !== 'undefined') {
+        const stored = localStorage.getItem('ssf-orders');
+        if (stored) {
+          const parsed = JSON.parse(stored);
+          const orders = parsed?.state?.orders as DbOrder[];
+          if (Array.isArray(orders)) {
+            const match = orders.find(
+              (o) => o.order_number.trim().toUpperCase() === cleanNum
+            );
+            if (match) {
+              return match;
+            }
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('Local order storage lookup error:', e);
+    }
+
+    // 2. Query Supabase
+    let query = supabase.from('orders').select('*').eq('order_number', cleanNum);
+    if (cleanMob && cleanMob.length > 0) {
+      query = query.eq('customer_mobile', cleanMob);
+    }
+    const { data, error } = await query.maybeSingle();
+    if (error || !data) {
+      throw new Error('Order not found');
+    }
     return data as DbOrder;
   },
 

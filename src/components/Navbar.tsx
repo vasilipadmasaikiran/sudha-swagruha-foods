@@ -3,7 +3,7 @@
 // ============================================================
 import { useState, useEffect } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { ShoppingCart, Menu, X, Search, Globe, ChevronDown, Sliders } from 'lucide-react';
+import { ShoppingCart, Menu, X, Search, Globe, ChevronDown } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useCartStore, useLanguageStore, useUIStore } from '@/hooks/useStore';
 import { translations } from '@/i18n/translations';
@@ -149,16 +149,6 @@ export default function Navbar() {
                 </span>
               </button>
 
-              {/* Admin Console Shortcut */}
-              <Link
-                to="/admin-console"
-                className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 hover:border-emerald-600 hover:bg-emerald-50 text-slate-700 hover:text-emerald-700 transition-colors text-xs font-semibold bg-white shadow-xs"
-                title="Admin Console - Manage Products, Pricing & Offers"
-              >
-                <Sliders className="w-3.5 h-3.5 text-emerald-600" />
-                <span>Admin</span>
-              </Link>
-
               {/* Cart Button */}
               <button
                 onClick={openCart}
@@ -235,15 +225,6 @@ export default function Navbar() {
                   ))}
                 </div>
 
-                <div className="pt-2 border-t border-gray-100">
-                  <Link
-                    to="/admin-console"
-                    className="flex items-center gap-2.5 px-4 py-3 rounded-xl text-sm font-semibold text-emerald-800 bg-emerald-50 border border-emerald-200 hover:bg-emerald-100 transition-colors"
-                  >
-                    <Sliders className="w-4 h-4 text-emerald-600" />
-                    <span>Admin Console (Products & Discounts)</span>
-                  </Link>
-                </div>
               </div>
             </motion.div>
           )}
