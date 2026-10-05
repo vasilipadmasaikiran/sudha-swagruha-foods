@@ -10,18 +10,19 @@ import {
 import { motion } from 'framer-motion';
 import toast from 'react-hot-toast';
 import { useCartStore, useLanguageStore } from '@/hooks/useStore';
+import { useProductStore } from '@/hooks/useProductStore';
 import { translations } from '@/i18n/translations';
-import { getProductBySlug, sampleProducts } from '@/data/products';
 import ProductCard from '@/components/ProductCard';
 
 export default function ProductDetailPage() {
   const { slug } = useParams<{ slug: string }>();
   const navigate = useNavigate();
   const { language } = useLanguageStore();
+  const { products } = useProductStore();
   const t = translations[language];
   const { addItem } = useCartStore();
 
-  const product = getProductBySlug(slug ?? '');
+  const product = products.find((p) => p.slug === slug);
   const [selectedVariantIdx, setSelectedVariantIdx] = useState(0);
   const [quantity, setQuantity] = useState(1);
   const [selectedImage, setSelectedImage] = useState(0);
@@ -60,8 +61,8 @@ export default function ProductDetailPage() {
     navigate('/checkout');
   };
 
-  const related = sampleProducts
-    .filter((p) => p.category === product.category && p.id !== product.id)
+  const related = products
+    .filter((p) => p.category === product.category && p.id !== product.id && p.is_active)
     .slice(0, 4);
 
   return (

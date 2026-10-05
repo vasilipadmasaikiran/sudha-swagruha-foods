@@ -5,17 +5,19 @@ import { useParams, Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { ChevronRight } from 'lucide-react';
 import { useLanguageStore } from '@/hooks/useStore';
+import { useProductStore } from '@/hooks/useProductStore';
 import { translations } from '@/i18n/translations';
-import { getCategoryBySlug, getProductsByCategory } from '@/data/products';
+import { getCategoryBySlug } from '@/data/products';
 import ProductCard from '@/components/ProductCard';
 
 export default function CategoryPage() {
   const { slug } = useParams<{ slug: string }>();
   const { language } = useLanguageStore();
+  const { products: allProducts } = useProductStore();
   const t = translations[language];
 
   const category = getCategoryBySlug(slug ?? '');
-  const products = getProductsByCategory(slug ?? '');
+  const products = allProducts.filter((p) => p.category === slug && p.is_active);
 
   if (!category) {
     return (

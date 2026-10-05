@@ -5,19 +5,21 @@ import { useState, useMemo } from 'react';
 import { Search, SlidersHorizontal } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { useLanguageStore } from '@/hooks/useStore';
+import { useProductStore } from '@/hooks/useProductStore';
 import { translations } from '@/i18n/translations';
-import { sampleProducts, categories } from '@/data/products';
+import { categories } from '@/data/products';
 import ProductCard from '@/components/ProductCard';
 
 export default function ProductsPage() {
   const { language } = useLanguageStore();
+  const { products } = useProductStore();
   const t = translations[language];
   const [search, setSearch] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('all');
   const [sortBy, setSortBy] = useState('default');
 
   const filtered = useMemo(() => {
-    let result = sampleProducts.filter((p) => p.is_active);
+    let result = products.filter((p) => p.is_active);
 
     if (selectedCategory !== 'all') {
       result = result.filter((p) => p.category === selectedCategory);
@@ -107,7 +109,7 @@ export default function ProductsPage() {
                 : 'bg-white text-gray-600 hover:bg-brand-light-green hover:text-brand-green border border-gray-200'
             }`}
           >
-            {t.common.all} ({sampleProducts.length})
+            {t.common.all} ({products.length})
           </button>
           {categories.map((cat) => (
             <button

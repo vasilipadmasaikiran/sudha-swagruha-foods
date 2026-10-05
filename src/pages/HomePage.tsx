@@ -5,8 +5,9 @@ import { Link } from 'react-router-dom';
 import { ArrowRight, ShieldCheck, Leaf, Award, Truck } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { useLanguageStore } from '@/hooks/useStore';
+import { useProductStore } from '@/hooks/useProductStore';
 import { translations } from '@/i18n/translations';
-import { sampleProducts, categories } from '@/data/products';
+import { categories } from '@/data/products';
 import ProductCard from '@/components/ProductCard';
 
 const fadeUp = {
@@ -20,8 +21,12 @@ const fadeUp = {
 
 export default function HomePage() {
   const { language } = useLanguageStore();
+  const { products } = useProductStore();
   const t = translations[language];
-  const featuredProducts = sampleProducts.filter((p) => p.badge).slice(0, 4);
+  const activeProducts = products.filter((p) => p.is_active);
+  const featuredProducts = activeProducts.filter((p) => p.badge).length > 0
+    ? activeProducts.filter((p) => p.badge).slice(0, 4)
+    : activeProducts.slice(0, 4);
 
   const trustBadges = [
     { icon: Leaf, label: '100% Natural', subLabel: 'No preservatives', color: 'text-green-600' },

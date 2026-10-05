@@ -5,6 +5,7 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { Language } from '@/i18n/translations';
 import type { Product, ProductVariant } from '@/data/products';
+import { useProductStore } from './useProductStore';
 
 // ─── Cart Types ───────────────────────────────────────────────
 export interface CartItem {
@@ -86,15 +87,23 @@ export const useCartStore = create<CartStore>()(
       closeCart: () => set({ isOpen: false }),
 
       applyCoupon: (code) => {
+        const cleanCode = code.trim().toUpperCase();
+        // Check dynamic coupons from admin catalog store first
+        const dynamicCoupon = useProductStore.getState().getValidCoupon(cleanCode);
+        if (dynamicCoupon) {
+          set({ couponCode: dynamicCoupon.code, discount: dynamicCoupon.discountPercent });
+          return true;
+        }
+
         const validCoupons: Record<string, number> = {
           'AMMA10': 10,
           'SWAGRUHA15': 15,
           'WELCOME20': 20,
           'TELUGU5': 5,
         };
-        const discount = validCoupons[code.toUpperCase()];
+        const discount = validCoupons[cleanCode];
         if (discount) {
-          set({ couponCode: code, discount });
+          set({ couponCode: cleanCode, discount });
           return true;
         }
         return false;

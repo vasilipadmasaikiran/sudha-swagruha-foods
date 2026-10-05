@@ -20,6 +20,7 @@ import TrackOrderPage from '@/pages/TrackOrderPage';
 import AboutPage from '@/pages/AboutPage';
 import ContactPage from '@/pages/ContactPage';
 import AdminPage from '@/pages/AdminPage';
+import AdminConsolePage from '@/pages/AdminConsolePage';
 
 // Scroll to top on navigation
 function ScrollToTop() {
@@ -30,9 +31,17 @@ function ScrollToTop() {
   return null;
 }
 
+import { useProductStore } from '@/hooks/useProductStore';
+
 function AppLayout({ children }: { children: React.ReactNode }) {
   const { pathname } = useLocation();
-  const isAdmin = pathname.startsWith('/admin');
+  const isAdmin = pathname.startsWith('/admin') || pathname.startsWith('/admin-console');
+  
+  const fetchProducts = useProductStore((state) => state.fetchProducts);
+  
+  useEffect(() => {
+    fetchProducts();
+  }, [fetchProducts]);
 
   if (isAdmin) {
     return <>{children}</>;
@@ -62,6 +71,7 @@ function AppRoutes() {
         <Route path="/track-order" element={<TrackOrderPage />} />
         <Route path="/about" element={<AboutPage />} />
         <Route path="/contact" element={<ContactPage />} />
+        <Route path="/admin-console" element={<AdminConsolePage />} />
         <Route path="/admin" element={<AdminPage />} />
         <Route path="/admin/*" element={<AdminPage />} />
         {/* 404 */}

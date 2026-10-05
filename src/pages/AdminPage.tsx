@@ -2,15 +2,15 @@
 // Admin Panel
 // ============================================================
 import { useState } from 'react';
-import { Navigate } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import {
   LayoutDashboard, Package, ShoppingBag, Tag, Percent,
-  LogOut, TrendingUp, Users, AlertCircle, Eye, Edit, Trash2
+  LogOut, TrendingUp, Users, AlertCircle, Eye, Edit, Trash2, Sliders
 } from 'lucide-react';
 import { supabase } from '@/services/supabase';
 import { useAuthStore } from '@/hooks/useStore';
-import { sampleProducts } from '@/data/products';
+import { useProductStore } from '@/hooks/useProductStore';
 import toast from 'react-hot-toast';
 
 type AdminTab = 'dashboard' | 'products' | 'orders' | 'categories' | 'offers';
@@ -115,6 +115,7 @@ function AdminLogin({ onLogin }: { onLogin: () => void }) {
 // ─── Admin Dashboard ──────────────────────────────────────────
 export default function AdminPage() {
   const { isAdmin, logout } = useAuthStore();
+  const { products } = useProductStore();
   const [loggedIn, setLoggedIn] = useState(isAdmin);
   const [activeTab, setActiveTab] = useState<AdminTab>('dashboard');
 
@@ -132,7 +133,7 @@ export default function AdminPage() {
     { icon: ShoppingBag, label: 'Total Orders', value: '24', change: '+12%', color: 'bg-blue-100 text-blue-600' },
     { icon: TrendingUp, label: 'Total Revenue', value: '₹12,480', change: '+8%', color: 'bg-green-100 text-green-600' },
     { icon: AlertCircle, label: 'Pending Orders', value: '6', change: '2 urgent', color: 'bg-yellow-100 text-yellow-600' },
-    { icon: Package, label: 'Total Products', value: String(sampleProducts.length), change: '2 out of stock', color: 'bg-purple-100 text-purple-600' },
+    { icon: Package, label: 'Total Products', value: String(products.length), change: 'Live Catalog', color: 'bg-purple-100 text-purple-600' },
   ];
 
   const navItems: { tab: AdminTab; label: string; icon: typeof LayoutDashboard }[] = [
@@ -146,11 +147,23 @@ export default function AdminPage() {
   return (
     <div className="min-h-screen bg-gray-50 flex">
       {/* Sidebar */}
-      <aside className="hidden lg:flex flex-col w-60 bg-gray-900 text-white min-h-screen">
+      <aside className="hidden lg:flex flex-col w-64 bg-gray-900 text-white min-h-screen">
         <div className="p-5 border-b border-gray-800">
           <p className="font-bold text-lg">Sudha Admin</p>
           <p className="text-xs text-gray-400">Swagruha Foods</p>
         </div>
+
+        {/* Highlighted Link to Full Admin Console */}
+        <div className="p-3 border-b border-gray-800">
+          <Link
+            to="/admin-console"
+            className="flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-xs font-bold bg-gradient-to-r from-emerald-600 to-green-600 text-white shadow-md hover:from-emerald-500 hover:to-green-500 transition-all text-center justify-center"
+          >
+            <Sliders className="w-4 h-4" />
+            <span>Open Admin Console (CRUD)</span>
+          </Link>
+        </div>
+
         <nav className="flex-1 p-4 space-y-1">
           {navItems.map((item) => (
             <button
@@ -259,10 +272,14 @@ export default function AdminPage() {
           {activeTab === 'products' && (
             <div>
               <div className="flex items-center justify-between mb-5">
-                <p className="text-gray-500 text-sm">{sampleProducts.length} products</p>
-                <button className="bg-brand-green text-white px-4 py-2 rounded-xl text-sm font-semibold hover:bg-brand-green-dark transition-colors">
-                  + Add Product
-                </button>
+                <p className="text-gray-500 text-sm">{products.length} products</p>
+                <Link
+                  to="/admin-console"
+                  className="bg-brand-green text-white px-4 py-2 rounded-xl text-sm font-semibold hover:bg-brand-green-dark transition-colors flex items-center gap-1.5"
+                >
+                  <Sliders className="w-4 h-4" />
+                  <span>+ Add / Manage in Admin Console</span>
+                </Link>
               </div>
               <div className="bg-white rounded-2xl shadow-card overflow-hidden">
                 <div className="overflow-x-auto">
@@ -277,7 +294,7 @@ export default function AdminPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {sampleProducts.map((p) => (
+                      {products.map((p) => (
                         <tr key={p.id} className="border-b border-gray-50 hover:bg-gray-50 transition-colors">
                           <td className="px-4 py-3">
                             <div className="flex items-center gap-3">

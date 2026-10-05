@@ -103,6 +103,14 @@ export default function Footer() {
             ))}
             <li>
               <Link
+                to="/admin-console"
+                className="text-emerald-400/90 hover:text-emerald-300 transition-colors text-xs flex items-center gap-1 font-medium"
+              >
+                <span>⚙️ Admin Console</span>
+              </Link>
+            </li>
+            <li>
+              <Link
                 to="/admin"
                 className="text-gray-500 hover:text-gray-300 transition-colors text-xs"
               >
