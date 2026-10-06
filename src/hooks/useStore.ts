@@ -5,7 +5,8 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { Language } from '@/i18n/translations';
 import type { Product, ProductVariant } from '@/data/products';
-import { useProductStore } from './useProductStore';
+import { useProductStore, type CouponItem } from './useProductStore';
+import { supabase, isSupabaseConfigured } from '@/services/supabase';
 
 // ─── Cart Types ───────────────────────────────────────────────
 export interface CartItem {
@@ -26,7 +27,7 @@ interface CartStore {
   clearCart: () => void;
   openCart: () => void;
   closeCart: () => void;
-  applyCoupon: (code: string) => boolean;
+  applyCoupon: (code: string) => Promise<boolean>;
   getSubtotal: () => number;
   getDeliveryCharge: () => number;
   getTotal: () => number;
@@ -86,7 +87,7 @@ export const useCartStore = create<CartStore>()(
       openCart: () => set({ isOpen: true }),
       closeCart: () => set({ isOpen: false }),
 
-      applyCoupon: (code) => {
+      applyCoupon: async (code) => {
         const cleanCode = code.trim().toUpperCase().replace(/\s+/g, '');
         (get() as any)._lastCouponError = '';
 
@@ -117,7 +118,7 @@ export const useCartStore = create<CartStore>()(
           return true;
         }
 
-        // 2. Check dynamic coupons from store (synced from Supabase)
+        // 2. Check dynamic coupons from store (synced from Supabase / cached)
         const dynamicCoupon = useProductStore.getState().getValidCoupon(cleanCode);
         if (dynamicCoupon) {
           if (dynamicCoupon.minOrder > 0 && currentSubtotal < dynamicCoupon.minOrder) {
@@ -154,6 +155,58 @@ export const useCartStore = create<CartStore>()(
           }
           set({ couponCode: cleanCode, discount: found.discount });
           return true;
+        }
+
+        // 4. Live Supabase Cloud DB Query (fetches newly created admin coupons immediately)
+        if (isSupabaseConfigured()) {
+          try {
+            const { data: cloudCoupon, error } = await supabase
+              .from('coupons')
+              .select('*')
+              .ilike('code', cleanCode)
+              .maybeSingle();
+
+            if (!error && cloudCoupon) {
+              const newC: CouponItem = {
+                id: cloudCoupon.id,
+                code: cloudCoupon.code,
+                discountPercent: Number(cloudCoupon.discount_percent),
+                description: cloudCoupon.description,
+                minOrder: Number(cloudCoupon.min_order || 0),
+                isActive: Boolean(cloudCoupon.is_active),
+                expiresAt: cloudCoupon.expires_at || undefined,
+                usageCount: Number(cloudCoupon.usage_count || 0),
+              };
+
+              // Cache in local store
+              useProductStore.setState((s) => ({
+                coupons: [newC, ...s.coupons.filter((c) => c.code !== newC.code)],
+              }));
+
+              if (!newC.isActive) {
+                (get() as any)._lastCouponError = `Coupon code "${cleanCode}" is disabled or inactive.`;
+                return false;
+              }
+
+              if (newC.expiresAt && !isNaN(new Date(newC.expiresAt).getTime()) && new Date(newC.expiresAt) < new Date()) {
+                (get() as any)._lastCouponError = `Coupon code "${cleanCode}" has expired.`;
+                return false;
+              }
+
+              if (newC.minOrder > 0 && currentSubtotal < newC.minOrder) {
+                (get() as any)._lastCouponError = `Minimum order of ₹${newC.minOrder} required for ${newC.code}. (Cart: ₹${currentSubtotal})`;
+                return false;
+              }
+
+              set({
+                couponCode: newC.code,
+                discount: newC.discountPercent,
+              });
+              return true;
+            }
+          } catch (dbErr) {
+            console.warn('Direct coupon cloud lookup exception:', dbErr);
+          }
         }
 
         (get() as any)._lastCouponError = `Invalid or expired coupon code "${cleanCode}".`;

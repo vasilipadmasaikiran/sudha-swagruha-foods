@@ -74,6 +74,7 @@ export default function CheckoutPage() {
   const [sameAsPhone, setSameAsPhone] = useState(true);
   const [couponInput, setCouponInput] = useState('');
   const [couponError, setCouponError] = useState('');
+  const [checkingCoupon, setCheckingCoupon] = useState(false);
 
   const {
     register,
@@ -641,14 +642,41 @@ export default function CheckoutPage() {
                         }}
                         placeholder="Enter coupon code"
                         className="flex-1 px-3 py-2 bg-white border border-gray-200 rounded-xl focus:outline-none focus:border-brand-green focus:ring-2 focus:ring-brand-green/20 text-sm uppercase tracking-wide"
-                        onKeyDown={(e) => {
+                        onKeyDown={async (e) => {
                           if (e.key === 'Enter') {
                             e.preventDefault();
                             if (!couponInput.trim()) {
                               setCouponError('Please enter a coupon code.');
                               return;
                             }
-                            const ok = applyCoupon(couponInput);
+                            setCheckingCoupon(true);
+                            try {
+                              const ok = await applyCoupon(couponInput);
+                              if (ok) {
+                                setCouponError('');
+                                const appliedDiscount = useCartStore.getState().discount;
+                                toast.success(`Coupon "${couponInput}" applied! ${appliedDiscount}% off 🎉`);
+                              } else {
+                                const lastErr = (useCartStore.getState() as any)._lastCouponError;
+                                setCouponError(lastErr || 'Invalid or expired coupon code.');
+                              }
+                            } finally {
+                              setCheckingCoupon(false);
+                            }
+                          }
+                        }}
+                      />
+                      <button
+                        type="button"
+                        disabled={checkingCoupon}
+                        onClick={async () => {
+                          if (!couponInput.trim()) {
+                            setCouponError('Please enter a coupon code.');
+                            return;
+                          }
+                          setCheckingCoupon(true);
+                          try {
+                            const ok = await applyCoupon(couponInput);
                             if (ok) {
                               setCouponError('');
                               const appliedDiscount = useCartStore.getState().discount;
@@ -657,29 +685,13 @@ export default function CheckoutPage() {
                               const lastErr = (useCartStore.getState() as any)._lastCouponError;
                               setCouponError(lastErr || 'Invalid or expired coupon code.');
                             }
+                          } finally {
+                            setCheckingCoupon(false);
                           }
                         }}
-                      />
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (!couponInput.trim()) {
-                            setCouponError('Please enter a coupon code.');
-                            return;
-                          }
-                          const ok = applyCoupon(couponInput);
-                          if (ok) {
-                            setCouponError('');
-                            const appliedDiscount = useCartStore.getState().discount;
-                            toast.success(`Coupon "${couponInput}" applied! ${appliedDiscount}% off 🎉`);
-                          } else {
-                            const lastErr = (useCartStore.getState() as any)._lastCouponError;
-                            setCouponError(lastErr || 'Invalid or expired coupon code.');
-                          }
-                        }}
-                        className="px-4 py-2 bg-brand-green text-white rounded-xl text-sm font-semibold hover:bg-brand-green-dark transition-colors whitespace-nowrap"
+                        className="px-4 py-2 bg-brand-green disabled:opacity-60 text-white rounded-xl text-sm font-semibold hover:bg-brand-green-dark transition-colors whitespace-nowrap"
                       >
-                        Apply
+                        {checkingCoupon ? 'Verifying...' : 'Apply'}
                       </button>
                     </div>
                   )}

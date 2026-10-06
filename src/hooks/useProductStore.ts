@@ -64,10 +64,10 @@ interface ProductStore {
   toggleAnnouncement: (enabled?: boolean) => void;
 
   // Coupon Actions
-  addCoupon: (coupon: Omit<CouponItem, 'id' | 'usageCount'>) => void;
-  updateCoupon: (id: string, updates: Partial<CouponItem>) => void;
-  deleteCoupon: (id: string) => void;
-  toggleCoupon: (id: string) => void;
+  addCoupon: (coupon: Omit<CouponItem, 'id' | 'usageCount'>) => Promise<{ success: boolean; error?: string }>;
+  updateCoupon: (id: string, updates: Partial<CouponItem>) => Promise<void>;
+  deleteCoupon: (id: string) => Promise<void>;
+  toggleCoupon: (id: string) => Promise<void>;
   getValidCoupon: (code: string) => CouponItem | undefined;
 }
 
@@ -391,41 +391,65 @@ export const useProductStore = create<ProductStore>()(
       },
 
       // ─── Coupon Actions (Local + Supabase Cloud Sync) ────────────
-      addCoupon: (couponData) => {
-        const cleanCode = couponData.code.trim().toUpperCase();
+      addCoupon: async (couponData) => {
+        const cleanCode = couponData.code.trim().toUpperCase().replace(/\s+/g, '');
+        const tempId = `coup-${Date.now()}`;
         const newCoupon: CouponItem = {
           ...couponData,
           code: cleanCode,
-          id: `coup-${Date.now()}`,
+          id: tempId,
           usageCount: 0,
         };
 
+        // Immediately update local UI state
         set((state) => ({
           coupons: [newCoupon, ...state.coupons.filter((c) => c.code !== cleanCode)],
         }));
 
         if (isSupabaseConfigured()) {
-          supabase
-            .from('coupons')
-            .insert([
-              {
-                code: cleanCode,
-                discount_percent: couponData.discountPercent,
-                description: couponData.description,
-                min_order: couponData.minOrder,
-                is_active: couponData.isActive,
-                expires_at: couponData.expiresAt || null,
-                usage_count: 0,
-              },
-            ])
-            .then(({ error }) => {
-              if (error) console.warn('Supabase coupon insert notice:', error.message);
-              else console.log('Synced new coupon to Supabase cloud DB:', cleanCode);
-            });
+          try {
+            const { data, error } = await supabase
+              .from('coupons')
+              .upsert(
+                {
+                  code: cleanCode,
+                  discount_percent: couponData.discountPercent,
+                  description: couponData.description,
+                  min_order: couponData.minOrder || 0,
+                  is_active: couponData.isActive !== false,
+                  expires_at: couponData.expiresAt || null,
+                  usage_count: 0,
+                  updated_at: new Date().toISOString(),
+                },
+                { onConflict: 'code' }
+              )
+              .select();
+
+            if (error) {
+              console.warn('Supabase coupon upsert warning:', error.message);
+              return { success: false, error: error.message };
+            }
+
+            if (data && data[0]) {
+              const savedRow = data[0];
+              // Update ID with the DB generated UUID
+              set((state) => ({
+                coupons: state.coupons.map((c) =>
+                  c.code === cleanCode ? { ...c, id: savedRow.id } : c
+                ),
+              }));
+              console.log('✅ Successfully saved and synced coupon to Cloud DB:', cleanCode);
+            }
+            return { success: true };
+          } catch (err: any) {
+            console.error('Coupon DB sync exception:', err);
+            return { success: false, error: err.message || 'Network error syncing coupon' };
+          }
         }
+        return { success: true };
       },
 
-      updateCoupon: (id, updates) => {
+      updateCoupon: async (id, updates) => {
         const existing = get().coupons.find((c) => c.id === id);
         set((state) => ({
           coupons: state.coupons.map((c) =>
@@ -443,51 +467,61 @@ export const useProductStore = create<ProductStore>()(
           if (updates.isActive !== undefined) payload.is_active = updates.isActive;
           if (updates.expiresAt !== undefined) payload.expires_at = updates.expiresAt || null;
 
-          supabase
-            .from('coupons')
-            .update(payload)
-            .eq('code', existing.code)
-            .then(({ error }) => {
-              if (error) console.warn('Supabase coupon update notice:', error.message);
-            });
+          try {
+            const { error } = await supabase
+              .from('coupons')
+              .update(payload)
+              .eq('code', existing.code);
+            if (error) console.warn('Supabase coupon update notice:', error.message);
+            else console.log('✅ Updated coupon in Cloud DB:', existing.code);
+          } catch (err) {
+            console.warn('Coupon update exception:', err);
+          }
         }
       },
 
-      deleteCoupon: (id) => {
+      deleteCoupon: async (id) => {
         const existing = get().coupons.find((c) => c.id === id);
         set((state) => ({
           coupons: state.coupons.filter((c) => c.id !== id),
         }));
 
         if (isSupabaseConfigured() && existing) {
-          supabase
-            .from('coupons')
-            .delete()
-            .eq('code', existing.code)
-            .then(({ error }) => {
-              if (error) console.warn('Supabase coupon delete notice:', error.message);
-            });
+          try {
+            const { error } = await supabase
+              .from('coupons')
+              .delete()
+              .eq('code', existing.code);
+            if (error) console.warn('Supabase coupon delete notice:', error.message);
+            else console.log('✅ Deleted coupon from Cloud DB:', existing.code);
+          } catch (err) {
+            console.warn('Coupon delete exception:', err);
+          }
         }
       },
 
-      toggleCoupon: (id) => {
+      toggleCoupon: async (id) => {
         const existing = get().coupons.find((c) => c.id === id);
-        const newActive = existing ? !existing.isActive : false;
+        if (!existing) return;
+        const newActive = !existing.isActive;
 
         set((state) => ({
           coupons: state.coupons.map((c) =>
-            c.id === id ? { ...c, isActive: !c.isActive } : c
+            c.id === id ? { ...c, isActive: newActive } : c
           ),
         }));
 
-        if (isSupabaseConfigured() && existing) {
-          supabase
-            .from('coupons')
-            .update({ is_active: newActive, updated_at: new Date().toISOString() })
-            .eq('code', existing.code)
-            .then(({ error }) => {
-              if (error) console.warn('Supabase coupon toggle notice:', error.message);
-            });
+        if (isSupabaseConfigured()) {
+          try {
+            const { error } = await supabase
+              .from('coupons')
+              .update({ is_active: newActive, updated_at: new Date().toISOString() })
+              .eq('code', existing.code);
+            if (error) console.warn('Supabase coupon toggle notice:', error.message);
+            else console.log(`✅ Toggled coupon ${existing.code} to ${newActive ? 'Active' : 'Disabled'} in Cloud DB`);
+          } catch (err) {
+            console.warn('Coupon toggle exception:', err);
+          }
         }
       },
 

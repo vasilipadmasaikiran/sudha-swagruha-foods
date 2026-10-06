@@ -33,6 +33,7 @@ import {
   CreditCard,
   Database,
   Mail,
+  Cloud,
 } from 'lucide-react';
 import { useProductStore, type DiscountAnnouncement, type CouponItem } from '@/hooks/useProductStore';
 import { useAuthStore } from '@/hooks/useStore';
@@ -92,6 +93,7 @@ export default function AdminConsolePage() {
     addCoupon,
     deleteCoupon,
     toggleCoupon,
+    fetchCatalogAndSettings,
     resetToDefaults,
   } = useProductStore();
 
@@ -99,6 +101,7 @@ export default function AdminConsolePage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
+  const [isRefreshingCoupons, setIsRefreshingCoupons] = useState(false);
 
   // Modals state
   const [productModalOpen, setProductModalOpen] = useState(false);
@@ -1013,20 +1016,48 @@ export default function AdminConsolePage() {
         {/* ============================================================ */}
         {activeTab === 'coupons' && (
           <div className="space-y-6">
-            <div className="flex items-center justify-between">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
               <div>
-                <h2 className="text-lg font-bold text-white">Active Discount Coupons</h2>
-                <p className="text-xs text-slate-400">
-                  Manage promo codes that customers can apply at cart checkout.
+                <div className="flex items-center gap-2">
+                  <h2 className="text-lg font-bold text-white">Active Discount Coupons</h2>
+                  <span className="flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                    <Cloud className="w-3 h-3 text-emerald-400" />
+                    Supabase Cloud Sync
+                  </span>
+                </div>
+                <p className="text-xs text-slate-400 mt-1">
+                  Manage promo codes that customers can apply at cart checkout. All changes sync automatically to Supabase Cloud DB.
                 </p>
               </div>
-              <button
-                onClick={() => setCouponModalOpen(true)}
-                className="flex items-center gap-2 px-4 py-2 bg-purple-600 hover:bg-purple-500 text-white rounded-xl text-sm font-semibold shadow-lg shadow-purple-600/30 transition-all"
-              >
-                <Plus className="w-4 h-4" />
-                <span>Create New Coupon</span>
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={async () => {
+                    setIsRefreshingCoupons(true);
+                    try {
+                      await fetchCatalogAndSettings();
+                      toast.success('Synced coupons from Cloud DB!');
+                    } catch (e) {
+                      toast.error('Failed to sync from Cloud DB');
+                    } finally {
+                      setIsRefreshingCoupons(false);
+                    }
+                  }}
+                  disabled={isRefreshingCoupons}
+                  className="flex items-center gap-1.5 px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-semibold border border-slate-700 transition-all cursor-pointer disabled:opacity-50"
+                  title="Pull latest coupons from Supabase"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isRefreshingCoupons ? 'animate-spin text-purple-400' : ''}`} />
+                  <span>{isRefreshingCoupons ? 'Syncing...' : 'Sync Cloud'}</span>
+                </button>
+                <button
+                  onClick={() => setCouponModalOpen(true)}
+                  className="flex items-center gap-2 px-4 py-2 bg-purple-600 hover:bg-purple-500 text-white rounded-xl text-sm font-semibold shadow-lg shadow-purple-600/30 transition-all cursor-pointer"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>Create New Coupon</span>
+                </button>
+              </div>
             </div>
 
             <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -1049,8 +1080,11 @@ export default function AdminConsolePage() {
                       </p>
                     </div>
                     <button
-                      onClick={() => toggleCoupon(coupon.id)}
-                      className={`px-2.5 py-1 rounded-full text-xs font-semibold cursor-pointer ${
+                      onClick={async () => {
+                        await toggleCoupon(coupon.id);
+                        toast.success(`Coupon ${coupon.code} is now ${!coupon.isActive ? 'Active' : 'Disabled'} in Cloud DB`);
+                      }}
+                      className={`px-2.5 py-1 rounded-full text-xs font-semibold cursor-pointer transition-colors ${
                         coupon.isActive
                           ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
                           : 'bg-slate-800 text-slate-400 border border-slate-700'
@@ -1063,11 +1097,19 @@ export default function AdminConsolePage() {
                   <p className="text-xs text-slate-400 mt-3">{coupon.description}</p>
 
                   <div className="mt-4 pt-3 border-t border-slate-800/80 flex items-center justify-between text-xs text-slate-500">
-                    <span>Min order: ₹{coupon.minOrder || 0}</span>
+                    <div className="flex flex-col">
+                      <span>Min order: ₹{coupon.minOrder || 0}</span>
+                      <span className="text-[10px] text-slate-500">Used: {coupon.usageCount || 0} times</span>
+                    </div>
                     <button
-                      onClick={() => deleteCoupon(coupon.id)}
-                      className="text-slate-500 hover:text-red-400 p-1 transition-colors"
-                      title="Delete coupon"
+                      onClick={async () => {
+                        if (window.confirm(`Delete coupon "${coupon.code}" from Cloud DB? This action is permanent.`)) {
+                          await deleteCoupon(coupon.id);
+                          toast.success(`Coupon ${coupon.code} removed from Cloud DB`);
+                        }
+                      }}
+                      className="text-slate-500 hover:text-red-400 p-1.5 rounded-lg hover:bg-red-500/10 transition-colors"
+                      title="Delete coupon from Cloud DB"
                     >
                       <Trash2 className="w-3.5 h-3.5" />
                     </button>
@@ -1205,10 +1247,14 @@ export default function AdminConsolePage() {
         {couponModalOpen && (
           <CouponEditorModal
             onClose={() => setCouponModalOpen(false)}
-            onSave={(couponData) => {
-              addCoupon(couponData);
-              toast.success(`Created coupon ${couponData.code}!`);
-              setCouponModalOpen(false);
+            onSave={async (couponData) => {
+              const res = await addCoupon(couponData);
+              if (res && res.error) {
+                toast.error(`Error saving coupon to Cloud DB: ${res.error}`);
+              } else {
+                toast.success(`Coupon "${couponData.code}" created & synced to Cloud DB!`);
+                setCouponModalOpen(false);
+              }
             }}
           />
         )}
@@ -1982,26 +2028,32 @@ function CouponEditorModal({
   onSave,
 }: {
   onClose: () => void;
-  onSave: (coupon: Omit<CouponItem, 'id' | 'usageCount'>) => void;
+  onSave: (coupon: Omit<CouponItem, 'id' | 'usageCount'>) => Promise<any> | void;
 }) {
   const [code, setCode] = useState('');
   const [discountPercent, setDiscountPercent] = useState(15);
   const [description, setDescription] = useState('');
   const [minOrder, setMinOrder] = useState(0);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!code.trim()) {
       toast.error('Please enter coupon code');
       return;
     }
-    onSave({
-      code: code.trim().toUpperCase(),
-      discountPercent,
-      description: description.trim() || `${discountPercent}% off storewide`,
-      minOrder,
-      isActive: true,
-    });
+    setIsSubmitting(true);
+    try {
+      await onSave({
+        code: code.trim().toUpperCase().replace(/\s+/g, ''),
+        discountPercent,
+        description: description.trim() || `${discountPercent}% off storewide`,
+        minOrder,
+        isActive: true,
+      });
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -2013,10 +2065,16 @@ function CouponEditorModal({
         className="bg-slate-900 border border-slate-800 rounded-2xl max-w-sm w-full p-6 shadow-2xl space-y-4"
       >
         <div className="flex items-center justify-between pb-2 border-b border-slate-800">
-          <h3 className="font-bold text-white text-base flex items-center gap-2">
-            <Tag className="w-4 h-4 text-purple-400" />
-            Create Promo Coupon
-          </h3>
+          <div>
+            <h3 className="font-bold text-white text-base flex items-center gap-2">
+              <Tag className="w-4 h-4 text-purple-400" />
+              Create Promo Coupon
+            </h3>
+            <p className="text-[11px] text-slate-400 flex items-center gap-1 mt-0.5">
+              <Cloud className="w-3 h-3 text-emerald-400" />
+              Auto-syncs immediately to Cloud DB
+            </p>
+          </div>
           <button onClick={onClose} className="p-1 text-slate-400 hover:text-white">
             <X className="w-4 h-4" />
           </button>
@@ -2028,7 +2086,7 @@ function CouponEditorModal({
             <input
               type="text"
               value={code}
-              onChange={(e) => setCode(e.target.value.toUpperCase())}
+              onChange={(e) => setCode(e.target.value.toUpperCase().replace(/\s+/g, ''))}
               placeholder="e.g. FESTIVE25"
               className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-sm font-mono font-bold text-purple-400 focus:outline-none focus:border-purple-500 uppercase"
               required
@@ -2081,15 +2139,24 @@ function CouponEditorModal({
             <button
               type="button"
               onClick={onClose}
-              className="flex-1 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-xl"
+              disabled={isSubmitting}
+              className="flex-1 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-xl disabled:opacity-50"
             >
               Cancel
             </button>
             <button
               type="submit"
-              className="flex-1 py-2.5 bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold rounded-xl shadow-lg shadow-purple-600/30"
+              disabled={isSubmitting}
+              className="flex-1 py-2.5 bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold rounded-xl shadow-lg shadow-purple-600/30 disabled:opacity-50 flex items-center justify-center gap-1.5"
             >
-              Create Coupon
+              {isSubmitting ? (
+                <>
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                  <span>Saving to DB...</span>
+                </>
+              ) : (
+                'Create & Sync Coupon'
+              )}
             </button>
           </div>
         </form>
