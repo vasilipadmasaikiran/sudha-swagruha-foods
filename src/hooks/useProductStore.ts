@@ -1,10 +1,11 @@
 // ============================================================
 // Product & Admin Store with Zustand + LocalStorage Persistence
+// + Supabase two-way sync (products, coupons, announcement banner)
 // ============================================================
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { sampleProducts, type Product, type ProductVariant } from '@/data/products';
-import { productService } from '@/services/supabase';
+import { productService, supabase, isSupabaseConfigured } from '@/services/supabase';
 
 export interface DiscountAnnouncement {
   id: string;
@@ -39,8 +40,12 @@ interface ProductStore {
   isLoading: boolean;
   error: string | null;
 
-  // Product Actions
+  // Cloud Sync Actions
   fetchProducts: () => Promise<void>;
+  fetchCatalogAndSettings: () => Promise<void>;
+  subscribeToCatalogAndSettings: () => () => void;
+
+  // Product Actions
   addProduct: (product: Omit<Product, 'id' | 'created_at'>) => Product;
   updateProduct: (id: string, updates: Partial<Product>) => void;
   deleteProduct: (id: string) => void;
@@ -98,7 +103,7 @@ const defaultCoupons: CouponItem[] = [
     description: 'Special 15% OFF festive announcement offer',
     minOrder: 499,
     isActive: true,
-    usageCount: 42,
+    usageCount: 64,
   },
   {
     id: 'c-3',
@@ -129,39 +134,160 @@ export const useProductStore = create<ProductStore>()(
       isLoading: false,
       error: null,
 
+      // ─── Fetch Products from Supabase DB ─────────────────────────
       fetchProducts: async () => {
+        if (!isSupabaseConfigured()) return;
         set({ isLoading: true, error: null });
         try {
           const dbProducts = await productService.getAll();
-          const mappedProducts: Product[] = dbProducts.map(dbP => ({
-            id: dbP.id,
-            slug: dbP.slug,
-            name_en: dbP.name_en,
-            name_te: dbP.name_te,
-            description_en: dbP.description_en,
-            description_te: dbP.description_te,
-            category: dbP.category as any,
-            images: dbP.images,
-            ingredients_en: dbP.ingredients_en,
-            ingredients_te: dbP.ingredients_te,
-            is_active: dbP.is_active,
-            is_demo: false,
-            created_at: dbP.created_at,
-            variants: [{
-              weight: dbP.weight,
-              price: dbP.price,
-              comparePrice: dbP.compare_price || undefined,
-              stock: dbP.stock,
-              sku: dbP.sku
-            }]
-          }));
-          set({ products: mappedProducts, isLoading: false });
+          if (dbProducts && dbProducts.length > 0) {
+            const mappedProducts: Product[] = dbProducts.map((dbP) => ({
+              id: dbP.id,
+              slug: dbP.slug,
+              name_en: dbP.name_en,
+              name_te: dbP.name_te,
+              description_en: dbP.description_en,
+              description_te: dbP.description_te,
+              category: dbP.category as any,
+              images: dbP.images,
+              ingredients_en: dbP.ingredients_en,
+              ingredients_te: dbP.ingredients_te,
+              is_active: dbP.is_active,
+              is_demo: false,
+              created_at: dbP.created_at,
+              variants: [
+                {
+                  weight: dbP.weight,
+                  price: dbP.price,
+                  comparePrice: dbP.compare_price || undefined,
+                  stock: dbP.stock,
+                  sku: dbP.sku,
+                },
+              ],
+            }));
+            set({ products: mappedProducts, isLoading: false });
+          }
         } catch (err: any) {
-          console.error('Failed to fetch products:', err);
-          set({ error: err.message, isLoading: false });
+          console.warn('Products fetch notice:', err.message);
+          set({ isLoading: false });
         }
       },
 
+      // ─── Fetch Coupons & Announcement from Supabase ───────────────
+      fetchCatalogAndSettings: async () => {
+        if (!isSupabaseConfigured()) return;
+        try {
+          // 1. Fetch Coupons
+          const { data: dbCoupons, error: cErr } = await supabase
+            .from('coupons')
+            .select('*')
+            .order('created_at', { ascending: false });
+
+          if (!cErr && dbCoupons && dbCoupons.length > 0) {
+            const mappedCoupons: CouponItem[] = dbCoupons.map((c: any) => ({
+              id: c.id,
+              code: c.code,
+              discountPercent: Number(c.discount_percent),
+              description: c.description,
+              minOrder: Number(c.min_order || 0),
+              isActive: Boolean(c.is_active),
+              expiresAt: c.expires_at || undefined,
+              usageCount: Number(c.usage_count || 0),
+            }));
+            set({ coupons: mappedCoupons });
+          }
+
+          // 2. Fetch Announcement Banner
+          const { data: annData, error: aErr } = await supabase
+            .from('store_settings')
+            .select('value')
+            .eq('key', 'announcement')
+            .maybeSingle();
+
+          if (!aErr && annData?.value) {
+            set({ announcement: annData.value as DiscountAnnouncement });
+          }
+        } catch (err) {
+          console.warn('Catalog and announcement sync notice:', err);
+        }
+      },
+
+      // ─── Real-time Listener for Coupons & Announcements ──────────
+      subscribeToCatalogAndSettings: () => {
+        if (!isSupabaseConfigured()) return () => {};
+
+        try {
+          // Channel for real-time coupons and settings updates
+          const channel = supabase
+            .channel('catalog_and_settings_realtime')
+            .on(
+              'postgres_changes',
+              { event: '*', schema: 'public', table: 'coupons' },
+              (payload) => {
+                if (payload.eventType === 'INSERT') {
+                  const c = payload.new as any;
+                  const newC: CouponItem = {
+                    id: c.id,
+                    code: c.code,
+                    discountPercent: Number(c.discount_percent),
+                    description: c.description,
+                    minOrder: Number(c.min_order || 0),
+                    isActive: Boolean(c.is_active),
+                    expiresAt: c.expires_at || undefined,
+                    usageCount: Number(c.usage_count || 0),
+                  };
+                  set((state) => ({
+                    coupons: [newC, ...state.coupons.filter((it) => it.code !== newC.code)],
+                  }));
+                } else if (payload.eventType === 'UPDATE') {
+                  const c = payload.new as any;
+                  set((state) => ({
+                    coupons: state.coupons.map((it) =>
+                      it.code === c.code || it.id === c.id
+                        ? {
+                            ...it,
+                            discountPercent: Number(c.discount_percent),
+                            description: c.description,
+                            minOrder: Number(c.min_order || 0),
+                            isActive: Boolean(c.is_active),
+                            expiresAt: c.expires_at || undefined,
+                            usageCount: Number(c.usage_count || 0),
+                          }
+                        : it
+                    ),
+                  }));
+                } else if (payload.eventType === 'DELETE') {
+                  const oldRow = payload.old as any;
+                  set((state) => ({
+                    coupons: state.coupons.filter(
+                      (it) => it.id !== oldRow.id && it.code !== oldRow.code
+                    ),
+                  }));
+                }
+              }
+            )
+            .on(
+              'postgres_changes',
+              { event: '*', schema: 'public', table: 'store_settings' },
+              (payload) => {
+                const newRow = payload.new as any;
+                if (newRow?.key === 'announcement' && newRow.value) {
+                  set({ announcement: newRow.value as DiscountAnnouncement });
+                }
+              }
+            )
+            .subscribe();
+
+          return () => {
+            supabase.removeChannel(channel);
+          };
+        } catch (e) {
+          console.warn('Realtime catalog subscription notice:', e);
+          return () => {};
+        }
+      },
+
+      // ─── Product Local & DB Actions ──────────────────────────────
       addProduct: (newProductData) => {
         const id = `prod-${Date.now()}`;
         const newProduct: Product = {
@@ -225,52 +351,144 @@ export const useProductStore = create<ProductStore>()(
         });
       },
 
+      // ─── Announcement Actions (Local + Supabase Cloud Sync) ──────
       updateAnnouncement: (updates) => {
-        set((state) => ({
-          announcement: { ...state.announcement, ...updates },
-        }));
+        const updated = { ...get().announcement, ...updates };
+        set({ announcement: updated });
+
+        if (isSupabaseConfigured()) {
+          supabase
+            .from('store_settings')
+            .upsert({
+              key: 'announcement',
+              value: updated,
+              updated_at: new Date().toISOString(),
+            })
+            .then(({ error }) => {
+              if (error) console.warn('Supabase announcement sync notice:', error.message);
+              else console.log('Synced announcement to Supabase cloud DB');
+            });
+        }
       },
 
       toggleAnnouncement: (enabled) => {
-        set((state) => ({
-          announcement: {
-            ...state.announcement,
-            enabled: enabled !== undefined ? enabled : !state.announcement.enabled,
-          },
-        }));
+        const nextEnabled = enabled !== undefined ? enabled : !get().announcement.enabled;
+        const updated = { ...get().announcement, enabled: nextEnabled };
+        set({ announcement: updated });
+
+        if (isSupabaseConfigured()) {
+          supabase
+            .from('store_settings')
+            .upsert({
+              key: 'announcement',
+              value: updated,
+              updated_at: new Date().toISOString(),
+            })
+            .then(({ error }) => {
+              if (error) console.warn('Supabase announcement toggle notice:', error.message);
+            });
+        }
       },
 
+      // ─── Coupon Actions (Local + Supabase Cloud Sync) ────────────
       addCoupon: (couponData) => {
+        const cleanCode = couponData.code.trim().toUpperCase();
         const newCoupon: CouponItem = {
           ...couponData,
+          code: cleanCode,
           id: `coup-${Date.now()}`,
           usageCount: 0,
         };
+
         set((state) => ({
-          coupons: [newCoupon, ...state.coupons],
+          coupons: [newCoupon, ...state.coupons.filter((c) => c.code !== cleanCode)],
         }));
+
+        if (isSupabaseConfigured()) {
+          supabase
+            .from('coupons')
+            .insert([
+              {
+                code: cleanCode,
+                discount_percent: couponData.discountPercent,
+                description: couponData.description,
+                min_order: couponData.minOrder,
+                is_active: couponData.isActive,
+                expires_at: couponData.expiresAt || null,
+                usage_count: 0,
+              },
+            ])
+            .then(({ error }) => {
+              if (error) console.warn('Supabase coupon insert notice:', error.message);
+              else console.log('Synced new coupon to Supabase cloud DB:', cleanCode);
+            });
+        }
       },
 
       updateCoupon: (id, updates) => {
+        const existing = get().coupons.find((c) => c.id === id);
         set((state) => ({
           coupons: state.coupons.map((c) =>
             c.id === id ? { ...c, ...updates } : c
           ),
         }));
+
+        if (isSupabaseConfigured() && existing) {
+          const payload: Record<string, unknown> = {
+            updated_at: new Date().toISOString(),
+          };
+          if (updates.discountPercent !== undefined) payload.discount_percent = updates.discountPercent;
+          if (updates.description !== undefined) payload.description = updates.description;
+          if (updates.minOrder !== undefined) payload.min_order = updates.minOrder;
+          if (updates.isActive !== undefined) payload.is_active = updates.isActive;
+          if (updates.expiresAt !== undefined) payload.expires_at = updates.expiresAt || null;
+
+          supabase
+            .from('coupons')
+            .update(payload)
+            .eq('code', existing.code)
+            .then(({ error }) => {
+              if (error) console.warn('Supabase coupon update notice:', error.message);
+            });
+        }
       },
 
       deleteCoupon: (id) => {
+        const existing = get().coupons.find((c) => c.id === id);
         set((state) => ({
           coupons: state.coupons.filter((c) => c.id !== id),
         }));
+
+        if (isSupabaseConfigured() && existing) {
+          supabase
+            .from('coupons')
+            .delete()
+            .eq('code', existing.code)
+            .then(({ error }) => {
+              if (error) console.warn('Supabase coupon delete notice:', error.message);
+            });
+        }
       },
 
       toggleCoupon: (id) => {
+        const existing = get().coupons.find((c) => c.id === id);
+        const newActive = existing ? !existing.isActive : false;
+
         set((state) => ({
           coupons: state.coupons.map((c) =>
             c.id === id ? { ...c, isActive: !c.isActive } : c
           ),
         }));
+
+        if (isSupabaseConfigured() && existing) {
+          supabase
+            .from('coupons')
+            .update({ is_active: newActive, updated_at: new Date().toISOString() })
+            .eq('code', existing.code)
+            .then(({ error }) => {
+              if (error) console.warn('Supabase coupon toggle notice:', error.message);
+            });
+        }
       },
 
       getValidCoupon: (code) => {

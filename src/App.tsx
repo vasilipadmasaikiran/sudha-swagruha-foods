@@ -32,16 +32,30 @@ function ScrollToTop() {
 }
 
 import { useProductStore } from '@/hooks/useProductStore';
+import { useSettingsStore } from '@/hooks/useSettingsStore';
 
 function AppLayout({ children }: { children: React.ReactNode }) {
   const { pathname } = useLocation();
   const isAdmin = pathname.startsWith('/admin') || pathname.startsWith('/admin-console');
   
-  const fetchProducts = useProductStore((state) => state.fetchProducts);
+  const { fetchProducts, fetchCatalogAndSettings, subscribeToCatalogAndSettings } = useProductStore();
+  const { fetchSettings, subscribeToSettings } = useSettingsStore();
   
   useEffect(() => {
+    // Initial fetch from cloud database
     fetchProducts();
-  }, [fetchProducts]);
+    fetchCatalogAndSettings();
+    fetchSettings();
+
+    // Subscribe to live changes so customer storefront updates in real-time
+    const unsubCatalog = subscribeToCatalogAndSettings();
+    const unsubSettings = subscribeToSettings();
+
+    return () => {
+      unsubCatalog();
+      unsubSettings();
+    };
+  }, [fetchProducts, fetchCatalogAndSettings, subscribeToCatalogAndSettings, fetchSettings, subscribeToSettings]);
 
   if (isAdmin) {
     return <>{children}</>;

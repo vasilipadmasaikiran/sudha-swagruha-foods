@@ -53,23 +53,43 @@ export const testSupabaseConnection = async (): Promise<{
   success: boolean;
   message: string;
   orderCount?: number;
+  tables: {
+    orders: boolean;
+    products: boolean;
+    coupons: boolean;
+    store_settings: boolean;
+  };
 }> => {
   try {
-    const { count, error } = await supabase
-      .from('orders')
-      .select('*', { count: 'exact', head: true });
-    if (error) {
-      return { success: false, message: error.message };
-    }
+    const [ordersRes, productsRes, couponsRes, settingsRes] = await Promise.all([
+      supabase.from('orders').select('*', { count: 'exact', head: true }),
+      supabase.from('products').select('*', { count: 'exact', head: true }),
+      supabase.from('coupons').select('*', { count: 'exact', head: true }),
+      supabase.from('store_settings').select('*', { count: 'exact', head: true }),
+    ]);
+
+    const tables = {
+      orders: !ordersRes.error,
+      products: !productsRes.error,
+      coupons: !couponsRes.error,
+      store_settings: !settingsRes.error,
+    };
+
+    const hasCore = tables.orders && tables.products;
+
     return {
-      success: true,
-      message: 'Connected to Supabase cloud database',
-      orderCount: count ?? 0,
+      success: hasCore,
+      message: hasCore
+        ? 'Connected to Supabase cloud database'
+        : ordersRes.error?.message || 'Failed to connect to core tables',
+      orderCount: ordersRes.count ?? 0,
+      tables,
     };
   } catch (err) {
     return {
       success: false,
       message: err instanceof Error ? err.message : 'Database connection error',
+      tables: { orders: false, products: false, coupons: false, store_settings: false },
     };
   }
 };
