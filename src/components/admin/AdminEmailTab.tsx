@@ -51,9 +51,15 @@ export default function AdminEmailTab() {
     try {
       const res = await sendTestEmail(testEmail.trim(), form);
       if (res.success) {
-        toast.success(`Test email dispatched to ${testEmail}!`);
+        // Distinguish between real send vs simulation
+        if (res.message?.startsWith('✅ SMTP settings look good')) {
+          toast.success('SMTP config looks good! (Simulation — add a Resend API Key to send real emails)', { duration: 6000 });
+        } else {
+          toast.success(`✅ Test email sent to ${testEmail}!`);
+        }
       } else {
-        toast.error(`Email notice: ${res.message}`);
+        // Show actionable error — not just the raw message
+        toast.error(res.message?.split('\n')[0] || 'Email not configured', { duration: 6000 });
       }
     } catch (e: any) {
       toast.error(e.message || 'Failed to send test email');
@@ -346,14 +352,33 @@ export default function AdminEmailTab() {
                       type={showPassword ? 'text' : 'password'}
                       value={form.password}
                       onChange={(e) => setForm({ ...form, password: e.target.value })}
-                      placeholder="re_xxxxxx or Google 16-char App Password"
-                      className="w-full pl-3.5 pr-9 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-xs font-mono text-white focus:outline-none focus:border-indigo-500"
+                      placeholder="re_xxxxxx  OR  Google 16-char App Password"
+                      className={`w-full pl-3.5 pr-9 py-2.5 bg-slate-900 border rounded-xl text-xs font-mono text-white focus:outline-none focus:border-indigo-500 ${
+                        form.password?.startsWith('re_')
+                          ? 'border-emerald-500/60 ring-1 ring-emerald-500/20'
+                          : 'border-slate-700'
+                      }`}
                     />
                     <Key className="w-3.5 h-3.5 text-slate-500 absolute right-3 top-1/2 -translate-y-1/2" />
                   </div>
-                  <p className="text-[11px] text-slate-500 mt-1">
-                    For Gmail, use a 16-character App Password (not your personal Gmail password)
-                  </p>
+                  {form.password?.startsWith('re_') ? (
+                    <p className="text-[11px] text-emerald-400 mt-1 flex items-center gap-1">
+                      ✅ Resend API Key detected — emails will send directly from the browser!
+                    </p>
+                  ) : (
+                    <p className="text-[11px] text-slate-500 mt-1">
+                      💡 <strong className="text-slate-400">For instant live emails:</strong> Enter a{' '}
+                      <a
+                        href="https://resend.com"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-indigo-400 underline hover:text-indigo-300"
+                      >
+                        Resend API Key
+                      </a>{' '}
+                      here (starts with <code className="text-purple-300">re_</code>). For Gmail, use a 16-character App Password.
+                    </p>
+                  )}
                 </div>
               </div>
             </div>
