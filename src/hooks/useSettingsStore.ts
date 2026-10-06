@@ -1,10 +1,26 @@
 // ============================================================
-// Store Settings & Payment Gateway Configuration
+// Store Settings & Payment Gateway & SMTP Configuration
 // + Supabase two-way sync for live contact & business settings
 // ============================================================
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { supabase, isSupabaseConfigured } from '@/services/supabase';
+
+export interface SmtpSettings {
+  enabled: boolean;
+  provider: 'smtp' | 'resend' | 'gmail' | 'webhook';
+  host: string;
+  port: number;
+  secure: boolean;
+  username: string;
+  password: string; // App Password or API Key
+  senderName: string;
+  senderEmail: string;
+  adminNotificationEmail: string;
+  notifyAdminOnNewOrder: boolean;
+  resendApiKey?: string;
+  webhookUrl?: string;
+}
 
 export interface StoreSettings {
   // Contact & Business Info
@@ -19,15 +35,35 @@ export interface StoreSettings {
   razorpayKeyId: string;
   razorpayKeySecret: string;
   isTestMode: boolean;
+
+  // SMTP & Email Notification Settings
+  smtp: SmtpSettings;
 }
 
 interface SettingsStore {
   settings: StoreSettings;
   updateSettings: (updates: Partial<StoreSettings>) => void;
+  updateSmtpSettings: (updates: Partial<SmtpSettings>) => void;
   resetSettings: () => void;
   fetchSettings: () => Promise<void>;
   subscribeToSettings: () => () => void;
 }
+
+export const defaultSmtpSettings: SmtpSettings = {
+  enabled: true,
+  provider: 'resend',
+  host: 'smtp.gmail.com',
+  port: 587,
+  secure: false,
+  username: 'info@sudhaswagruha.com',
+  password: '',
+  senderName: 'Sudha Swagruha Foods',
+  senderEmail: 'orders@sudhaswagruha.com',
+  adminNotificationEmail: 'vasilisaikiran@gmail.com',
+  notifyAdminOnNewOrder: true,
+  resendApiKey: '',
+  webhookUrl: '',
+};
 
 export const defaultSettings: StoreSettings = {
   businessPhone: '8374634989',
@@ -35,10 +71,11 @@ export const defaultSettings: StoreSettings = {
   businessEmail: 'info@sudhaswagruha.com',
   businessAddress: 'Plot 18, Traditional Foods Lane, Benz Circle, Vijayawada, Andhra Pradesh - 520010',
   businessHours: '9:00 AM - 9:00 PM (All Days)',
-  paymentGatewayEnabled: false, // Default disabled as requested: direct to WhatsApp
+  paymentGatewayEnabled: false,
   razorpayKeyId: '',
   razorpayKeySecret: '',
   isTestMode: true,
+  smtp: defaultSmtpSettings,
 };
 
 export const useSettingsStore = create<SettingsStore>()(
@@ -58,7 +95,15 @@ export const useSettingsStore = create<SettingsStore>()(
 
           if (!error && data?.value) {
             set((state) => ({
-              settings: { ...state.settings, ...(data.value as Partial<StoreSettings>) },
+              settings: {
+                ...state.settings,
+                ...(data.value as Partial<StoreSettings>),
+                smtp: {
+                  ...defaultSmtpSettings,
+                  ...(state.settings.smtp || {}),
+                  ...((data.value as Partial<StoreSettings>)?.smtp || {}),
+                },
+              },
             }));
           }
         } catch (err) {
@@ -79,7 +124,15 @@ export const useSettingsStore = create<SettingsStore>()(
                 const newRow = payload.new as any;
                 if (newRow?.key === 'store_contact' && newRow.value) {
                   set((state) => ({
-                    settings: { ...state.settings, ...(newRow.value as Partial<StoreSettings>) },
+                    settings: {
+                      ...state.settings,
+                      ...(newRow.value as Partial<StoreSettings>),
+                      smtp: {
+                        ...defaultSmtpSettings,
+                        ...(state.settings.smtp || {}),
+                        ...((newRow.value as Partial<StoreSettings>)?.smtp || {}),
+                      },
+                    },
                   }));
                 }
               }
@@ -111,6 +164,28 @@ export const useSettingsStore = create<SettingsStore>()(
             .then(({ error }) => {
               if (error) console.warn('Supabase store settings update notice:', error.message);
               else console.log('Synced store settings to Supabase cloud DB');
+            });
+        }
+      },
+
+      // ─── Update SMTP Settings Specifically ────────────────────────
+      updateSmtpSettings: (smtpUpdates) => {
+        const current = get().settings;
+        const nextSmtp = { ...(current.smtp || defaultSmtpSettings), ...smtpUpdates };
+        const nextSettings: StoreSettings = { ...current, smtp: nextSmtp };
+        set({ settings: nextSettings });
+
+        if (isSupabaseConfigured()) {
+          supabase
+            .from('store_settings')
+            .upsert({
+              key: 'store_contact',
+              value: nextSettings,
+              updated_at: new Date().toISOString(),
+            })
+            .then(({ error }) => {
+              if (error) console.warn('Supabase SMTP settings update notice:', error.message);
+              else console.log('Synced SMTP settings to Supabase cloud DB');
             });
         }
       },

@@ -25,6 +25,7 @@ import { useSettingsStore } from '@/hooks/useSettingsStore';
 import { useOrderStore } from '@/hooks/useOrderStore';
 import { translations } from '@/i18n/translations';
 import type { DbOrder } from '@/services/supabase';
+import { sendOrderConfirmationEmail } from '@/services/emailService';
 
 // Razorpay type declaration
 declare global {
@@ -225,6 +226,13 @@ export default function CheckoutPage() {
 
     // Save order in store (persisted in localStorage + Supabase sync)
     await addOrder(newOrder);
+
+    // Send email communication / intimation to customer
+    if (newOrder.customer_email && settings.smtp?.enabled) {
+      sendOrderConfirmationEmail(newOrder, settings.smtp).catch((err) =>
+        console.warn('Customer order confirmation email notice:', err)
+      );
+    }
 
     // Clear cart
     clearCart();

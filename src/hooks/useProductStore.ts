@@ -492,12 +492,14 @@ export const useProductStore = create<ProductStore>()(
       },
 
       getValidCoupon: (code) => {
-        const clean = code.trim().toUpperCase();
+        const clean = code.trim().toUpperCase().replace(/\s+/g, '');
         const now = new Date();
         return get().coupons.find((c) => {
-          if (c.code.toUpperCase() !== clean) return false;
+          if (c.code.trim().toUpperCase().replace(/\s+/g, '') !== clean) return false;
           if (!c.isActive) return false;
-          if (c.expiresAt && new Date(c.expiresAt) < now) return false;
+          if (c.expiresAt && !isNaN(new Date(c.expiresAt).getTime()) && new Date(c.expiresAt) < now) {
+            return false;
+          }
           return true;
         });
       },

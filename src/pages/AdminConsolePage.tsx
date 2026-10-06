@@ -32,6 +32,7 @@ import {
   Phone,
   CreditCard,
   Database,
+  Mail,
 } from 'lucide-react';
 import { useProductStore, type DiscountAnnouncement, type CouponItem } from '@/hooks/useProductStore';
 import { useAuthStore } from '@/hooks/useStore';
@@ -43,10 +44,11 @@ import AdminOrdersTab from '@/components/admin/AdminOrdersTab';
 import AdminSettingsTab from '@/components/admin/AdminSettingsTab';
 import AdminPaymentsTab from '@/components/admin/AdminPaymentsTab';
 import AdminDatabaseTab from '@/components/admin/AdminDatabaseTab';
+import AdminEmailTab from '@/components/admin/AdminEmailTab';
 import { categories, type Product, type ProductVariant } from '@/data/products';
 import toast from 'react-hot-toast';
 
-type ActiveTab = 'orders' | 'products' | 'settings' | 'payments' | 'database' | 'announcement' | 'coupons' | 'insights';
+type ActiveTab = 'orders' | 'products' | 'settings' | 'payments' | 'database' | 'email' | 'announcement' | 'coupons' | 'insights';
 
 // Image preset options for quick selection
 const IMAGE_PRESETS = [
@@ -351,6 +353,28 @@ export default function AdminConsolePage() {
             <span className="ml-1 w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
           </button>
 
+          {/* Email & SMTP Tab */}
+          <button
+            onClick={() => setActiveTab('email')}
+            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all flex-shrink-0 cursor-pointer ${
+              activeTab === 'email'
+                ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/30'
+                : 'text-slate-400 hover:text-white hover:bg-slate-800'
+            }`}
+          >
+            <Mail className="w-4 h-4" />
+            <span>Email & SMTP</span>
+            <span
+              className={`ml-1 px-1.5 py-0.2 rounded-full text-[10px] font-bold ${
+                settings.smtp?.enabled
+                  ? 'bg-emerald-400 text-emerald-950'
+                  : 'bg-slate-700 text-slate-300'
+              }`}
+            >
+              {settings.smtp?.enabled ? 'ON' : 'OFF'}
+            </span>
+          </button>
+
           {/* Announcement Tab */}
           <button
             onClick={() => setActiveTab('announcement')}
@@ -419,6 +443,11 @@ export default function AdminConsolePage() {
         {/* TAB: SUPABASE CLOUD DATABASE CONFIGURATION                   */}
         {/* ============================================================ */}
         {activeTab === 'database' && <AdminDatabaseTab />}
+
+        {/* ============================================================ */}
+        {/* TAB: CUSTOMER EMAIL & SMTP CONFIGURATION                     */}
+        {/* ============================================================ */}
+        {activeTab === 'email' && <AdminEmailTab />}
 
         {/* ============================================================ */}
         {/* TAB 3: PRODUCTS & PRICING                                    */}

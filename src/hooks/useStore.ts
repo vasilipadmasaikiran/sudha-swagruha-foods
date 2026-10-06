@@ -87,24 +87,41 @@ export const useCartStore = create<CartStore>()(
       closeCart: () => set({ isOpen: false }),
 
       applyCoupon: (code) => {
-        const cleanCode = code.trim().toUpperCase();
+        const cleanCode = code.trim().toUpperCase().replace(/\s+/g, '');
+        (get() as any)._lastCouponError = '';
 
-        // Handle explicit clear sentinel
-        if (cleanCode === '__CLEAR__') {
+        // Handle explicit clear
+        if (!cleanCode || cleanCode === '__CLEAR__') {
           set({ couponCode: '', discount: 0 });
           return true;
         }
 
         const currentSubtotal = get().getSubtotal();
 
-        // Check dynamic coupons from admin catalog store first
+        // 1. Check Announcement Banner Coupon
+        const ann = useProductStore.getState().announcement;
+        if (
+          ann &&
+          ann.enabled &&
+          ann.couponCode &&
+          ann.couponCode.trim().toUpperCase().replace(/\s+/g, '') === cleanCode
+        ) {
+          if (ann.minOrderValue > 0 && currentSubtotal < ann.minOrderValue) {
+            (get() as any)._lastCouponError = `Minimum order of ₹${ann.minOrderValue} required for ${cleanCode}. (Cart: ₹${currentSubtotal})`;
+            return false;
+          }
+          set({
+            couponCode: ann.couponCode.toUpperCase(),
+            discount: ann.discountPercent,
+          });
+          return true;
+        }
+
+        // 2. Check dynamic coupons from store (synced from Supabase)
         const dynamicCoupon = useProductStore.getState().getValidCoupon(cleanCode);
         if (dynamicCoupon) {
-          // Validate minimum order requirement
           if (dynamicCoupon.minOrder > 0 && currentSubtotal < dynamicCoupon.minOrder) {
-            // Return false with a signal that minimum not met
-            // We store the error reason so CheckoutPage can display it
-            (get() as any)._lastCouponError = `Minimum order of ₹${dynamicCoupon.minOrder} required for this coupon.`;
+            (get() as any)._lastCouponError = `Minimum order of ₹${dynamicCoupon.minOrder} required for ${dynamicCoupon.code}. (Cart: ₹${currentSubtotal})`;
             return false;
           }
           set({
@@ -114,22 +131,32 @@ export const useCartStore = create<CartStore>()(
           return true;
         }
 
-        // Fallback hardcoded coupons (with minOrder constraints)
-        const validCoupons: Record<string, { discount: number; minOrder: number }> = {
-          'AMMA10':     { discount: 10, minOrder: 0 },
+        // 3. Fallback built-in coupons
+        const builtInCoupons: Record<string, { discount: number; minOrder: number }> = {
+          'AMMA10': { discount: 10, minOrder: 0 },
           'SWAGRUHA15': { discount: 15, minOrder: 499 },
-          'WELCOME20':  { discount: 20, minOrder: 799 },
-          'TELUGU5':    { discount: 5,  minOrder: 0 },
+          'WELCOME20': { discount: 20, minOrder: 799 },
+          'TELUGU5': { discount: 5, minOrder: 0 },
+          'FESTIVE15': { discount: 15, minOrder: 0 },
+          'SPECIAL10': { discount: 10, minOrder: 0 },
+          'SWAGRUHA': { discount: 10, minOrder: 0 },
+          'SAVE10': { discount: 10, minOrder: 0 },
+          'SAVE15': { discount: 15, minOrder: 0 },
+          'SAVE20': { discount: 20, minOrder: 0 },
+          'UGADI20': { discount: 20, minOrder: 999 },
         };
-        const couponData = validCoupons[cleanCode];
-        if (couponData) {
-          if (couponData.minOrder > 0 && currentSubtotal < couponData.minOrder) {
-            (get() as any)._lastCouponError = `Minimum order of ₹${couponData.minOrder} required for this coupon.`;
+
+        const found = builtInCoupons[cleanCode];
+        if (found) {
+          if (found.minOrder > 0 && currentSubtotal < found.minOrder) {
+            (get() as any)._lastCouponError = `Minimum order of ₹${found.minOrder} required for ${cleanCode}. (Cart: ₹${currentSubtotal})`;
             return false;
           }
-          set({ couponCode: cleanCode, discount: couponData.discount });
+          set({ couponCode: cleanCode, discount: found.discount });
           return true;
         }
+
+        (get() as any)._lastCouponError = `Invalid or expired coupon code "${cleanCode}".`;
         return false;
       },
 
