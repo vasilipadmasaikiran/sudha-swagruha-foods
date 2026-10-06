@@ -275,9 +275,13 @@ export const useProductStore = create<ProductStore>()(
 
       getValidCoupon: (code) => {
         const clean = code.trim().toUpperCase();
-        return get().coupons.find(
-          (c) => c.code.toUpperCase() === clean && c.isActive
-        );
+        const now = new Date();
+        return get().coupons.find((c) => {
+          if (c.code.toUpperCase() !== clean) return false;
+          if (!c.isActive) return false;
+          if (c.expiresAt && new Date(c.expiresAt) < now) return false;
+          return true;
+        });
       },
     }),
     {

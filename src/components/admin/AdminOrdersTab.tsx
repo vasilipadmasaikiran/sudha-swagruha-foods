@@ -1,7 +1,7 @@
 // ============================================================
 // Admin Console - Orders Management Tab
 // ============================================================
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   ShoppingBag,
@@ -12,13 +12,13 @@ import {
   Home,
   ChefHat,
   X,
-  Phone,
   MessageCircle,
   Clock,
   Eye,
   Trash2,
   AlertCircle,
   ChevronDown,
+  RefreshCw,
 } from 'lucide-react';
 import { useOrderStore } from '@/hooks/useOrderStore';
 import type { DbOrder } from '@/services/supabase';
@@ -48,11 +48,21 @@ const ALL_STATUSES: DbOrder['order_status'][] = [
 ];
 
 export default function AdminOrdersTab() {
-  const { orders, updateOrderStatus, deleteOrder, resetOrders } = useOrderStore();
+  const { orders, updateOrderStatus, deleteOrder, resetOrders, fetchOrdersFromSupabase, isSyncing } = useOrderStore();
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [selectedOrder, setSelectedOrder] = useState<DbOrder | null>(null);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+
+  // Auto-fetch from Supabase on mount so admin sees all customer orders
+  const handleRefresh = useCallback(async () => {
+    await fetchOrdersFromSupabase();
+    toast.success('Orders refreshed from database!');
+  }, [fetchOrdersFromSupabase]);
+
+  useEffect(() => {
+    fetchOrdersFromSupabase();
+  }, [fetchOrdersFromSupabase]);
 
   const filteredOrders = useMemo(() => {
     return orders.filter((o) => {
@@ -115,6 +125,15 @@ export default function AdminOrdersTab() {
               </button>
             )}
           </div>
+          <button
+            onClick={handleRefresh}
+            disabled={isSyncing}
+            className="flex items-center gap-1.5 px-3 py-2 bg-emerald-600/20 hover:bg-emerald-600/40 border border-emerald-500/30 text-emerald-400 rounded-xl text-xs font-semibold transition-all disabled:opacity-50"
+            title="Refresh orders from database"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
+            <span className="hidden sm:inline">{isSyncing ? 'Syncing...' : 'Refresh'}</span>
+          </button>
         </div>
       </div>
 

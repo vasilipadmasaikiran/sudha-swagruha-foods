@@ -612,7 +612,6 @@ export default function CheckoutPage() {
                         type="button"
                         onClick={() => {
                           applyCoupon('__CLEAR__');
-                          useCartStore.setState({ couponCode: '', discount: 0 });
                           setCouponInput('');
                           setCouponError('');
                         }}
@@ -637,8 +636,19 @@ export default function CheckoutPage() {
                         onKeyDown={(e) => {
                           if (e.key === 'Enter') {
                             e.preventDefault();
+                            if (!couponInput.trim()) {
+                              setCouponError('Please enter a coupon code.');
+                              return;
+                            }
                             const ok = applyCoupon(couponInput);
-                            if (!ok) setCouponError('Invalid or expired coupon code.');
+                            if (ok) {
+                              setCouponError('');
+                              const appliedDiscount = useCartStore.getState().discount;
+                              toast.success(`Coupon "${couponInput}" applied! ${appliedDiscount}% off 🎉`);
+                            } else {
+                              const lastErr = (useCartStore.getState() as any)._lastCouponError;
+                              setCouponError(lastErr || 'Invalid or expired coupon code.');
+                            }
                           }
                         }}
                       />
@@ -655,7 +665,8 @@ export default function CheckoutPage() {
                             const appliedDiscount = useCartStore.getState().discount;
                             toast.success(`Coupon "${couponInput}" applied! ${appliedDiscount}% off 🎉`);
                           } else {
-                            setCouponError('Invalid or expired coupon code.');
+                            const lastErr = (useCartStore.getState() as any)._lastCouponError;
+                            setCouponError(lastErr || 'Invalid or expired coupon code.');
                           }
                         }}
                         className="px-4 py-2 bg-brand-green text-white rounded-xl text-sm font-semibold hover:bg-brand-green-dark transition-colors whitespace-nowrap"

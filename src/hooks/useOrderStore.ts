@@ -1,5 +1,6 @@
-// ============================================================
+﻿// ============================================================
 // Order Store with Zustand & LocalStorage Persistence
+// + Supabase two-way sync (fetch + insert + update)
 // ============================================================
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
@@ -8,6 +9,7 @@ import { supabase } from '@/services/supabase';
 
 interface OrderStore {
   orders: DbOrder[];
+  isSyncing: boolean;
   addOrder: (order: DbOrder) => Promise<void>;
   updateOrderStatus: (
     orderId: string,
@@ -17,7 +19,14 @@ interface OrderStore {
   deleteOrder: (orderId: string) => void;
   getOrderByNumber: (orderNumber: string) => DbOrder | undefined;
   resetOrders: () => void;
+  fetchOrdersFromSupabase: () => Promise<void>;
 }
+
+// Check if Supabase is actually configured (not placeholder)
+const isSupabaseConfigured = () => {
+  const url = import.meta.env.VITE_SUPABASE_URL as string;
+  return url && !url.includes('placeholder');
+};
 
 const initialOrders: DbOrder[] = [
   {
@@ -118,30 +127,76 @@ export const useOrderStore = create<OrderStore>()(
   persist(
     (set, get) => ({
       orders: initialOrders,
+      isSyncing: false,
 
+      // ─── Fetch all orders from Supabase (for Admin page) ──────────
+      fetchOrdersFromSupabase: async () => {
+        if (!isSupabaseConfigured()) return;
+        set({ isSyncing: true });
+        try {
+          const { data, error } = await supabase
+            .from('orders')
+            .select('*')
+            .order('created_at', { ascending: false });
+          if (error) throw error;
+          if (data && data.length > 0) {
+            // Supabase orders take priority; keep any local-only (non-demo) orders
+            const supabaseOrderNumbers = new Set((data as DbOrder[]).map((o) => o.order_number));
+            const localOnly = get().orders.filter(
+              (o) =>
+                !supabaseOrderNumbers.has(o.order_number) &&
+                !o.id.startsWith('order-10') // exclude demo seed orders
+            );
+            set({ orders: [...(data as DbOrder[]), ...localOnly] });
+          }
+        } catch (err) {
+          console.warn('Supabase orders fetch failed:', err);
+        } finally {
+          set({ isSyncing: false });
+        }
+      },
+
+      // ─── Add new order ─────────────────────────────────────────────
       addOrder: async (newOrder: DbOrder) => {
-        // Prepend to local state
+        // Immediately add to local state
         set((state) => ({
           orders: [newOrder, ...state.orders],
         }));
 
-        // Try syncing to Supabase if connected
-        try {
-          const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-          if (supabaseUrl && !supabaseUrl.includes('placeholder')) {
-            await supabase.from('orders').insert([newOrder]);
+        // Sync to Supabase if configured
+        if (isSupabaseConfigured()) {
+          try {
+            // Omit local `id` — DB will generate a real UUID
+            // eslint-disable-next-line @typescript-eslint/no-unused-vars
+            const { id: _localId, ...orderPayload } = newOrder;
+            const { data, error } = await supabase
+              .from('orders')
+              .insert([orderPayload])
+              .select()
+              .single();
+            if (error) throw error;
+            // Replace local order with the DB-returned record (has real UUID)
+            if (data) {
+              set((state) => ({
+                orders: state.orders.map((o) =>
+                  o.order_number === newOrder.order_number ? (data as DbOrder) : o
+                ),
+              }));
+            }
+          } catch (err) {
+            console.warn('Supabase order insert failed (order saved locally):', err);
           }
-        } catch (err) {
-          console.warn('Supabase order insert skipped:', err);
         }
       },
 
+      // ─── Update order status ───────────────────────────────────────
       updateOrderStatus: async (
         orderId: string,
         status: DbOrder['order_status'],
         notes?: string
       ) => {
         const now = new Date().toISOString();
+        // Update local state first
         set((state) => ({
           orders: state.orders.map((o) =>
             o.id === orderId || o.order_number === orderId
@@ -156,27 +211,52 @@ export const useOrderStore = create<OrderStore>()(
         }));
 
         // Sync to Supabase
-        try {
-          const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-          if (supabaseUrl && !supabaseUrl.includes('placeholder')) {
-            await supabase
-              .from('orders')
-              .update({ order_status: status, updated_at: now })
-              .or(`id.eq.${orderId},order_number.eq.${orderId}`);
+        if (isSupabaseConfigured()) {
+          try {
+            const order = get().orders.find(
+              (o) => o.id === orderId || o.order_number === orderId
+            );
+            if (order) {
+              const updatePayload: Record<string, unknown> = {
+                order_status: status,
+                updated_at: now,
+              };
+              if (notes !== undefined) updatePayload.notes = notes;
+
+              const { error } = await supabase
+                .from('orders')
+                .update(updatePayload)
+                .eq('order_number', order.order_number);
+              if (error) throw error;
+            }
+          } catch (err) {
+            console.warn('Supabase status update failed (updated locally):', err);
           }
-        } catch (err) {
-          console.warn('Supabase status update skipped:', err);
         }
       },
 
+      // ─── Delete order ──────────────────────────────────────────────
       deleteOrder: (orderId: string) => {
+        const order = get().orders.find(
+          (o) => o.id === orderId || o.order_number === orderId
+        );
         set((state) => ({
           orders: state.orders.filter(
             (o) => o.id !== orderId && o.order_number !== orderId
           ),
         }));
+        if (isSupabaseConfigured() && order) {
+          supabase
+            .from('orders')
+            .delete()
+            .eq('order_number', order.order_number)
+            .then(({ error }) => {
+              if (error) console.warn('Supabase order delete failed:', error);
+            });
+        }
       },
 
+      // ─── Get order by number ───────────────────────────────────────
       getOrderByNumber: (orderNumber: string) => {
         const clean = orderNumber.trim().toUpperCase();
         return get().orders.find(
@@ -184,6 +264,7 @@ export const useOrderStore = create<OrderStore>()(
         );
       },
 
+      // ─── Reset to demo data ────────────────────────────────────────
       resetOrders: () => {
         set({ orders: initialOrders });
       },

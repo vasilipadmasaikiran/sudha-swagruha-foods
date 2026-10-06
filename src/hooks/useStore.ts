@@ -88,22 +88,46 @@ export const useCartStore = create<CartStore>()(
 
       applyCoupon: (code) => {
         const cleanCode = code.trim().toUpperCase();
-        // Check dynamic coupons from admin catalog store first
-        const dynamicCoupon = useProductStore.getState().getValidCoupon(cleanCode);
-        if (dynamicCoupon) {
-          set({ couponCode: dynamicCoupon.code, discount: dynamicCoupon.discountPercent });
+
+        // Handle explicit clear sentinel
+        if (cleanCode === '__CLEAR__') {
+          set({ couponCode: '', discount: 0 });
           return true;
         }
 
-        const validCoupons: Record<string, number> = {
-          'AMMA10': 10,
-          'SWAGRUHA15': 15,
-          'WELCOME20': 20,
-          'TELUGU5': 5,
+        const currentSubtotal = get().getSubtotal();
+
+        // Check dynamic coupons from admin catalog store first
+        const dynamicCoupon = useProductStore.getState().getValidCoupon(cleanCode);
+        if (dynamicCoupon) {
+          // Validate minimum order requirement
+          if (dynamicCoupon.minOrder > 0 && currentSubtotal < dynamicCoupon.minOrder) {
+            // Return false with a signal that minimum not met
+            // We store the error reason so CheckoutPage can display it
+            (get() as any)._lastCouponError = `Minimum order of ₹${dynamicCoupon.minOrder} required for this coupon.`;
+            return false;
+          }
+          set({
+            couponCode: dynamicCoupon.code,
+            discount: dynamicCoupon.discountPercent,
+          });
+          return true;
+        }
+
+        // Fallback hardcoded coupons (with minOrder constraints)
+        const validCoupons: Record<string, { discount: number; minOrder: number }> = {
+          'AMMA10':     { discount: 10, minOrder: 0 },
+          'SWAGRUHA15': { discount: 15, minOrder: 499 },
+          'WELCOME20':  { discount: 20, minOrder: 799 },
+          'TELUGU5':    { discount: 5,  minOrder: 0 },
         };
-        const discount = validCoupons[cleanCode];
-        if (discount) {
-          set({ couponCode: cleanCode, discount });
+        const couponData = validCoupons[cleanCode];
+        if (couponData) {
+          if (couponData.minOrder > 0 && currentSubtotal < couponData.minOrder) {
+            (get() as any)._lastCouponError = `Minimum order of ₹${couponData.minOrder} required for this coupon.`;
+            return false;
+          }
+          set({ couponCode: cleanCode, discount: couponData.discount });
           return true;
         }
         return false;

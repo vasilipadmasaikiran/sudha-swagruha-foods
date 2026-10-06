@@ -72,6 +72,10 @@ CREATE POLICY "Products are viewable by everyone" ON public.products FOR SELECT 
 CREATE POLICY "Anyone can insert orders" ON public.orders FOR INSERT WITH CHECK (true);
 -- Allow select for anon users so they can track their order
 CREATE POLICY "Anyone can select orders" ON public.orders FOR SELECT USING (true);
+-- Allow update for anon users (for admin status updates via anon key)
+CREATE POLICY "Anyone can update orders" ON public.orders FOR UPDATE USING (true);
+-- Allow delete for anon users (for admin order deletion)
+CREATE POLICY "Anyone can delete orders" ON public.orders FOR DELETE USING (true);
 
 -- Reviews: Allow insert and select
 CREATE POLICY "Anyone can view reviews" ON public.reviews FOR SELECT USING (true);
