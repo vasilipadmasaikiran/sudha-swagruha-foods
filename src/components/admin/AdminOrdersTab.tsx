@@ -48,21 +48,41 @@ const ALL_STATUSES: DbOrder['order_status'][] = [
 ];
 
 export default function AdminOrdersTab() {
-  const { orders, updateOrderStatus, deleteOrder, resetOrders, fetchOrdersFromSupabase, isSyncing } = useOrderStore();
+  const {
+    orders,
+    updateOrderStatus,
+    deleteOrder,
+    resetOrders,
+    fetchOrdersFromSupabase,
+    subscribeToOrders,
+    isSyncing,
+  } = useOrderStore();
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [selectedOrder, setSelectedOrder] = useState<DbOrder | null>(null);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
 
-  // Auto-fetch from Supabase on mount so admin sees all customer orders
+  // Auto-fetch from Supabase on mount and listen to realtime updates
   const handleRefresh = useCallback(async () => {
-    await fetchOrdersFromSupabase();
-    toast.success('Orders refreshed from database!');
+    const res = await fetchOrdersFromSupabase();
+    if (res.success) {
+      toast.success(
+        res.count > 0
+          ? `Synced ${res.count} order${res.count === 1 ? '' : 's'} from cloud database!`
+          : 'Database connected: 0 orders found'
+      );
+    } else {
+      toast.error(res.error || 'Failed to sync from database');
+    }
   }, [fetchOrdersFromSupabase]);
 
   useEffect(() => {
     fetchOrdersFromSupabase();
-  }, [fetchOrdersFromSupabase]);
+    const unsubscribe = subscribeToOrders();
+    return () => {
+      unsubscribe();
+    };
+  }, [fetchOrdersFromSupabase, subscribeToOrders]);
 
   const filteredOrders = useMemo(() => {
     return orders.filter((o) => {

@@ -31,6 +31,7 @@ import {
   LogOut,
   Phone,
   CreditCard,
+  Database,
 } from 'lucide-react';
 import { useProductStore, type DiscountAnnouncement, type CouponItem } from '@/hooks/useProductStore';
 import { useAuthStore } from '@/hooks/useStore';
@@ -41,10 +42,11 @@ import AdminLoginForm from '@/components/admin/AdminLoginForm';
 import AdminOrdersTab from '@/components/admin/AdminOrdersTab';
 import AdminSettingsTab from '@/components/admin/AdminSettingsTab';
 import AdminPaymentsTab from '@/components/admin/AdminPaymentsTab';
+import AdminDatabaseTab from '@/components/admin/AdminDatabaseTab';
 import { categories, type Product, type ProductVariant } from '@/data/products';
 import toast from 'react-hot-toast';
 
-type ActiveTab = 'orders' | 'products' | 'settings' | 'payments' | 'announcement' | 'coupons' | 'insights';
+type ActiveTab = 'orders' | 'products' | 'settings' | 'payments' | 'database' | 'announcement' | 'coupons' | 'insights';
 
 // Image preset options for quick selection
 const IMAGE_PRESETS = [
@@ -335,6 +337,20 @@ export default function AdminConsolePage() {
             </span>
           </button>
 
+          {/* Cloud Database & Sync Tab */}
+          <button
+            onClick={() => setActiveTab('database')}
+            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all flex-shrink-0 cursor-pointer ${
+              activeTab === 'database'
+                ? 'bg-cyan-600 text-white shadow-lg shadow-cyan-600/30'
+                : 'text-slate-400 hover:text-white hover:bg-slate-800'
+            }`}
+          >
+            <Database className="w-4 h-4" />
+            <span>Cloud Database</span>
+            <span className="ml-1 w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+          </button>
+
           {/* Announcement Tab */}
           <button
             onClick={() => setActiveTab('announcement')}
@@ -398,6 +414,11 @@ export default function AdminConsolePage() {
         {/* TAB 2: PAYMENT GATEWAY CONFIGURATION                         */}
         {/* ============================================================ */}
         {activeTab === 'payments' && <AdminPaymentsTab />}
+
+        {/* ============================================================ */}
+        {/* TAB: SUPABASE CLOUD DATABASE CONFIGURATION                   */}
+        {/* ============================================================ */}
+        {activeTab === 'database' && <AdminDatabaseTab />}
 
         {/* ============================================================ */}
         {/* TAB 3: PRODUCTS & PRICING                                    */}

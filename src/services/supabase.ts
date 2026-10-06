@@ -3,19 +3,44 @@
 // ============================================================
 import { createClient } from '@supabase/supabase-js';
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string;
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
+export const DEFAULT_SUPABASE_URL = 'https://yhakphwljyjpfnsmkjnz.supabase.co';
+export const DEFAULT_SUPABASE_ANON_KEY =
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InloYWtwaHdsanlqcGZuc21ram56Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTExNzMyNjgsImV4cCI6MjEwNjc0OTI2OH0.155ZpYG_wF8am28wdL41Dj0tiAxeqaEn0P2XmEJBqQ0';
 
-if (!supabaseUrl || !supabaseAnonKey) {
-  console.warn(
-    '⚠️ Supabase environment variables not set. Using demo mode with local data.\n' +
-    'Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in your .env.local file.'
+const getEnvOrStored = (key: string, storedKey: string, fallback: string): string => {
+  if (typeof window !== 'undefined') {
+    const stored = localStorage.getItem(storedKey);
+    if (stored && stored.trim()) return stored.trim();
+  }
+  const envVal = import.meta.env[key] as string | undefined;
+  if (envVal && !envVal.includes('placeholder') && !envVal.includes('your-project-id')) {
+    return envVal.trim();
+  }
+  return fallback;
+};
+
+export const getSupabaseConfig = () => {
+  const url = getEnvOrStored('VITE_SUPABASE_URL', 'ssf_supabase_url', DEFAULT_SUPABASE_URL);
+  const anonKey = getEnvOrStored('VITE_SUPABASE_ANON_KEY', 'ssf_supabase_anon_key', DEFAULT_SUPABASE_ANON_KEY);
+  const isConfigured = Boolean(
+    url &&
+    !url.includes('placeholder') &&
+    !url.includes('your-project-id') &&
+    anonKey &&
+    !anonKey.includes('placeholder')
   );
-}
+  return { url, anonKey, isConfigured };
+};
+
+export const isSupabaseConfigured = (): boolean => {
+  return getSupabaseConfig().isConfigured;
+};
+
+const currentConfig = getSupabaseConfig();
 
 export const supabase = createClient(
-  supabaseUrl || 'https://placeholder.supabase.co',
-  supabaseAnonKey || 'placeholder-anon-key',
+  currentConfig.url,
+  currentConfig.anonKey,
   {
     auth: {
       persistSession: true,
@@ -23,6 +48,31 @@ export const supabase = createClient(
     },
   }
 );
+
+export const testSupabaseConnection = async (): Promise<{
+  success: boolean;
+  message: string;
+  orderCount?: number;
+}> => {
+  try {
+    const { count, error } = await supabase
+      .from('orders')
+      .select('*', { count: 'exact', head: true });
+    if (error) {
+      return { success: false, message: error.message };
+    }
+    return {
+      success: true,
+      message: 'Connected to Supabase cloud database',
+      orderCount: count ?? 0,
+    };
+  } catch (err) {
+    return {
+      success: false,
+      message: err instanceof Error ? err.message : 'Database connection error',
+    };
+  }
+};
 
 // ─── Database Types ───────────────────────────────────────────
 export interface DbProduct {
