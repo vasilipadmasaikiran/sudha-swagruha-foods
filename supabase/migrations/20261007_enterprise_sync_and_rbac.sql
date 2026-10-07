@@ -37,26 +37,41 @@ CREATE INDEX IF NOT EXISTS idx_orders_tracking_id ON public.orders(tracking_id);
 -- 2. Create Admin Users Table with RBAC
 CREATE TABLE IF NOT EXISTS public.admin_users (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  username TEXT DEFAULT NULL,
   email TEXT UNIQUE NOT NULL,
   full_name TEXT NOT NULL,
   role TEXT NOT NULL CHECK (role IN ('ROOT_ADMIN', 'STORE_KEEPER', 'ORDER_PROCESSOR')),
   password_hash TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'inactive', 'suspended')),
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'inactive', 'suspended', 'disabled')),
   last_login TIMESTAMPTZ DEFAULT NULL,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- Ensure backwards-compatibility schema alterations for existing admin_users table
+ALTER TABLE IF EXISTS public.admin_users
+  ADD COLUMN IF NOT EXISTS username TEXT DEFAULT NULL;
+
+DO $$
+BEGIN
+  ALTER TABLE public.admin_users DROP CONSTRAINT IF EXISTS admin_users_status_check;
+  ALTER TABLE public.admin_users ADD CONSTRAINT admin_users_status_check 
+    CHECK (status IN ('active', 'inactive', 'suspended', 'disabled'));
+EXCEPTION WHEN OTHERS THEN
+  NULL;
+END $$;
+
 -- Seed default system administrators (SHA-256 hashed passwords matching demo store)
-INSERT INTO public.admin_users (email, full_name, role, password_hash, status)
+INSERT INTO public.admin_users (email, full_name, username, role, password_hash, status)
 VALUES
-  ('admin@sudhaswagruha.com', 'Sudha Root Admin', 'ROOT_ADMIN', '240be518fabd2724ddb6f04eeb1da5967448d7e831c08c8fa822809f74c720a9', 'active'),
-  ('store@sudhaswagruha.com', 'Suresh Stock Manager', 'STORE_KEEPER', 'a9354eefca55848bb319864273523f2f84b655f4ef07289569fa123b320d5885', 'active'),
-  ('orders@sudhaswagruha.com', 'Pooja Order Coordinator', 'ORDER_PROCESSOR', 'ad62f4893707cb6b98661fc86a5127ee6db1ff292ff24ebfec05877c4aa4858b', 'active')
+  ('admin@sudhaswagruha.com', 'Sudha Root Admin', 'superadmin', 'ROOT_ADMIN', '240be518fabd2724ddb6f04eeb1da5967448d7e831c08c8fa822809f74c720a9', 'active'),
+  ('store@sudhaswagruha.com', 'Suresh Stock Manager', 'storekeeper', 'STORE_KEEPER', 'a9354eefca55848bb319864273523f2f84b655f4ef07289569fa123b320d5885', 'active'),
+  ('orders@sudhaswagruha.com', 'Pooja Order Coordinator', 'orderprocessor', 'ORDER_PROCESSOR', 'ad62f4893707cb6b98661fc86a5127ee6db1ff292ff24ebfec05877c4aa4858b', 'active')
 ON CONFLICT (email) DO UPDATE
 SET
   role = EXCLUDED.role,
   updated_at = NOW();
+
 
 -- 3. Create Enterprise Audit Logs Table
 CREATE TABLE IF NOT EXISTS public.audit_logs (
@@ -200,13 +215,16 @@ CREATE POLICY "Anyone can update admin_users" ON public.admin_users FOR UPDATE U
 DROP POLICY IF EXISTS "Anyone can insert admin_users" ON public.admin_users;
 CREATE POLICY "Anyone can insert admin_users" ON public.admin_users FOR INSERT WITH CHECK (true);
 
+DROP POLICY IF EXISTS "Anyone can delete admin_users" ON public.admin_users;
+CREATE POLICY "Anyone can delete admin_users" ON public.admin_users FOR DELETE USING (true);
+
 DROP POLICY IF EXISTS "Anyone can select audit_logs" ON public.audit_logs;
 CREATE POLICY "Anyone can select audit_logs" ON public.audit_logs FOR SELECT USING (true);
 
 DROP POLICY IF EXISTS "Anyone can insert audit_logs" ON public.audit_logs;
 CREATE POLICY "Anyone can insert audit_logs" ON public.audit_logs FOR INSERT WITH CHECK (true);
 
--- 6. Enable Supabase Realtime Publication for Live Order Tracking & Site Config
+-- 6. Enable Supabase Realtime Publication for Live Order Tracking, Admin Users & Site Config
 DO $$
 BEGIN
   BEGIN
@@ -218,4 +236,10 @@ BEGIN
     ALTER PUBLICATION supabase_realtime ADD TABLE public.store_settings;
   EXCEPTION WHEN OTHERS THEN NULL;
   END;
+
+  BEGIN
+    ALTER PUBLICATION supabase_realtime ADD TABLE public.admin_users;
+  EXCEPTION WHEN OTHERS THEN NULL;
+  END;
 END $$;
+

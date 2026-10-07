@@ -144,9 +144,30 @@ const DEFAULT_ADMIN_USERS: AdminUser[] = [
   },
 ];
 
+// Helper to check for standard UUID format
+const isUuid = (val: string) =>
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(val);
+
+// Helper to convert database admin_users record to frontend AdminUser
+const mapDbUser = (dbRow: any): AdminUser => ({
+  id: dbRow.id,
+  username: dbRow.username || dbRow.email.split('@')[0],
+  email: dbRow.email,
+  full_name: dbRow.full_name,
+  role: dbRow.role as AdminRole,
+  status:
+    dbRow.status === 'inactive' || dbRow.status === 'disabled' || dbRow.status === 'suspended'
+      ? 'disabled'
+      : 'active',
+  password_hash: dbRow.password_hash,
+  created_at: dbRow.created_at || new Date().toISOString(),
+  last_login: dbRow.last_login || undefined,
+});
+
 interface AdminAuthStore {
   currentUser: AdminUser | null;
   users: AdminUser[];
+  isLoadingUsers: boolean;
   login: (email: string, plainPassword: string) => Promise<{ success: boolean; error?: string }>;
   logout: () => void;
   // RBAC Permission checks
@@ -164,6 +185,8 @@ interface AdminAuthStore {
   toggleUserStatus: (userId: string) => Promise<void>;
   resetPassword: (userId: string, newPlainPassword: string) => Promise<void>;
   deleteUser: (userId: string) => Promise<void>;
+  fetchUsers: () => Promise<void>;
+  subscribeToUsersRealtime: () => () => void;
   syncWithCloud: () => Promise<void>;
 }
 
@@ -172,13 +195,127 @@ export const useAdminAuthStore = create<AdminAuthStore>()(
     (set, get) => ({
       currentUser: DEFAULT_ADMIN_USERS[0], // pre-logged in as Root Admin for seamless review, or logged in on demand
       users: DEFAULT_ADMIN_USERS,
+      isLoadingUsers: false,
+
+      // ─── Fetch Users from Supabase Database ────────────────────────
+      fetchUsers: async () => {
+        if (!isSupabaseConfigured()) return;
+        set({ isLoadingUsers: true });
+        try {
+          const { data, error } = await supabase
+            .from('admin_users')
+            .select('*')
+            .order('created_at', { ascending: true });
+
+          if (!error && data && data.length > 0) {
+            const cloudUsers = data.map(mapDbUser);
+            // Merge cloud users, keeping default users as backup if not present in DB
+            const merged = [...cloudUsers];
+            for (const def of DEFAULT_ADMIN_USERS) {
+              if (!merged.some((u) => u.email.toLowerCase() === def.email.toLowerCase())) {
+                merged.push(def);
+              }
+            }
+
+            set((state) => {
+              let updatedCurrentUser = state.currentUser;
+              if (state.currentUser) {
+                const matched = merged.find(
+                  (cu) => cu.email.toLowerCase() === state.currentUser?.email.toLowerCase()
+                );
+                if (matched) {
+                  updatedCurrentUser = { ...state.currentUser, ...matched };
+                }
+              }
+              return {
+                users: merged,
+                currentUser: updatedCurrentUser,
+              };
+            });
+          }
+        } catch (err) {
+          console.warn('Error fetching admin users from Supabase:', err);
+        } finally {
+          set({ isLoadingUsers: false });
+        }
+      },
+
+      // ─── Live Realtime Sync for Admin Users ─────────────────────────
+      subscribeToUsersRealtime: () => {
+        if (!isSupabaseConfigured()) return () => {};
+
+        try {
+          const channel = supabase
+            .channel('admin-users-live-sync')
+            .on(
+              'postgres_changes',
+              {
+                event: '*',
+                schema: 'public',
+                table: 'admin_users',
+              },
+              (payload) => {
+                if (payload.eventType === 'INSERT' && payload.new) {
+                  const newUser = mapDbUser(payload.new);
+                  set((state) => ({
+                    users: [
+                      ...state.users.filter((u) => u.id !== newUser.id && u.email !== newUser.email),
+                      newUser,
+                    ],
+                  }));
+                } else if (payload.eventType === 'UPDATE' && payload.new) {
+                  const updatedUser = mapDbUser(payload.new);
+                  set((state) => ({
+                    users: state.users.map((u) => (u.id === updatedUser.id ? { ...u, ...updatedUser } : u)),
+                    currentUser:
+                      state.currentUser?.id === updatedUser.id || state.currentUser?.email === updatedUser.email
+                        ? { ...state.currentUser, ...updatedUser }
+                        : state.currentUser,
+                  }));
+                } else if (payload.eventType === 'DELETE' && payload.old) {
+                  const deletedId = (payload.old as any).id;
+                  set((state) => ({
+                    users: state.users.filter((u) => u.id !== deletedId),
+                  }));
+                }
+              }
+            )
+            .subscribe();
+
+          return () => {
+            supabase.removeChannel(channel);
+          };
+        } catch (err) {
+          console.warn('Realtime admin users subscription notice:', err);
+          return () => {};
+        }
+      },
 
       login: async (email, plainPassword) => {
         const cleanEmail = email.trim().toLowerCase();
         const inputHash = await hashPassword(plainPassword);
 
         // Find user in registry
-        const user = get().users.find((u) => u.email.toLowerCase() === cleanEmail);
+        let user = get().users.find((u) => u.email.toLowerCase() === cleanEmail);
+
+        // If not in local cache, attempt direct lookup from Supabase DB
+        if (!user && isSupabaseConfigured()) {
+          try {
+            const { data: dbUser } = await supabase
+              .from('admin_users')
+              .select('*')
+              .eq('email', cleanEmail)
+              .maybeSingle();
+            if (dbUser) {
+              user = mapDbUser(dbUser);
+              set((state) => ({
+                users: [...state.users.filter((u) => u.email !== user!.email), user!],
+              }));
+            }
+          } catch (err) {
+            console.warn('DB admin user lookup notice:', err);
+          }
+        }
 
         if (!user) {
           // Check fallback for alias admin@sudhafoods.com
@@ -205,6 +342,18 @@ export const useAdminAuthStore = create<AdminAuthStore>()(
           currentUser: updatedUser,
           users: state.users.map((u) => (u.id === user.id ? updatedUser : u)),
         }));
+
+        // Update last_login in Supabase DB asynchronously
+        if (isSupabaseConfigured() && user.id) {
+          const updateQuery = supabase
+            .from('admin_users')
+            .update({ last_login: now, updated_at: now });
+          if (isUuid(user.id)) {
+            updateQuery.eq('id', user.id).then();
+          } else {
+            updateQuery.eq('email', user.email).then();
+          }
+        }
 
         await logAdminAction(
           updatedUser.email,
@@ -254,7 +403,7 @@ export const useAdminAuthStore = create<AdminAuthStore>()(
         const cleanEmail = email.trim().toLowerCase();
         const cleanUsername = username.trim().toLowerCase();
 
-        // Check uniqueness
+        // Check local uniqueness
         if (get().users.some((u) => u.email.toLowerCase() === cleanEmail)) {
           return { success: false, error: 'User with this email already exists' };
         }
@@ -263,18 +412,81 @@ export const useAdminAuthStore = create<AdminAuthStore>()(
         }
 
         const password_hash = await hashPassword(password);
+        let newId = `user-${Date.now()}`;
+        let createdAt = new Date().toISOString();
+
+        // ── Direct Database Insert into public.admin_users ─────────────
+        if (isSupabaseConfigured()) {
+          try {
+            // Check if user already exists in DB
+            const { data: existingUser } = await supabase
+              .from('admin_users')
+              .select('id, email')
+              .eq('email', cleanEmail)
+              .maybeSingle();
+
+            if (existingUser) {
+              return { success: false, error: 'A user with this email already exists in the database' };
+            }
+
+            const dbPayload: any = {
+              email: cleanEmail,
+              full_name: full_name.trim(),
+              role,
+              password_hash,
+              status: 'active',
+              username: cleanUsername,
+            };
+
+            let insertRes = await supabase
+              .from('admin_users')
+              .insert(dbPayload)
+              .select()
+              .single();
+
+            // Fallback retry if username column does not yet exist in remote schema
+            if (
+              insertRes.error &&
+              (insertRes.error.code === 'PGRST204' || insertRes.error.message?.includes('username'))
+            ) {
+              const { username: _, ...fallbackPayload } = dbPayload;
+              insertRes = await supabase
+                .from('admin_users')
+                .insert(fallbackPayload)
+                .select()
+                .single();
+            }
+
+            if (insertRes.error) {
+              console.error('Failed to insert user into admin_users table:', insertRes.error);
+              return { success: false, error: `Database error: ${insertRes.error.message}` };
+            }
+
+            if (insertRes.data) {
+              newId = insertRes.data.id;
+              createdAt = insertRes.data.created_at || createdAt;
+            }
+          } catch (err: any) {
+            console.error('Exception writing to admin_users table:', err);
+            return { success: false, error: err?.message || 'Failed to persist user in database' };
+          }
+        }
+
         const newUser: AdminUser = {
-          id: `user-${Date.now()}`,
+          id: newId,
           username: cleanUsername,
           email: cleanEmail,
           full_name: full_name.trim(),
           role,
           status: 'active',
           password_hash,
-          created_at: new Date().toISOString(),
+          created_at: createdAt,
         };
 
-        const nextUsers = [...get().users, newUser];
+        const nextUsers = [
+          ...get().users.filter((u) => u.id !== newId && u.email !== cleanEmail),
+          newUser,
+        ];
         set({ users: nextUsers });
 
         await logAdminAction(
@@ -294,10 +506,32 @@ export const useAdminAuthStore = create<AdminAuthStore>()(
         const activeUser = get().currentUser;
         if (activeUser?.role !== 'ROOT_ADMIN') return;
 
+        const target = get().users.find((u) => u.id === userId);
+
         set((state) => ({
           users: state.users.map((u) => (u.id === userId ? { ...u, role: newRole } : u)),
-          currentUser: state.currentUser?.id === userId ? { ...state.currentUser, role: newRole } : state.currentUser,
+          currentUser:
+            state.currentUser?.id === userId ? { ...state.currentUser, role: newRole } : state.currentUser,
         }));
+
+        if (isSupabaseConfigured()) {
+          try {
+            const now = new Date().toISOString();
+            const query = supabase
+              .from('admin_users')
+              .update({ role: newRole, updated_at: now });
+
+            if (isUuid(userId)) {
+              await query.eq('id', userId);
+            } else if (target) {
+              await query.eq('email', target.email);
+            } else {
+              await query.eq('id', userId);
+            }
+          } catch (err) {
+            console.warn('DB update user role error:', err);
+          }
+        }
 
         await logAdminAction(activeUser.email, activeUser.role, 'UPDATE_ROLE', 'ADMIN_USER', userId, {
           newRole,
@@ -317,6 +551,25 @@ export const useAdminAuthStore = create<AdminAuthStore>()(
           users: state.users.map((u) => (u.id === userId ? { ...u, status: nextStatus } : u)),
         }));
 
+        if (isSupabaseConfigured()) {
+          try {
+            const now = new Date().toISOString();
+            // Map 'disabled' to 'inactive' to respect DB check constraint
+            const dbStatus = nextStatus === 'disabled' ? 'inactive' : 'active';
+            const query = supabase
+              .from('admin_users')
+              .update({ status: dbStatus, updated_at: now });
+
+            if (isUuid(userId)) {
+              await query.eq('id', userId);
+            } else {
+              await query.eq('email', target.email);
+            }
+          } catch (err) {
+            console.warn('DB toggle user status error:', err);
+          }
+        }
+
         await logAdminAction(activeUser.email, activeUser.role, 'TOGGLE_STATUS', 'ADMIN_USER', userId, {
           status: nextStatus,
         });
@@ -327,10 +580,31 @@ export const useAdminAuthStore = create<AdminAuthStore>()(
         const activeUser = get().currentUser;
         if (activeUser?.role !== 'ROOT_ADMIN') return;
 
+        const target = get().users.find((u) => u.id === userId);
         const newHash = await hashPassword(newPlainPassword);
+
         set((state) => ({
           users: state.users.map((u) => (u.id === userId ? { ...u, password_hash: newHash } : u)),
         }));
+
+        if (isSupabaseConfigured()) {
+          try {
+            const now = new Date().toISOString();
+            const query = supabase
+              .from('admin_users')
+              .update({ password_hash: newHash, updated_at: now });
+
+            if (isUuid(userId)) {
+              await query.eq('id', userId);
+            } else if (target) {
+              await query.eq('email', target.email);
+            } else {
+              await query.eq('id', userId);
+            }
+          } catch (err) {
+            console.warn('DB reset password error:', err);
+          }
+        }
 
         await logAdminAction(activeUser.email, activeUser.role, 'RESET_PASSWORD', 'ADMIN_USER', userId);
         get().syncWithCloud();
@@ -346,6 +620,19 @@ export const useAdminAuthStore = create<AdminAuthStore>()(
         set((state) => ({
           users: state.users.filter((u) => u.id !== userId),
         }));
+
+        if (isSupabaseConfigured()) {
+          try {
+            const query = supabase.from('admin_users').delete();
+            if (isUuid(userId)) {
+              await query.eq('id', userId);
+            } else {
+              await query.eq('email', target.email);
+            }
+          } catch (err) {
+            console.warn('DB delete user error:', err);
+          }
+        }
 
         await logAdminAction(activeUser.email, activeUser.role, 'DELETE_USER', 'ADMIN_USER', userId, {
           email: target.email,

@@ -34,6 +34,7 @@ function ScrollToTop() {
 import { useProductStore } from '@/hooks/useProductStore';
 import { useSettingsStore } from '@/hooks/useSettingsStore';
 import { useAboutStore } from '@/hooks/useAboutStore';
+import { useAdminAuthStore } from '@/hooks/useAdminAuthStore';
 
 function AppLayout({ children }: { children: React.ReactNode }) {
   const { pathname } = useLocation();
@@ -42,6 +43,7 @@ function AppLayout({ children }: { children: React.ReactNode }) {
   const { fetchProducts, fetchCatalogAndSettings, subscribeToCatalogAndSettings } = useProductStore();
   const { fetchSettings, subscribeToSettings } = useSettingsStore();
   const { fetchAboutContent, subscribeToAboutRealtime } = useAboutStore();
+  const { fetchUsers, subscribeToUsersRealtime } = useAdminAuthStore();
   
   useEffect(() => {
     // Initial fetch from cloud database
@@ -49,18 +51,32 @@ function AppLayout({ children }: { children: React.ReactNode }) {
     fetchCatalogAndSettings();
     fetchSettings();
     fetchAboutContent();
+    fetchUsers();
 
     // Subscribe to live changes so customer storefront updates in real-time
     const unsubCatalog = subscribeToCatalogAndSettings();
     const unsubSettings = subscribeToSettings();
     const unsubAbout = subscribeToAboutRealtime();
+    const unsubUsers = subscribeToUsersRealtime();
 
     return () => {
       unsubCatalog();
       unsubSettings();
       unsubAbout();
+      unsubUsers();
     };
-  }, [fetchProducts, fetchCatalogAndSettings, subscribeToCatalogAndSettings, fetchSettings, subscribeToSettings, fetchAboutContent, subscribeToAboutRealtime]);
+  }, [
+    fetchProducts,
+    fetchCatalogAndSettings,
+    subscribeToCatalogAndSettings,
+    fetchSettings,
+    subscribeToSettings,
+    fetchAboutContent,
+    subscribeToAboutRealtime,
+    fetchUsers,
+    subscribeToUsersRealtime,
+  ]);
+
 
   if (isAdmin) {
     return <>{children}</>;

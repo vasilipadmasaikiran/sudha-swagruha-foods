@@ -3,7 +3,7 @@
 // Root Admin can create, edit, enable/disable users, reset passwords,
 // assign roles, inspect RBAC permissions matrix, and view audit trail.
 // ============================================================
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Users,
@@ -43,7 +43,13 @@ export default function AdminUsersTab() {
     toggleUserStatus,
     resetPassword,
     deleteUser,
+    fetchUsers,
   } = useAdminAuthStore();
+
+  useEffect(() => {
+    fetchUsers();
+  }, [fetchUsers]);
+
 
   const { logs } = useAuditStore();
 
