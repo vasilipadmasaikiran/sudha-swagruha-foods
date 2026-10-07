@@ -30,6 +30,7 @@ import {
   MinusCircle,
   DollarSign,
   ShieldCheck,
+  ChevronUp,
 } from 'lucide-react';
 import { useLanguageStore } from '@/hooks/useStore';
 import { useOrderStore } from '@/hooks/useOrderStore';
@@ -37,6 +38,7 @@ import { useSettingsStore } from '@/hooks/useSettingsStore';
 import { translations } from '@/i18n/translations';
 import { orderService, supabase, isSupabaseConfigured, normalizeOrderTracking } from '@/services/supabase';
 import type { DbOrder } from '@/services/supabase';
+import { calculateOrderRefundableMetrics } from '@/services/refundService';
 import toast from 'react-hot-toast';
 
 interface TrackForm {
@@ -66,7 +68,7 @@ const STATUS_INDEX: Record<string, number> = {
 export default function TrackOrderPage() {
   const [searchParams] = useSearchParams();
   const { language } = useLanguageStore();
-  const { orders } = useOrderStore();
+  const { orders, requestOrderCancellation } = useOrderStore();
   const { settings } = useSettingsStore();
   const t = translations[language];
 
@@ -77,8 +79,56 @@ export default function TrackOrderPage() {
   const [lastRefreshedAt, setLastRefreshedAt] = useState<Date>(new Date());
   const [isLiveConnected, setIsLiveConnected] = useState<boolean>(true);
 
+  // Cancellation Request State (Requirements 3, 4, 5)
+  const [showCancelModal, setShowCancelModal] = useState(false);
+  const [cancelReason, setCancelReason] = useState('Changed my mind');
+  const [cancelCustomReason, setCancelCustomReason] = useState('');
+  const [customerComment, setCustomerComment] = useState('');
+  const [isSubmittingCancellation, setIsSubmittingCancellation] = useState(false);
+  const [showRefundCalculation, setShowRefundCalculation] = useState(false);
+
   const { register, handleSubmit, setValue } = useForm<TrackForm>();
   const activeOrderNumberRef = useRef<string>('');
+
+  // Handle Customer Cancellation Request Submission (Requirements 3, 4, 5)
+  const handleSubmitCancellationRequest = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!activeOrder) return;
+
+    const finalReason =
+      cancelReason === 'Other' ? cancelCustomReason.trim() : cancelReason.trim();
+
+    if (!finalReason) {
+      toast.error('Please select or specify a cancellation reason');
+      return;
+    }
+
+    setIsSubmittingCancellation(true);
+    try {
+      const res = await requestOrderCancellation(
+        activeOrder.order_number,
+        finalReason,
+        customerComment.trim()
+      );
+
+      if (res.success && res.order) {
+        setActiveOrder(res.order);
+        setShowCancelModal(false);
+        setCustomerComment('');
+        setCancelCustomReason('');
+        toast.success(
+          'Your cancellation request has been submitted and is awaiting review by our order management team.',
+          { duration: 6000 }
+        );
+      } else {
+        toast.error(res.error || 'Failed to submit cancellation request');
+      }
+    } catch {
+      toast.error('Failed to submit cancellation request');
+    } finally {
+      setIsSubmittingCancellation(false);
+    }
+  };
 
   // Fetch live order directly from authoritative Supabase cloud database
   const fetchAuthoritativeOrder = useCallback(async (orderNumber: string, mobile?: string, silent = false) => {
@@ -388,21 +438,145 @@ export default function TrackOrderPage() {
                   </div>
                 </div>
 
-                {/* ─── ORDER CANCELLATION BANNER ─── */}
+                {/* ─── CUSTOMER CANCELLATION ACTIONS & STATUS (Requirements 3, 4, 5, 34, 35) ─── */}
+                {activeOrder.order_status !== 'cancelled' && (
+                  <div className="my-4">
+                    {/* State 1: Cancellation Request is Awaiting Approval */}
+                    {activeOrder.cancellation_request?.status === 'requested' ? (
+                      <motion.div
+                        initial={{ opacity: 0, y: 10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        className="p-4 bg-amber-50 border-2 border-amber-300 rounded-2xl space-y-2 text-amber-950"
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div className="flex items-center gap-2">
+                            <div className="w-8 h-8 rounded-xl bg-amber-500 text-white flex items-center justify-center shadow-sm">
+                              <AlertTriangle className="w-4 h-4" />
+                            </div>
+                            <div>
+                              <h4 className="font-extrabold text-sm uppercase tracking-wider text-amber-900">
+                                Cancellation Request — Awaiting Approval
+                              </h4>
+                              <p className="text-xs text-amber-700">
+                                Requested on{' '}
+                                {activeOrder.cancellation_request.requested_at
+                                  ? new Date(activeOrder.cancellation_request.requested_at).toLocaleString()
+                                  : 'Recently'}
+                              </p>
+                            </div>
+                          </div>
+                          <span className="px-3 py-1 rounded-full bg-amber-200 text-amber-900 border border-amber-400 text-xs font-bold animate-pulse">
+                            Under Review
+                          </span>
+                        </div>
+                        <div className="text-xs bg-white/80 p-3 rounded-xl border border-amber-200 text-amber-900 space-y-1">
+                          <p>
+                            <strong>Reason:</strong> {activeOrder.cancellation_request.reason}
+                          </p>
+                          {activeOrder.cancellation_request.customer_comment && (
+                            <p>
+                              <strong>Your Comments:</strong> &quot;{activeOrder.cancellation_request.customer_comment}&quot;
+                            </p>
+                          )}
+                          {activeOrder.cancellation_request.estimated_refund_amount !== undefined &&
+                            activeOrder.cancellation_request.estimated_refund_amount > 0 && (
+                              <p className="font-semibold text-emerald-800">
+                                Estimated Refund: ₹{activeOrder.cancellation_request.estimated_refund_amount}
+                              </p>
+                            )}
+                        </div>
+                        <p className="text-[11px] text-amber-800 leading-relaxed">
+                          Your cancellation request has been submitted and is awaiting review by our order management team. The order will not be cancelled until the request is approved.
+                        </p>
+                      </motion.div>
+                    ) : activeOrder.cancellation_request?.status === 'rejected' ? (
+                      /* State 2: Cancellation Request was Rejected */
+                      <motion.div
+                        initial={{ opacity: 0, y: 10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        className="p-4 bg-sky-50 border-2 border-sky-300 rounded-2xl space-y-2 text-sky-950"
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div className="flex items-center gap-2">
+                            <div className="w-8 h-8 rounded-xl bg-sky-600 text-white flex items-center justify-center">
+                              <AlertCircle className="w-4 h-4" />
+                            </div>
+                            <div>
+                              <h4 className="font-extrabold text-sm uppercase tracking-wider text-sky-900">
+                                Cancellation Request Rejected
+                              </h4>
+                              <p className="text-xs text-sky-700">
+                                Reviewed on{' '}
+                                {activeOrder.cancellation_request.reviewed_at
+                                  ? new Date(activeOrder.cancellation_request.reviewed_at).toLocaleString()
+                                  : 'Recently'}
+                              </p>
+                            </div>
+                          </div>
+                          <span className="px-3 py-1 rounded-full bg-sky-100 text-sky-900 border border-sky-300 text-xs font-bold">
+                            Order Remains Active
+                          </span>
+                        </div>
+                        <div className="text-xs bg-white/80 p-3 rounded-xl border border-sky-200 text-sky-900 space-y-1">
+                          <p>
+                            <strong>Reason:</strong>{' '}
+                            {activeOrder.cancellation_request.rejection_reason ||
+                              'Order has already entered dispatch processing'}
+                          </p>
+                          {activeOrder.cancellation_request.admin_comment && (
+                            <p>
+                              <strong>Store Team Note:</strong> &quot;{activeOrder.cancellation_request.admin_comment}&quot;
+                            </p>
+                          )}
+                        </div>
+                        <p className="text-[11px] text-sky-800">
+                          Your order remains active and is proceeding through our kitchen and courier dispatch.
+                        </p>
+                      </motion.div>
+                    ) : ['placed', 'confirmed', 'preparing'].includes(activeOrder.order_status) ? (
+                      /* State 3: Order is eligible for customer cancellation request */
+                      <div className="flex justify-end pt-2">
+                        <button
+                          type="button"
+                          onClick={() => setShowCancelModal(true)}
+                          className="px-4 py-2 bg-red-50 hover:bg-red-100 text-red-600 hover:text-red-700 border border-red-200 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shadow-sm"
+                        >
+                          <Ban className="w-3.5 h-3.5" />
+                          <span>Cancel Order</span>
+                        </button>
+                      </div>
+                    ) : activeOrder.order_status === 'shipped' ? (
+                      <p className="text-[11px] text-gray-400 italic text-right pt-1">
+                        Cancellation unavailable: Order has already entered the courier dispatch process.
+                      </p>
+                    ) : activeOrder.order_status === 'delivered' ? (
+                      <p className="text-[11px] text-gray-400 italic text-right pt-1">
+                        Cancellation unavailable: Order has been delivered.
+                      </p>
+                    ) : null}
+                  </div>
+                )}
+
+                {/* ─── ORDER CANCELLATION BANNER (Requirements 2, 23) ─── */}
                 {activeOrder.order_status === 'cancelled' && (
                   <motion.div
                     initial={{ opacity: 0, scale: 0.98 }}
                     animate={{ opacity: 1, scale: 1 }}
-                    className="my-6 p-5 bg-red-50 border-2 border-red-300 rounded-2xl space-y-2 text-red-950"
+                    className="my-6 p-5 bg-red-50 border-2 border-red-300 rounded-2xl space-y-3 text-red-950"
                   >
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <div className="flex items-center gap-2">
                         <div className="w-8 h-8 rounded-xl bg-red-600 text-white flex items-center justify-center">
                           <Ban className="w-4 h-4" />
                         </div>
-                        <h4 className="font-extrabold text-sm uppercase tracking-wider text-red-900">
-                          This Order Has Been Cancelled
-                        </h4>
+                        <div>
+                          <h4 className="font-extrabold text-sm uppercase tracking-wider text-red-900">
+                            Order Cancelled
+                          </h4>
+                          <p className="text-xs text-red-700">
+                            Cancelled by: <strong>{activeOrder.cancelled_by || 'Store Management'}</strong>
+                          </p>
+                        </div>
                       </div>
                       {activeOrder.refunded_amount && activeOrder.refunded_amount > 0 ? (
                         <span className="px-3 py-1 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300 text-xs font-bold font-mono">
@@ -412,12 +586,12 @@ export default function TrackOrderPage() {
                     </div>
                     {activeOrder.cancellation_reason && (
                       <p className="text-xs text-red-800 bg-white/70 p-2.5 rounded-xl border border-red-200">
-                        <strong>Reason:</strong> {activeOrder.cancellation_reason}
+                        <strong>Cancellation Reason:</strong> {activeOrder.cancellation_reason}
                       </p>
                     )}
                     {activeOrder.cancelled_at && (
                       <p className="text-[11px] text-red-600">
-                        Cancelled on: {new Date(activeOrder.cancelled_at).toLocaleString()}
+                        Date & Time: {new Date(activeOrder.cancelled_at).toLocaleString()}
                       </p>
                     )}
                   </motion.div>
@@ -670,56 +844,136 @@ export default function TrackOrderPage() {
                   })}
                 </div>
 
-                {/* Financial Reconciliation Summary Breakdown */}
-                <div className="mt-6 pt-4 border-t border-gray-100 space-y-2 text-xs">
-                  <div className="flex justify-between items-center text-gray-600">
-                    <span>Original Order Total</span>
-                    <span className="font-semibold text-gray-900 font-mono text-sm">₹{activeOrder.total}</span>
-                  </div>
+                {/* Financial Reconciliation Summary Breakdown with Authoritative Calculations (Requirements 2, 21) */}
+                {(() => {
+                  const metrics = calculateOrderRefundableMetrics(activeOrder);
+                  return (
+                    <div className="mt-6 pt-4 border-t border-gray-100 space-y-3 text-xs">
+                      <div className="flex items-center justify-between">
+                        <h4 className="font-bold text-gray-900 text-sm flex items-center gap-1.5">
+                          <DollarSign className="w-4 h-4 text-brand-green" />
+                          <span>Financial & Refund Summary</span>
+                        </h4>
+                        <span
+                          className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase ${
+                            activeOrder.payment_status === 'paid'
+                              ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
+                              : activeOrder.payment_status === 'partially_refunded'
+                              ? 'bg-amber-100 text-amber-800 border border-amber-200'
+                              : activeOrder.payment_status === 'refunded'
+                              ? 'bg-purple-100 text-purple-800 border border-purple-200'
+                              : 'bg-gray-100 text-gray-700'
+                          }`}
+                        >
+                          Payment: {activeOrder.payment_status.toUpperCase()}
+                        </span>
+                      </div>
 
-                  {activeOrder.refunded_amount && activeOrder.refunded_amount > 0 ? (
-                    <>
-                      <div className="flex justify-between items-center text-amber-800 bg-amber-50 p-2.5 rounded-xl border border-amber-200">
-                        <span className="flex items-center gap-1.5 font-bold">
-                          <RotateCcw className="w-3.5 h-3.5 text-amber-600" />
-                          <span>Refund Initiated to Customer Account</span>
-                        </span>
-                        <span className="font-bold font-mono text-sm text-amber-900">-₹{activeOrder.refunded_amount}</span>
+                      <div className="bg-gray-50/80 p-3.5 rounded-2xl border border-gray-200/80 space-y-2">
+                        <div className="flex justify-between items-center text-gray-600">
+                          <span>Original Order Total</span>
+                          <span className="font-semibold text-gray-900 font-mono text-sm">₹{activeOrder.total}</span>
+                        </div>
+                        <div className="flex justify-between items-center text-gray-600">
+                          <span>Final Amount Paid</span>
+                          <span className="font-bold text-emerald-700 font-mono text-sm">₹{metrics.paidAmount}</span>
+                        </div>
+                        {metrics.alreadyRefunded > 0 && (
+                          <div className="flex justify-between items-center text-amber-800">
+                            <span>Previously Refunded</span>
+                            <span className="font-bold font-mono text-sm text-amber-900">-₹{metrics.alreadyRefunded}</span>
+                          </div>
+                        )}
+                        <div className="flex justify-between items-center text-gray-600">
+                          <span>Total Refunded Amount</span>
+                          <span className="font-bold font-mono text-sm text-brand-green">₹{metrics.alreadyRefunded}</span>
+                        </div>
+                        <div className="flex justify-between items-center text-gray-600">
+                          <span>Remaining Refundable Balance</span>
+                          <span className="font-mono text-sm text-gray-700">₹{metrics.remainingRefundableAmount}</span>
+                        </div>
+                        <div className="flex justify-between items-center pt-2 border-t border-gray-200 text-xs font-bold text-gray-900">
+                          <span>Refund Status</span>
+                          <span className="uppercase text-brand-green font-mono">
+                            {activeOrder.refunded_amount && activeOrder.refunded_amount >= activeOrder.total
+                              ? 'SUCCEEDED'
+                              : activeOrder.refunded_amount && activeOrder.refunded_amount > 0
+                              ? 'PARTIALLY_REFUNDED'
+                              : metrics.isPaid
+                              ? 'NOT_REQUIRED'
+                              : 'UNPAID'}
+                          </span>
+                        </div>
                       </div>
-                      <div className="flex justify-between items-center text-gray-900 font-bold text-sm pt-1">
-                        <span>Remaining Net Order Value</span>
-                        <span className="font-mono text-brand-green text-lg">
-                          ₹{Math.max(0, activeOrder.total - (activeOrder.refunded_amount || 0))}
-                        </span>
+
+                      {/* Expandable Accordion: View Refund Calculation (Requirement 21) */}
+                      <div className="border border-gray-200 rounded-2xl overflow-hidden bg-white">
+                        <button
+                          type="button"
+                          onClick={() => setShowRefundCalculation(!showRefundCalculation)}
+                          className="w-full px-4 py-2.5 flex items-center justify-between text-xs font-bold text-gray-700 hover:bg-gray-50 cursor-pointer transition"
+                        >
+                          <span className="flex items-center gap-1.5">
+                            <ShieldCheck className="w-3.5 h-3.5 text-brand-green" />
+                            <span>View Detailed Refund Calculation Breakdown</span>
+                          </span>
+                          <ChevronUp
+                            className={`w-4 h-4 text-gray-400 transition-transform ${
+                              showRefundCalculation ? '' : 'rotate-180'
+                            }`}
+                          />
+                        </button>
+
+                        <AnimatePresence>
+                          {showRefundCalculation && (
+                            <motion.div
+                              initial={{ height: 0, opacity: 0 }}
+                              animate={{ height: 'auto', opacity: 1 }}
+                              exit={{ height: 0, opacity: 0 }}
+                              className="px-4 pb-4 pt-2 border-t border-gray-100 bg-gray-50/50 space-y-1.5 text-xs font-mono text-gray-700"
+                            >
+                              <div className="flex justify-between">
+                                <span>Original Product Amount</span>
+                                <span>₹{activeOrder.total}</span>
+                              </div>
+                              <div className="flex justify-between text-gray-500">
+                                <span>- Product / Item Discounts</span>
+                                <span>-₹0</span>
+                              </div>
+                              <div className="flex justify-between text-gray-500">
+                                <span>- Coupon Discounts</span>
+                                <span>-₹0</span>
+                              </div>
+                              <div className="flex justify-between text-gray-500">
+                                <span>+ Taxes & Handling</span>
+                                <span>Included</span>
+                              </div>
+                              <div className="flex justify-between text-gray-500">
+                                <span>+ Shipping Charges</span>
+                                <span>Included</span>
+                              </div>
+                              <div className="flex justify-between pt-1 border-t border-gray-300 font-bold text-gray-900">
+                                <span>= Final Amount Paid</span>
+                                <span>₹{metrics.paidAmount}</span>
+                              </div>
+                              <div className="flex justify-between text-amber-700 pt-1">
+                                <span>- Previous Refunds</span>
+                                <span>-₹{metrics.alreadyRefunded}</span>
+                              </div>
+                              <div className="flex justify-between pt-1 border-t border-gray-300 font-bold text-brand-green text-sm">
+                                <span>= Net Refund Processed</span>
+                                <span>₹{metrics.alreadyRefunded}</span>
+                              </div>
+                              <p className="text-[10px] text-gray-400 font-sans pt-1">
+                                Authoritative server-side refund calculation according to RBI/payment gateway reconciliation.
+                              </p>
+                            </motion.div>
+                          )}
+                        </AnimatePresence>
                       </div>
-                    </>
-                  ) : (
-                    <div className="flex justify-between items-center text-sm pt-1">
-                      <span className="text-gray-500 font-medium">Order Grand Total</span>
-                      <span className="text-xl font-extrabold text-brand-green">₹{activeOrder.total}</span>
                     </div>
-                  )}
-
-                  {/* Payment & Refund Status Indicator */}
-                  <div className="pt-2 flex justify-between items-center">
-                    <span className="text-gray-400">Payment Status</span>
-                    <span className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold uppercase ${
-                      activeOrder.payment_status === 'paid'
-                        ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
-                        : activeOrder.payment_status === 'partially_refunded'
-                        ? 'bg-amber-100 text-amber-800 border border-amber-200'
-                        : activeOrder.payment_status === 'refunded'
-                        ? 'bg-purple-100 text-purple-800 border border-purple-200'
-                        : 'bg-gray-100 text-gray-700'
-                    }`}>
-                      {activeOrder.payment_status === 'partially_refunded'
-                        ? 'Partially Refunded'
-                        : activeOrder.payment_status === 'refunded'
-                        ? 'Fully Refunded'
-                        : activeOrder.payment_status.toUpperCase()}
-                    </span>
-                  </div>
-                </div>
+                  );
+                })()}
               </div>
 
               {/* WhatsApp Support Callout */}
@@ -747,6 +1001,135 @@ export default function TrackOrderPage() {
           )}
         </AnimatePresence>
       </div>
+
+      {/* ─── MODAL: CUSTOMER CANCELLATION REQUEST DIALOG (Requirements 3, 4) ─── */}
+      <AnimatePresence>
+        {showCancelModal && activeOrder && (
+          <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-white rounded-3xl max-w-md w-full p-6 text-gray-900 shadow-2xl border border-gray-100 space-y-4"
+            >
+              <div className="flex items-center justify-between pb-3 border-b border-gray-100">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-9 h-9 rounded-xl bg-red-100 text-red-600 flex items-center justify-center">
+                    <Ban className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-gray-900 text-base">
+                      Cancel Order #{activeOrder.order_number}
+                    </h3>
+                    <p className="text-xs text-gray-500">Submit Cancellation Request</p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setShowCancelModal(false)}
+                  className="p-1.5 text-gray-400 hover:text-gray-700 rounded-lg hover:bg-gray-100 cursor-pointer"
+                >
+                  ✕
+                </button>
+              </div>
+
+              <form onSubmit={handleSubmitCancellationRequest} className="space-y-4">
+                <p className="text-xs text-gray-600">
+                  Are you sure you want to request cancellation of this order?
+                </p>
+
+                <div>
+                  <label className="block text-xs font-bold uppercase tracking-wider text-gray-700 mb-1.5">
+                    Cancellation Reason *
+                  </label>
+                  <select
+                    value={cancelReason}
+                    onChange={(e) => setCancelReason(e.target.value)}
+                    className="w-full px-3.5 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-gray-900 text-xs focus:outline-none focus:border-brand-green cursor-pointer"
+                  >
+                    <option value="Changed my mind">Changed my mind</option>
+                    <option value="Ordered by mistake">Ordered by mistake</option>
+                    <option value="Delivery taking too long">Delivery taking too long</option>
+                    <option value="Product no longer required">Product no longer required</option>
+                    <option value="Found a better price">Found a better price</option>
+                    <option value="Payment issue">Payment issue</option>
+                    <option value="Other">Other</option>
+                  </select>
+                </div>
+
+                {cancelReason === 'Other' && (
+                  <div>
+                    <label className="block text-xs font-bold uppercase tracking-wider text-gray-700 mb-1.5">
+                      Specify Reason *
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={cancelCustomReason}
+                      onChange={(e) => setCancelCustomReason(e.target.value)}
+                      placeholder="Please specify why you are cancelling..."
+                      className="w-full px-3.5 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-gray-900 text-xs focus:outline-none focus:border-brand-green"
+                    />
+                  </div>
+                )}
+
+                <div>
+                  <label className="block text-xs font-bold uppercase tracking-wider text-gray-700 mb-1.5">
+                    Additional Comments (Optional)
+                  </label>
+                  <textarea
+                    rows={2}
+                    value={customerComment}
+                    onChange={(e) => setCustomerComment(e.target.value)}
+                    placeholder="Optional note for our order management team..."
+                    className="w-full px-3.5 py-2 bg-gray-50 border border-gray-200 rounded-xl text-gray-900 text-xs focus:outline-none focus:border-brand-green resize-none"
+                  />
+                </div>
+
+                {(() => {
+                  const metrics = calculateOrderRefundableMetrics(activeOrder);
+                  return (
+                    <div className="p-3 bg-emerald-50 rounded-xl border border-emerald-200 text-xs space-y-1">
+                      <div className="flex justify-between items-center text-emerald-900">
+                        <span className="font-semibold">Estimated Refund:</span>
+                        <span className="font-mono font-bold text-sm text-brand-green">
+                          ₹{metrics.paidAmount > 0 ? metrics.remainingRefundableAmount : 0}
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-emerald-700">
+                        {metrics.paidAmount > 0
+                          ? 'Refund will be credited back to your original payment method upon approval.'
+                          : 'Order was unpaid / COD, no refund charge will occur.'}
+                      </p>
+                    </div>
+                  );
+                })()}
+
+                <div className="p-3 bg-amber-50 rounded-xl border border-amber-200 text-[11px] text-amber-900 leading-relaxed">
+                  <strong>Note:</strong> Your cancellation request will be reviewed by our order management team. The order will not be cancelled until the request is approved.
+                </div>
+
+                <div className="flex gap-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowCancelModal(false)}
+                    className="flex-1 py-3 bg-gray-100 hover:bg-gray-200 text-gray-700 text-xs font-bold rounded-xl transition cursor-pointer"
+                  >
+                    Keep Order
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isSubmittingCancellation}
+                    className="flex-1 py-3 bg-brand-red hover:bg-red-700 text-white text-xs font-bold rounded-xl transition shadow-md flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-60"
+                  >
+                    <Ban className="w-3.5 h-3.5" />
+                    <span>{isSubmittingCancellation ? 'Submitting...' : 'Submit Cancellation Request'}</span>
+                  </button>
+                </div>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

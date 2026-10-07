@@ -14,6 +14,7 @@ export interface RefundCalculation {
   remainingRefundableAmount: number;
   remainingOrderValue: number;
   isRefundable: boolean;
+  isPaid: boolean;
   paidAmount: number;
   alreadyRefunded: number;
   refundableAmount: number;
@@ -57,6 +58,7 @@ export function calculateOrderRefundableMetrics(order: DbOrder): RefundCalculati
     remainingRefundableAmount,
     remainingOrderValue: Math.max(0, remainingOrderValue),
     isRefundable: isPaid && remainingRefundableAmount > 0,
+    isPaid,
     paidAmount: originalPaidAmount,
     alreadyRefunded: totalAlreadyRefunded,
     refundableAmount: remainingRefundableAmount,

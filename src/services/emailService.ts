@@ -8,7 +8,7 @@
 // - sendTestEmail()
 // Supports Supabase Edge Functions, Resend API, Webhooks, and secure SMTP diagnostics
 // ============================================================
-import type { DbOrder } from '@/services/supabase';
+import type { DbOrder, CustomerCancellationRequest } from '@/services/supabase';
 import type { SmtpSettings, StoreSettings } from '@/hooks/useSettingsStore';
 import { supabase } from '@/services/supabase';
 
@@ -625,6 +625,96 @@ export const EmailService = {
       text,
       smtp,
       fromName: smtp.senderName || settings.businessName,
+      fromEmail: smtp.senderEmail || 'info@sudhaswagruhafoods.com',
+    });
+  },
+
+  /**
+   * Send Customer Cancellation Request Intimation Email
+   */
+  async sendCancellationRequested(
+    order: DbOrder,
+    request: CustomerCancellationRequest,
+    settings: StoreSettings
+  ): Promise<EmailSendResult> {
+    const smtp = settings.smtp;
+    if (!smtp?.enabled) return { success: true, message: 'Email intimation is disabled' };
+
+    const recipient = order.customer_email?.trim();
+    if (!recipient || !isValidEmail(recipient)) return { success: true, message: 'No recipient email' };
+
+    const brand = settings.businessName || 'Sudha Swagruha Foods';
+    const subject = `Cancellation Request Received - Order #${order.order_number} - ${brand}`;
+    const text = `We have received your cancellation request for Order #${order.order_number} (Reason: ${request.reason}). It is currently awaiting review by our store team.`;
+    const html = `<!DOCTYPE html><html><body style="font-family: Arial, sans-serif; background: #fafafa; padding: 20px;">
+      <div style="max-width: 600px; margin: 0 auto; background: #fff; padding: 30px; border-radius: 16px; border: 1px solid #eaeaea;">
+        <h2 style="color: #0f5132; margin-top: 0;">${brand}</h2>
+        <div style="background: #fff3cd; border-left: 4px solid #ffc107; padding: 15px; border-radius: 8px; margin-bottom: 20px;">
+          <h3 style="margin: 0 0 8px; color: #664d03;">Cancellation Request Received</h3>
+          <p style="margin: 0; color: #664d03; font-size: 14px;">Your cancellation request for Order <strong>#${order.order_number}</strong> has been submitted and is awaiting approval by our management team.</p>
+        </div>
+        <table style="width: 100%; font-size: 14px; margin-bottom: 20px; border-collapse: collapse;">
+          <tr><td style="padding: 8px 0; color: #666;">Reason:</td><td style="padding: 8px 0; font-weight: bold; text-align: right;">${request.reason}</td></tr>
+          ${request.customer_comment ? `<tr><td style="padding: 8px 0; color: #666;">Customer Note:</td><td style="padding: 8px 0; text-align: right;">${request.customer_comment}</td></tr>` : ''}
+          <tr><td style="padding: 8px 0; color: #666;">Estimated Refund:</td><td style="padding: 8px 0; font-weight: bold; color: #0f5132; text-align: right;">₹${request.estimated_refund_amount || order.total}</td></tr>
+          <tr><td style="padding: 8px 0; color: #666;">Status:</td><td style="padding: 8px 0; font-weight: bold; color: #e65100; text-align: right;">Awaiting Approval</td></tr>
+        </table>
+        <p style="font-size: 13px; color: #777;">Please note: Your order remains active until approved. You can track live updates on our tracking page.</p>
+      </div>
+    </body></html>`;
+
+    return this.dispatchEmail({
+      to: recipient,
+      subject,
+      html,
+      text,
+      smtp,
+      fromName: smtp.senderName || brand,
+      fromEmail: smtp.senderEmail || 'info@sudhaswagruhafoods.com',
+    });
+  },
+
+  /**
+   * Send Customer Cancellation Request Rejection Email
+   */
+  async sendCancellationRejected(
+    order: DbOrder,
+    request: CustomerCancellationRequest,
+    settings: StoreSettings
+  ): Promise<EmailSendResult> {
+    const smtp = settings.smtp;
+    if (!smtp?.enabled) return { success: true, message: 'Email intimation is disabled' };
+
+    const recipient = order.customer_email?.trim();
+    if (!recipient || !isValidEmail(recipient)) return { success: true, message: 'No recipient email' };
+
+    const brand = settings.businessName || 'Sudha Swagruha Foods';
+    const subject = `Update Regarding Cancellation Request - Order #${order.order_number} - ${brand}`;
+    const text = `Your cancellation request for Order #${order.order_number} could not be approved (${request.rejection_reason || 'Order already in dispatch process'}). Your order remains active.`;
+    const html = `<!DOCTYPE html><html><body style="font-family: Arial, sans-serif; background: #fafafa; padding: 20px;">
+      <div style="max-width: 600px; margin: 0 auto; background: #fff; padding: 30px; border-radius: 16px; border: 1px solid #eaeaea;">
+        <h2 style="color: #0f5132; margin-top: 0;">${brand}</h2>
+        <div style="background: #e8f4fd; border-left: 4px solid #0288d1; padding: 15px; border-radius: 8px; margin-bottom: 20px;">
+          <h3 style="margin: 0 0 8px; color: #01579b;">Cancellation Request Update</h3>
+          <p style="margin: 0; color: #01579b; font-size: 14px;">Your cancellation request for Order <strong>#${order.order_number}</strong> could not be processed.</p>
+        </div>
+        <table style="width: 100%; font-size: 14px; margin-bottom: 20px; border-collapse: collapse;">
+          <tr><td style="padding: 8px 0; color: #666;">Decision:</td><td style="padding: 8px 0; font-weight: bold; color: #c62828; text-align: right;">Rejected</td></tr>
+          <tr><td style="padding: 8px 0; color: #666;">Reason:</td><td style="padding: 8px 0; font-weight: bold; text-align: right;">${request.rejection_reason || 'Order has already progressed to preparation/dispatch'}</td></tr>
+          ${request.admin_comment ? `<tr><td style="padding: 8px 0; color: #666;">Store Note:</td><td style="padding: 8px 0; text-align: right;">${request.admin_comment}</td></tr>` : ''}
+          <tr><td style="padding: 8px 0; color: #666;">Current Order Status:</td><td style="padding: 8px 0; font-weight: bold; color: #0f5132; text-align: right;">${order.order_status.toUpperCase()} (Active)</td></tr>
+        </table>
+        <p style="font-size: 13px; color: #777;">Your order will be fulfilled and delivered as scheduled. Thank you for choosing ${brand}!</p>
+      </div>
+    </body></html>`;
+
+    return this.dispatchEmail({
+      to: recipient,
+      subject,
+      html,
+      text,
+      smtp,
+      fromName: smtp.senderName || brand,
       fromEmail: smtp.senderEmail || 'info@sudhaswagruhafoods.com',
     });
   },

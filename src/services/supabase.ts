@@ -135,7 +135,9 @@ export type NotificationEvent =
   | 'FULL_ORDER_CANCELLED'
   | 'FULL_REFUND_INITIATED'
   | 'REFUND_COMPLETED'
-  | 'REFUND_FAILED';
+  | 'REFUND_FAILED'
+  | 'CANCELLATION_REQUESTED'
+  | 'CANCELLATION_REJECTED';
 
 export interface NotificationLogItem {
   id: string;
@@ -169,6 +171,22 @@ export interface OrderRefundRecord {
   requested_at: string;
   completed_at?: string | null;
   failure_reason?: string | null;
+}
+
+export type CancellationRequestStatus = 'none' | 'requested' | 'approved' | 'rejected';
+
+export interface CustomerCancellationRequest {
+  status: CancellationRequestStatus;
+  reason: string;
+  customer_comment?: string | null;
+  requested_at: string;
+  reviewed_at?: string | null;
+  reviewed_by?: string | null;
+  reviewer_role?: string | null;
+  rejection_reason?: string | null;
+  admin_comment?: string | null;
+  estimated_refund_amount?: number;
+  approved_refund_amount?: number;
 }
 
 export interface DbOrder {
@@ -206,6 +224,7 @@ export interface DbOrder {
   cancellation_reason?: string | null;
   cancelled_at?: string | null;
   cancelled_by?: string | null;
+  cancellation_request?: CustomerCancellationRequest | null;
   refunded_amount?: number;
   refunds?: OrderRefundRecord[];
   created_at: string;
@@ -227,6 +246,7 @@ export function normalizeOrderTracking(rawOrder: DbOrder): DbOrder {
   let extractedCancellationReason = order.cancellation_reason || '';
   let extractedCancelledAt = order.cancelled_at || '';
   let extractedRefundedAmount = order.refunded_amount || 0;
+  let extractedCancellationRequest: CustomerCancellationRequest | null = order.cancellation_request || null;
   let extractedRefunds: OrderRefundRecord[] = Array.isArray(order.refunds) ? [...order.refunds] : [];
   let extractedHistory: OrderStatusHistoryItem[] = Array.isArray(order.order_status_history)
     ? [...order.order_status_history]
@@ -244,6 +264,7 @@ export function normalizeOrderTracking(rawOrder: DbOrder): DbOrder {
         if (meta.dispatched_at && !extractedDispatchedAt) extractedDispatchedAt = meta.dispatched_at;
         if (meta.cancellation_reason && !extractedCancellationReason) extractedCancellationReason = meta.cancellation_reason;
         if (meta.cancelled_at && !extractedCancelledAt) extractedCancelledAt = meta.cancelled_at;
+        if (meta.cancellation_request && !extractedCancellationRequest) extractedCancellationRequest = meta.cancellation_request;
         if (meta.refunded_amount && !extractedRefundedAmount) extractedRefundedAmount = meta.refunded_amount;
         if (Array.isArray(meta.refunds) && extractedRefunds.length === 0) extractedRefunds = meta.refunds;
         if (Array.isArray(meta.history) && extractedHistory.length === 0) {
@@ -296,6 +317,7 @@ export function normalizeOrderTracking(rawOrder: DbOrder): DbOrder {
     dispatched_at: extractedDispatchedAt || (order.order_status === 'shipped' ? order.updated_at : null),
     cancellation_reason: extractedCancellationReason || null,
     cancelled_at: extractedCancelledAt || null,
+    cancellation_request: extractedCancellationRequest || null,
     refunded_amount: extractedRefundedAmount,
     refunds: extractedRefunds,
     order_status_history: extractedHistory,

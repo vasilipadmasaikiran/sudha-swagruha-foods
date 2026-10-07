@@ -5,7 +5,7 @@
 // ============================================================
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { DbOrder, OrderStatusHistoryItem, OrderRefundRecord, OrderItem } from '@/services/supabase';
+import type { DbOrder, OrderStatusHistoryItem, OrderRefundRecord, OrderItem, CustomerCancellationRequest } from '@/services/supabase';
 import { supabase, isSupabaseConfigured, normalizeOrderTracking } from '@/services/supabase';
 import { RefundService, calculateOrderRefundableMetrics, roundToTwoDecimals } from '@/services/refundService';
 import { NotificationService } from '@/services/notificationService';
@@ -41,6 +41,25 @@ interface OrderStore {
     initiateRefund?: boolean,
     customRefundAmount?: number
   ) => Promise<{ success: boolean; order?: DbOrder; refund?: OrderRefundRecord; error?: string }>;
+  requestOrderCancellation: (
+    orderId: string,
+    reason: string,
+    customerComment?: string
+  ) => Promise<{ success: boolean; order?: DbOrder; error?: string }>;
+  approveCancellationRequest: (
+    orderId: string,
+    approvedBy?: string,
+    reviewerRole?: string,
+    initiateRefund?: boolean,
+    customRefundAmount?: number
+  ) => Promise<{ success: boolean; order?: DbOrder; refund?: OrderRefundRecord; error?: string }>;
+  rejectCancellationRequest: (
+    orderId: string,
+    rejectionReason: string,
+    adminComment?: string,
+    rejectedBy?: string,
+    reviewerRole?: string
+  ) => Promise<{ success: boolean; order?: DbOrder; error?: string }>;
   removeOrderItem: (
     orderId: string,
     productId: string,
@@ -561,6 +580,329 @@ export const useOrderStore = create<OrderStore>()(
         }).catch((e) => console.warn('Cancel order notification error:', e));
 
         return { success: true, order: updatedOrder, refund: refundRecord };
+      },
+
+      // ─── Customer-Initiated Cancellation Request ──────────────────
+      requestOrderCancellation: async (orderId: string, reason: string, customerComment?: string) => {
+        const order = get().orders.find((o) => o.id === orderId || o.order_number === orderId);
+        if (!order) {
+          return { success: false, error: 'Order not found' };
+        }
+
+        if (order.order_status === 'cancelled') {
+          return { success: false, error: 'Order is already cancelled' };
+        }
+        if (order.order_status === 'delivered') {
+          return { success: false, error: 'Delivered orders cannot be cancelled' };
+        }
+        if (order.order_status === 'shipped') {
+          return { success: false, error: 'Order has already been dispatched with tracking and cannot be cancelled directly' };
+        }
+        if (order.cancellation_request?.status === 'requested') {
+          return { success: false, error: 'A cancellation request is already pending review for this order' };
+        }
+
+        const now = new Date().toISOString();
+        const settings = useSettingsStore.getState().settings;
+        const metrics = calculateOrderRefundableMetrics(order);
+        const estimatedRefund = metrics.isPaid ? metrics.remainingRefundableAmount : 0;
+
+        const request: CustomerCancellationRequest = {
+          status: 'requested',
+          reason: reason.trim(),
+          customer_comment: customerComment?.trim() || undefined,
+          requested_at: now,
+          estimated_refund_amount: estimatedRefund,
+        };
+
+        const updatedHistory: OrderStatusHistoryItem[] = [
+          ...(order.order_status_history || []),
+          {
+            status: order.order_status, // Order status remains active!
+            timestamp: now,
+            notes: `Customer cancellation requested: ${reason}`,
+            updated_by: 'Customer',
+          },
+        ];
+
+        const updatedOrder: DbOrder = {
+          ...order,
+          cancellation_request: request,
+          order_status_history: updatedHistory,
+          updated_at: now,
+        };
+
+        // Update local store
+        set((state) => ({
+          orders: state.orders.map((o) =>
+            o.id === order.id || o.order_number === order.order_number ? updatedOrder : o
+          ),
+        }));
+
+        // Sync with Supabase DB
+        if (isSupabaseConfigured()) {
+          try {
+            await supabase
+              .from('orders')
+              .update({
+                cancellation_request: request,
+                order_status_history: updatedHistory,
+                updated_at: now,
+              })
+              .eq('order_number', order.order_number);
+          } catch (dbErr) {
+            console.warn('DB request cancellation update notice:', dbErr);
+          }
+        }
+
+        // Audit Log
+        await logAdminAction('Customer', 'CUSTOMER', 'CANCELLATION_REQUESTED', 'ORDER', order.order_number, {
+          reason,
+          customerComment: customerComment?.trim() || '',
+          estimatedRefund,
+        });
+
+        // Trigger notifications non-blockingly
+        NotificationService.notifyCancellationRequested({
+          order: updatedOrder,
+          request,
+          settings,
+        }).catch((e) => console.warn('Cancellation request notification error:', e));
+
+        return { success: true, order: updatedOrder };
+      },
+
+      // ─── Admin Approve Customer Cancellation Request ───────────────
+      approveCancellationRequest: async (
+        orderId: string,
+        approvedBy = 'Store Owner',
+        reviewerRole = 'STORE_OWNER',
+        initiateRefund = true,
+        customRefundAmount?: number
+      ) => {
+        const order = get().orders.find((o) => o.id === orderId || o.order_number === orderId);
+        if (!order) {
+          return { success: false, error: 'Order not found' };
+        }
+
+        if (order.order_status === 'cancelled') {
+          return { success: false, error: 'Order is already cancelled' };
+        }
+        if (order.cancellation_request?.status !== 'requested') {
+          return { success: false, error: 'No pending customer cancellation request found for this order' };
+        }
+
+        const now = new Date().toISOString();
+        const settings = useSettingsStore.getState().settings;
+        const metrics = calculateOrderRefundableMetrics(order);
+
+        // Calculate authoritative refund amount
+        const customAmt = customRefundAmount !== undefined ? Number(customRefundAmount) : undefined;
+        const refundableAmount = customAmt !== undefined && !isNaN(customAmt)
+          ? Math.min(roundToTwoDecimals(customAmt), metrics.remainingRefundableAmount)
+          : metrics.isPaid
+          ? metrics.remainingRefundableAmount
+          : 0;
+
+        let refundRecord: OrderRefundRecord | undefined;
+
+        // Process refund transaction if payment captured and amount > 0
+        if (refundableAmount > 0 && initiateRefund && metrics.isRefundable) {
+          const refundResult = await RefundService.processRefund({
+            order,
+            amount: refundableAmount,
+            reason: `Customer cancellation approved: ${order.cancellation_request.reason || 'Requested by customer'}`,
+            type: refundableAmount >= metrics.remainingRefundableAmount ? 'full' : 'partial',
+            requestedBy: `${approvedBy} (${reviewerRole})`,
+            settings,
+          });
+          refundRecord = refundResult.refundRecord;
+        }
+
+        const approvedRequest: CustomerCancellationRequest = {
+          ...order.cancellation_request,
+          status: 'approved',
+          reviewed_at: now,
+          reviewed_by: approvedBy,
+          reviewer_role: reviewerRole,
+          approved_refund_amount: refundableAmount,
+        };
+
+        const newRefundedAmount = roundToTwoDecimals(
+          (order.refunded_amount || 0) + (refundRecord && refundRecord.status === 'success' ? refundableAmount : 0)
+        );
+
+        const newPaymentStatus =
+          newRefundedAmount >= order.total
+            ? 'refunded'
+            : newRefundedAmount > 0
+            ? 'partially_refunded'
+            : order.payment_status;
+
+        const updatedHistory: OrderStatusHistoryItem[] = [
+          ...(order.order_status_history || []),
+          {
+            status: 'cancelled',
+            timestamp: now,
+            notes: `Customer cancellation approved by ${approvedBy} (${reviewerRole})${
+              refundableAmount > 0 ? ` with refund of ₹${refundableAmount}` : ''
+            }`,
+            updated_by: `${approvedBy} (${reviewerRole})`,
+          },
+        ];
+
+        const updatedRefunds: OrderRefundRecord[] = [
+          ...(order.refunds || []),
+          ...(refundRecord ? [refundRecord] : []),
+        ];
+
+        const updatedOrder: DbOrder = {
+          ...order,
+          order_status: 'cancelled',
+          cancellation_reason: order.cancellation_request.reason || 'Customer cancellation request approved',
+          cancelled_at: now,
+          cancelled_by: `${approvedBy} (${reviewerRole})`,
+          cancellation_request: approvedRequest,
+          refunded_amount: newRefundedAmount,
+          payment_status: newPaymentStatus,
+          refunds: updatedRefunds,
+          order_status_history: updatedHistory,
+          updated_at: now,
+        };
+
+        // Update local store
+        set((state) => ({
+          orders: state.orders.map((o) =>
+            o.id === order.id || o.order_number === order.order_number ? updatedOrder : o
+          ),
+        }));
+
+        // Sync with Supabase DB
+        if (isSupabaseConfigured()) {
+          try {
+            await supabase
+              .from('orders')
+              .update({
+                order_status: 'cancelled',
+                cancellation_reason: updatedOrder.cancellation_reason,
+                cancelled_at: now,
+                cancelled_by: updatedOrder.cancelled_by,
+                cancellation_request: approvedRequest,
+                refunded_amount: newRefundedAmount,
+                payment_status: newPaymentStatus,
+                refunds: updatedRefunds,
+                order_status_history: updatedHistory,
+                updated_at: now,
+              })
+              .eq('order_number', order.order_number);
+          } catch (dbErr) {
+            console.warn('DB approve cancellation update notice:', dbErr);
+          }
+        }
+
+        // Audit Log
+        await logAdminAction(approvedBy, reviewerRole, 'CANCELLATION_APPROVED', 'ORDER', order.order_number, {
+          reason: order.cancellation_request.reason,
+          refundAmount: refundableAmount,
+          refundStatus: refundRecord?.status || 'none',
+        });
+
+        // Trigger notifications non-blockingly
+        NotificationService.notifyOrderCancelled({
+          order: updatedOrder,
+          reason: updatedOrder.cancellation_reason || 'Customer cancellation approved',
+          refundAmount: refundableAmount,
+          settings,
+        }).catch((e) => console.warn('Approved cancellation notification error:', e));
+
+        return { success: true, order: updatedOrder, refund: refundRecord };
+      },
+
+      // ─── Admin Reject Customer Cancellation Request ────────────────
+      rejectCancellationRequest: async (
+        orderId: string,
+        rejectionReason: string,
+        adminComment?: string,
+        rejectedBy = 'Store Owner',
+        reviewerRole = 'STORE_OWNER'
+      ) => {
+        const order = get().orders.find((o) => o.id === orderId || o.order_number === orderId);
+        if (!order) {
+          return { success: false, error: 'Order not found' };
+        }
+
+        if (order.cancellation_request?.status !== 'requested') {
+          return { success: false, error: 'No pending customer cancellation request found for this order' };
+        }
+
+        const now = new Date().toISOString();
+        const settings = useSettingsStore.getState().settings;
+
+        const rejectedRequest: CustomerCancellationRequest = {
+          ...order.cancellation_request,
+          status: 'rejected',
+          reviewed_at: now,
+          reviewed_by: rejectedBy,
+          reviewer_role: reviewerRole,
+          rejection_reason: rejectionReason.trim(),
+          admin_comment: adminComment?.trim() || undefined,
+        };
+
+        // Note: order_status remains active (NOT cancelled)
+        const updatedHistory: OrderStatusHistoryItem[] = [
+          ...(order.order_status_history || []),
+          {
+            status: order.order_status,
+            timestamp: now,
+            notes: `Cancellation request rejected: ${rejectionReason}`,
+            updated_by: `${rejectedBy} (${reviewerRole})`,
+          },
+        ];
+
+        const updatedOrder: DbOrder = {
+          ...order,
+          cancellation_request: rejectedRequest,
+          order_status_history: updatedHistory,
+          updated_at: now,
+        };
+
+        // Update local store
+        set((state) => ({
+          orders: state.orders.map((o) =>
+            o.id === order.id || o.order_number === order.order_number ? updatedOrder : o
+          ),
+        }));
+
+        // Sync with Supabase DB
+        if (isSupabaseConfigured()) {
+          try {
+            await supabase
+              .from('orders')
+              .update({
+                cancellation_request: rejectedRequest,
+                order_status_history: updatedHistory,
+                updated_at: now,
+              })
+              .eq('order_number', order.order_number);
+          } catch (dbErr) {
+            console.warn('DB reject cancellation update notice:', dbErr);
+          }
+        }
+
+        // Audit Log
+        await logAdminAction(rejectedBy, reviewerRole, 'CANCELLATION_REJECTED', 'ORDER', order.order_number, {
+          rejectionReason,
+          adminComment: adminComment?.trim() || '',
+        });
+
+        // Trigger notifications non-blockingly
+        NotificationService.notifyCancellationRejected({
+          order: updatedOrder,
+          request: rejectedRequest,
+          settings,
+        }).catch((e) => console.warn('Rejected cancellation notification error:', e));
+
+        return { success: true, order: updatedOrder };
       },
 
       // ─── Remove / Cancel Order Item with Customization & Partial Qty ───

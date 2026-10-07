@@ -56,6 +56,8 @@ export interface RolePermissions {
   canCreatePromotions: boolean;
   canSendPromotions: boolean;
   canManagePromotionTemplates: boolean;
+  canApproveCancellationRequests: boolean;
+  canRejectCancellationRequests: boolean;
 }
 
 export const ROLE_DEFINITIONS: Record<AdminRole, RolePermissions> = {
@@ -81,6 +83,8 @@ export const ROLE_DEFINITIONS: Record<AdminRole, RolePermissions> = {
     canCreatePromotions: true,
     canSendPromotions: true,
     canManagePromotionTemplates: true,
+    canApproveCancellationRequests: true,
+    canRejectCancellationRequests: true,
   },
   STORE_KEEPER: {
     name: 'Store Keeper',
@@ -104,6 +108,8 @@ export const ROLE_DEFINITIONS: Record<AdminRole, RolePermissions> = {
     canCreatePromotions: false,
     canSendPromotions: false,
     canManagePromotionTemplates: false,
+    canApproveCancellationRequests: false,
+    canRejectCancellationRequests: false,
   },
   ORDER_PROCESSOR: {
     name: 'Order Processor',
@@ -127,6 +133,8 @@ export const ROLE_DEFINITIONS: Record<AdminRole, RolePermissions> = {
     canCreatePromotions: false,
     canSendPromotions: false,
     canManagePromotionTemplates: false,
+    canApproveCancellationRequests: true,
+    canRejectCancellationRequests: true,
   },
 };
 

@@ -3,7 +3,7 @@
 // Coordinates Email & SMS, Deduplication Protection,
 // Non-blocking Failure Handling
 // ============================================================
-import type { DbOrder, NotificationEvent, OrderRefundRecord, OrderItem } from '@/services/supabase';
+import type { DbOrder, NotificationEvent, OrderRefundRecord, OrderItem, CustomerCancellationRequest } from '@/services/supabase';
 import type { StoreSettings } from '@/hooks/useSettingsStore';
 import { EmailService } from './emailService';
 import { SmsService } from './smsService';
@@ -223,6 +223,93 @@ export const NotificationService = {
       smsSent = smsRes.success;
     } catch (err) {
       console.warn('Dispatch SMS notice:', err);
+    }
+
+    return { emailSent, smsSent };
+  },
+
+  /**
+   * Notifies customer and admin when a customer cancellation request is filed
+   */
+  async notifyCancellationRequested({
+    order,
+    request,
+    settings,
+  }: {
+    order: DbOrder;
+    request: CustomerCancellationRequest;
+    settings: StoreSettings;
+  }): Promise<{ emailSent: boolean; smsSent: boolean }> {
+    if (this.isDuplicateEvent(order.order_number, 'CANCELLATION_REQUESTED', request.status)) {
+      return { emailSent: false, smsSent: false };
+    }
+
+    let emailSent = false;
+    let smsSent = false;
+
+    try {
+      const emailRes = await EmailService.sendCancellationRequested(order, request, settings);
+      emailSent = emailRes.success;
+    } catch (err) {
+      console.warn('Cancellation request email notice:', err);
+    }
+
+    try {
+      const smsRes = await SmsService.sendOrderEventSms(
+        'CANCELLATION_REQUESTED',
+        order,
+        {
+          refundAmount: request.estimated_refund_amount,
+          refundReason: request.reason,
+        },
+        settings
+      );
+      smsSent = smsRes.success;
+    } catch (err) {
+      console.warn('Cancellation request SMS notice:', err);
+    }
+
+    return { emailSent, smsSent };
+  },
+
+  /**
+   * Notifies customer when a customer cancellation request is rejected
+   */
+  async notifyCancellationRejected({
+    order,
+    request,
+    settings,
+  }: {
+    order: DbOrder;
+    request: CustomerCancellationRequest;
+    settings: StoreSettings;
+  }): Promise<{ emailSent: boolean; smsSent: boolean }> {
+    if (this.isDuplicateEvent(order.order_number, 'CANCELLATION_REJECTED', request.status)) {
+      return { emailSent: false, smsSent: false };
+    }
+
+    let emailSent = false;
+    let smsSent = false;
+
+    try {
+      const emailRes = await EmailService.sendCancellationRejected(order, request, settings);
+      emailSent = emailRes.success;
+    } catch (err) {
+      console.warn('Cancellation rejected email notice:', err);
+    }
+
+    try {
+      const smsRes = await SmsService.sendOrderEventSms(
+        'CANCELLATION_REJECTED',
+        order,
+        {
+          refundReason: request.rejection_reason || 'Order in dispatch process',
+        },
+        settings
+      );
+      smsSent = smsRes.success;
+    } catch (err) {
+      console.warn('Cancellation rejected SMS notice:', err);
     }
 
     return { emailSent, smsSent };

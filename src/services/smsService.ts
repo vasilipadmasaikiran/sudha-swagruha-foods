@@ -73,6 +73,10 @@ export const SMS_TEMPLATES: Record<NotificationEvent, string> = {
     'Refund of Rs. {{refundAmount}} for order {{orderNumber}} has completed successfully. Provider Ref: {{refundId}}. Thank you! {{businessName}}',
   REFUND_FAILED:
     'Attention: Refund of Rs. {{refundAmount}} for order {{orderNumber}} could not be completed automatically. Our team is contacting you. {{businessName}}',
+  CANCELLATION_REQUESTED:
+    'Your cancellation request for order {{orderNumber}} has been received and is under review by {{businessName}}. Track: {{trackingUrl}}',
+  CANCELLATION_REJECTED:
+    'Update for order {{orderNumber}}: Your cancellation request was rejected ({{rejectionReason}}). Your order remains active with {{businessName}}. Track: {{trackingUrl}}',
 };
 
 // Internal in-memory log buffer for instantaneous UI access
@@ -132,7 +136,7 @@ export const SmsService = {
     }
 
     // 2. Check if this specific event trigger is enabled
-    const eventMap: Record<NotificationEvent, keyof typeof sms.events> = {
+    const eventMap: Partial<Record<NotificationEvent, keyof typeof sms.events>> = {
       ORDER_CONFIRMED: 'orderConfirmed',
       ORDER_DISPATCHED: 'orderDispatched',
       TRACKING_UPDATED: 'trackingUpdated',
@@ -142,6 +146,8 @@ export const SmsService = {
       FULL_REFUND_INITIATED: 'fullRefundInitiated',
       REFUND_COMPLETED: 'refundCompleted',
       REFUND_FAILED: 'refundFailed',
+      CANCELLATION_REQUESTED: 'fullOrderCancelled',
+      CANCELLATION_REJECTED: 'fullOrderCancelled',
     };
 
     const eventKey = eventMap[event];

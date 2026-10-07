@@ -80,6 +80,8 @@ export default function AdminOrdersTab() {
     updateOrderDetails,
     deleteOrder,
     cancelOrder,
+    approveCancellationRequest,
+    rejectCancellationRequest,
     removeOrderItem,
     initiateOrderRefund,
     fetchOrdersFromSupabase,
@@ -109,6 +111,18 @@ export default function AdminOrdersTab() {
   const [cancelCustomRefundAmount, setCancelCustomRefundAmount] = useState<string>('');
   const [cancelInitiateRefund, setCancelInitiateRefund] = useState(true);
   const [isCancellingOrder, setIsCancellingOrder] = useState(false);
+
+  // Customer Cancellation Request Approval Modal State (Requirements 3, 6, 7)
+  const [approvalModalOrder, setApprovalModalOrder] = useState<DbOrder | null>(null);
+  const [approvalRefundAmount, setApprovalRefundAmount] = useState<string>('');
+  const [approvalInitiateRefund, setApprovalInitiateRefund] = useState(true);
+  const [isApprovingRequest, setIsApprovingRequest] = useState(false);
+
+  // Customer Cancellation Request Rejection Modal State (Requirements 3, 6, 8)
+  const [rejectionModalOrder, setRejectionModalOrder] = useState<DbOrder | null>(null);
+  const [rejectionReason, setRejectionReason] = useState('Order has already entered dispatch processing');
+  const [rejectionComment, setRejectionComment] = useState('');
+  const [isRejectingRequest, setIsRejectingRequest] = useState(false);
 
   // Product & Customisation Cancellation Modal State
   const [itemCancelOrder, setItemCancelOrder] = useState<DbOrder | null>(null);
@@ -177,6 +191,10 @@ export default function AdminOrdersTab() {
         (o.refunds && o.refunds.length > 0)
     ).length;
 
+    const cancellationRequestsCount = orders.filter(
+      (o) => o.cancellation_request?.status === 'requested'
+    ).length;
+
     return {
       totalOrders,
       totalGmv,
@@ -188,6 +206,7 @@ export default function AdminOrdersTab() {
       totalRefundedSum,
       totalRefundsCount,
       refundedOrdersCount,
+      cancellationRequestsCount,
     };
   }, [orders]);
 
@@ -206,6 +225,9 @@ export default function AdminOrdersTab() {
       if (!matchesSearch) return false;
 
       if (statusFilter === 'all') return true;
+      if (statusFilter === 'cancellation_requests') {
+        return o.cancellation_request?.status === 'requested';
+      }
       if (statusFilter === 'active_processing') {
         return ['placed', 'confirmed', 'preparing', 'packed'].includes(o.order_status);
       }
@@ -396,6 +418,105 @@ export default function AdminOrdersTab() {
       toast.error('Failed to cancel order');
     } finally {
       setIsCancellingOrder(false);
+    }
+  };
+
+  // Open Approval Modal for Customer Cancellation Request (Requirements 6, 7)
+  const openApproveModal = (order: DbOrder) => {
+    setApprovalModalOrder(order);
+    const metrics = calculateOrderRefundableMetrics(order);
+    const estRefund = order.cancellation_request?.estimated_refund_amount ?? metrics.refundableAmount;
+    setApprovalRefundAmount(String(estRefund));
+    setApprovalInitiateRefund(estRefund > 0);
+  };
+
+  // Submit Approval for Customer Cancellation Request
+  const handleApproveSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!approvalModalOrder) return;
+
+    setIsApprovingRequest(true);
+    try {
+      const customAmt = approvalRefundAmount ? parseFloat(approvalRefundAmount) : undefined;
+      const res = await approveCancellationRequest(
+        approvalModalOrder.id,
+        currentUser?.full_name || 'Store Owner',
+        currentUser?.role || 'STORE_OWNER',
+        approvalInitiateRefund,
+        customAmt
+      );
+
+      if (res.success && res.order) {
+        toast.success(`Cancellation request for Order #${approvalModalOrder.order_number} APPROVED.`);
+        if (res.refund) {
+          toast.success(
+            `Refund of ₹${res.refund.amount} initiated (${res.refund.status.toUpperCase()})`
+          );
+        }
+        if (
+          selectedOrder &&
+          (selectedOrder.id === approvalModalOrder.id ||
+            selectedOrder.order_number === approvalModalOrder.order_number)
+        ) {
+          setSelectedOrder(res.order);
+        }
+        setApprovalModalOrder(null);
+      } else {
+        toast.error(res.error || 'Failed to approve cancellation request');
+      }
+    } catch {
+      toast.error('Failed to approve cancellation request');
+    } finally {
+      setIsApprovingRequest(false);
+    }
+  };
+
+  // Open Rejection Modal for Customer Cancellation Request (Requirements 6, 8)
+  const openRejectModal = (order: DbOrder) => {
+    setRejectionModalOrder(order);
+    setRejectionReason('Order has already entered dispatch processing');
+    setRejectionComment('');
+  };
+
+  // Submit Rejection for Customer Cancellation Request
+  const handleRejectSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!rejectionModalOrder) return;
+
+    if (!rejectionReason.trim()) {
+      toast.error('Please specify a rejection reason');
+      return;
+    }
+
+    setIsRejectingRequest(true);
+    try {
+      const res = await rejectCancellationRequest(
+        rejectionModalOrder.id,
+        rejectionReason.trim(),
+        rejectionComment.trim(),
+        currentUser?.full_name || 'Store Owner',
+        currentUser?.role || 'STORE_OWNER'
+      );
+
+      if (res.success && res.order) {
+        toast.success(
+          `Cancellation request for Order #${rejectionModalOrder.order_number} rejected. Order remains active.`
+        );
+        if (
+          selectedOrder &&
+          (selectedOrder.id === rejectionModalOrder.id ||
+            selectedOrder.order_number === rejectionModalOrder.order_number)
+        ) {
+          setSelectedOrder(res.order);
+        }
+        setRejectionModalOrder(null);
+      } else {
+        toast.error(res.error || 'Failed to reject cancellation request');
+      }
+    } catch {
+      toast.error('Failed to reject cancellation request');
+    } finally {
+      setIsRejectingRequest(false);
     }
   };
 
@@ -678,6 +799,24 @@ export default function AdminOrdersTab() {
           );
         })}
 
+        {/* Filter: Customer Cancellation Requests */}
+        <button
+          onClick={() => setStatusFilter('cancellation_requests')}
+          className={`px-3 py-1.5 rounded-xl font-medium transition-all flex items-center gap-1.5 flex-shrink-0 cursor-pointer ${
+            statusFilter === 'cancellation_requests'
+              ? 'bg-amber-500/20 text-amber-300 border border-amber-500 font-semibold shadow-sm'
+              : 'bg-slate-900 text-amber-400/80 hover:text-amber-300 border border-slate-800'
+          }`}
+        >
+          <AlertTriangle className="w-3.5 h-3.5 text-amber-400" />
+          <span>Cancellation Requests</span>
+          {orderStats.cancellationRequestsCount > 0 && (
+            <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-amber-500 text-black font-bold font-mono animate-pulse">
+              {orderStats.cancellationRequestsCount}
+            </span>
+          )}
+        </button>
+
         {/* Filter: Refunded Orders */}
         <button
           onClick={() => setStatusFilter('refunded_orders')}
@@ -857,7 +996,7 @@ export default function AdminOrdersTab() {
                       >
                         {/* Order Number & Date */}
                         <td className="px-4 py-3.5 align-top">
-                          <div className="font-mono font-bold text-emerald-400 text-sm flex items-center gap-1.5">
+                          <div className="font-mono font-bold text-emerald-400 text-sm flex items-center gap-1.5 flex-wrap">
                             <span>{o.order_number}</span>
                             {o.order_status === 'cancelled' && (
                               <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-red-500/20 text-red-400 border border-red-500/30">
@@ -865,6 +1004,12 @@ export default function AdminOrdersTab() {
                               </span>
                             )}
                           </div>
+                          {o.cancellation_request?.status === 'requested' && (
+                            <div className="mt-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40 animate-pulse">
+                              <AlertTriangle className="w-3 h-3 text-amber-400" />
+                              <span>Cancellation Requested</span>
+                            </div>
+                          )}
                           <div className="text-[11px] text-slate-500 mt-0.5 flex items-center gap-1">
                             <Clock className="w-3 h-3" />
                             <span>{new Date(o.created_at).toLocaleDateString()}</span>
@@ -1005,7 +1150,27 @@ export default function AdminOrdersTab() {
 
                         {/* Fulfillment Actions (Cancel, Refund, View, Delete) */}
                         <td className="px-4 py-3.5 align-top text-right">
-                          <div className="flex items-center justify-end gap-1.5">
+                          <div className="flex items-center justify-end gap-1.5 flex-wrap">
+                            {/* Customer Cancellation Request Review Buttons */}
+                            {o.cancellation_request?.status === 'requested' && (hasPermission('canApproveCancellationRequests') || currentUser?.role === 'ROOT_ADMIN') && (
+                              <div className="flex items-center gap-1">
+                                <button
+                                  onClick={() => openApproveModal(o)}
+                                  className="px-2 py-1 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 rounded-lg border border-emerald-500/40 text-[10px] font-bold transition cursor-pointer"
+                                  title="Approve Customer Cancellation"
+                                >
+                                  Approve
+                                </button>
+                                <button
+                                  onClick={() => openRejectModal(o)}
+                                  className="px-2 py-1 bg-red-500/20 hover:bg-red-500/30 text-red-300 rounded-lg border border-red-500/40 text-[10px] font-bold transition cursor-pointer"
+                                  title="Reject Customer Cancellation"
+                                >
+                                  Reject
+                                </button>
+                              </div>
+                            )}
+
                             {/* Cancel Order Action Button */}
                             {o.order_status !== 'cancelled' && (hasPermission('canCancelOrders') || currentUser?.role === 'ROOT_ADMIN') && (
                               <button
@@ -1240,6 +1405,148 @@ export default function AdminOrdersTab() {
                     Cancelled by: {selectedOrder.cancelled_by || 'Admin'} •{' '}
                     {selectedOrder.cancelled_at ? new Date(selectedOrder.cancelled_at).toLocaleString() : ''}
                   </p>
+                </div>
+              )}
+
+              {/* Customer Cancellation Request Card (Requirements 3, 5, 6, 7, 8) */}
+              {selectedOrder.cancellation_request && selectedOrder.cancellation_request.status !== 'none' && (
+                <div
+                  className={`p-4 rounded-2xl border space-y-2.5 ${
+                    selectedOrder.cancellation_request.status === 'requested'
+                      ? 'bg-amber-950/30 border-amber-500/40'
+                      : selectedOrder.cancellation_request.status === 'approved'
+                      ? 'bg-emerald-950/20 border-emerald-500/30'
+                      : 'bg-slate-900 border-slate-700'
+                  }`}
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <AlertTriangle
+                        className={`w-4 h-4 ${
+                          selectedOrder.cancellation_request.status === 'requested'
+                            ? 'text-amber-400'
+                            : selectedOrder.cancellation_request.status === 'approved'
+                            ? 'text-emerald-400'
+                            : 'text-slate-400'
+                        }`}
+                      />
+                      <span className="text-xs font-bold uppercase tracking-wider text-white">
+                        Customer Cancellation Request
+                      </span>
+                    </div>
+                    <span
+                      className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${
+                        selectedOrder.cancellation_request.status === 'requested'
+                          ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 animate-pulse'
+                          : selectedOrder.cancellation_request.status === 'approved'
+                          ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                          : 'bg-red-500/20 text-red-300 border border-red-500/30'
+                      }`}
+                    >
+                      {selectedOrder.cancellation_request.status === 'requested'
+                        ? 'Pending Approval'
+                        : selectedOrder.cancellation_request.status.toUpperCase()}
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2 text-xs text-slate-300">
+                    <div>
+                      <span className="text-slate-400 text-[11px] block">Reason:</span>
+                      <span className="font-semibold text-white">
+                        {selectedOrder.cancellation_request.reason}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-slate-400 text-[11px] block">Requested On:</span>
+                      <span>
+                        {selectedOrder.cancellation_request.requested_at
+                          ? new Date(selectedOrder.cancellation_request.requested_at).toLocaleString()
+                          : 'N/A'}
+                      </span>
+                    </div>
+                  </div>
+
+                  {selectedOrder.cancellation_request.estimated_refund_amount !== undefined && (
+                    <div className="text-xs flex items-center justify-between bg-slate-950/40 p-2 rounded-xl border border-slate-800">
+                      <span className="text-slate-400">Estimated Refund Amount:</span>
+                      <span className="font-mono font-bold text-emerald-400">
+                        ₹{selectedOrder.cancellation_request.estimated_refund_amount}
+                      </span>
+                    </div>
+                  )}
+
+                  {selectedOrder.cancellation_request.customer_comment && (
+                    <div className="text-xs bg-slate-950/60 p-2.5 rounded-xl border border-slate-800 text-slate-300">
+                      <span className="text-slate-400 font-semibold block text-[10px] uppercase">
+                        Customer Comments:
+                      </span>
+                      &quot;{selectedOrder.cancellation_request.customer_comment}&quot;
+                    </div>
+                  )}
+
+                  {selectedOrder.cancellation_request.status === 'rejected' && (
+                    <div className="text-xs bg-red-950/30 p-2.5 rounded-xl border border-red-500/30 text-red-300 space-y-1">
+                      <span className="font-bold block text-[10px] uppercase text-red-400">
+                        Rejection Details:
+                      </span>
+                      <p>
+                        <strong>Reason:</strong>{' '}
+                        {selectedOrder.cancellation_request.rejection_reason || 'N/A'}
+                      </p>
+                      {selectedOrder.cancellation_request.admin_comment && (
+                        <p>
+                          <strong>Admin Note:</strong>{' '}
+                          {selectedOrder.cancellation_request.admin_comment}
+                        </p>
+                      )}
+                      <p className="text-[10px] text-slate-400">
+                        Reviewed by: {selectedOrder.cancellation_request.reviewed_by} (
+                        {selectedOrder.cancellation_request.reviewer_role}) on{' '}
+                        {new Date(selectedOrder.cancellation_request.reviewed_at || '').toLocaleString()}
+                      </p>
+                    </div>
+                  )}
+
+                  {selectedOrder.cancellation_request.status === 'approved' && (
+                    <div className="text-xs bg-emerald-950/30 p-2.5 rounded-xl border border-emerald-500/30 text-emerald-300">
+                      <span className="font-bold block text-[10px] uppercase text-emerald-400">
+                        Approval Details:
+                      </span>
+                      <p>
+                        Approved by {selectedOrder.cancellation_request.reviewed_by} (
+                        {selectedOrder.cancellation_request.reviewer_role})
+                        {selectedOrder.cancellation_request.approved_refund_amount !== undefined && (
+                          <span>
+                            {' '}
+                            • Approved Refund: ₹
+                            {selectedOrder.cancellation_request.approved_refund_amount}
+                          </span>
+                        )}
+                      </p>
+                    </div>
+                  )}
+
+                  {/* Quick Action buttons for pending request */}
+                  {selectedOrder.cancellation_request.status === 'requested' &&
+                    (hasPermission('canApproveCancellationRequests') ||
+                      currentUser?.role === 'ROOT_ADMIN') && (
+                      <div className="flex gap-2 pt-2 border-t border-amber-500/20">
+                        <button
+                          onClick={() => openApproveModal(selectedOrder)}
+                          className="flex-1 py-2 px-3 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-xl transition cursor-pointer flex items-center justify-center gap-1.5 shadow-md"
+                        >
+                          <CheckCircle className="w-3.5 h-3.5" />
+                          <span>Approve Cancellation</span>
+                        </button>
+                        <button
+                          onClick={() => openRejectModal(selectedOrder)}
+                          className="flex-1 py-2 px-3 bg-red-600/30 hover:bg-red-600/50 border border-red-500/40 text-red-300 font-bold text-xs rounded-xl transition cursor-pointer flex items-center justify-center gap-1.5"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                          <span>Reject Request</span>
+                        </button>
+                      </div>
+                    )}
                 </div>
               )}
 
@@ -1952,6 +2259,227 @@ export default function AdminOrdersTab() {
                   </form>
                 );
               })()}
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* ─── MODAL: APPROVE CUSTOMER CANCELLATION REQUEST (Requirements 3, 6, 7) ─── */}
+      <AnimatePresence>
+        {approvalModalOrder && (
+          <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4">
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-slate-900 border border-slate-800 rounded-3xl max-w-md w-full p-6 text-slate-100 space-y-4 shadow-2xl"
+            >
+              <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+                <div className="flex items-center gap-2">
+                  <div className="w-8 h-8 rounded-xl bg-emerald-600/30 text-emerald-400 border border-emerald-500/40 flex items-center justify-center">
+                    <CheckCircle className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-white text-base">Approve Cancellation Request</h3>
+                    <p className="text-xs text-emerald-300 font-mono">
+                      {approvalModalOrder.order_number}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setApprovalModalOrder(null)}
+                  className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {(() => {
+                const metrics = calculateOrderRefundableMetrics(approvalModalOrder);
+                return (
+                  <form onSubmit={handleApproveSubmit} className="space-y-4">
+                    <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 text-xs space-y-1.5">
+                      <div className="flex justify-between">
+                        <span className="text-slate-400">Customer:</span>
+                        <span className="font-bold text-white">{approvalModalOrder.customer_name}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-400">Customer Reason:</span>
+                        <span className="font-semibold text-amber-300">
+                          {approvalModalOrder.cancellation_request?.reason || 'Customer requested cancellation'}
+                        </span>
+                      </div>
+                      {approvalModalOrder.cancellation_request?.customer_comment && (
+                        <div className="text-slate-400 italic bg-slate-900 p-2 rounded-lg border border-slate-800">
+                          &quot;{approvalModalOrder.cancellation_request.customer_comment}&quot;
+                        </div>
+                      )}
+                      <div className="flex justify-between pt-1 border-t border-slate-800 text-[11px]">
+                        <span className="text-slate-400">Total Paid Amount:</span>
+                        <span className="font-mono font-bold text-emerald-400">₹{metrics.paidAmount}</span>
+                      </div>
+                      <div className="flex justify-between text-[11px]">
+                        <span className="text-slate-400">Remaining Refundable:</span>
+                        <span className="font-mono font-bold text-cyan-400">₹{metrics.remainingRefundableAmount}</span>
+                      </div>
+                    </div>
+
+                    {metrics.remainingRefundableAmount > 0 && (
+                      <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 space-y-2">
+                        <div className="flex items-center justify-between">
+                          <label className="text-xs text-slate-300 flex items-center gap-2 cursor-pointer font-medium">
+                            <input
+                              type="checkbox"
+                              checked={approvalInitiateRefund}
+                              onChange={(e) => setApprovalInitiateRefund(e.target.checked)}
+                              className="rounded border-slate-700 bg-slate-800 text-emerald-500 focus:ring-0"
+                            />
+                            <span>Execute Gateway Refund</span>
+                          </label>
+                          <span className="text-[10px] text-cyan-400 font-mono">Automatic API</span>
+                        </div>
+
+                        {approvalInitiateRefund && (
+                          <div>
+                            <label className="block text-[11px] font-semibold text-slate-400 mb-1">
+                              Refund Amount (₹) [Max ₹{metrics.remainingRefundableAmount}]
+                            </label>
+                            <input
+                              type="number"
+                              step="0.01"
+                              min="0"
+                              max={metrics.remainingRefundableAmount}
+                              value={approvalRefundAmount}
+                              onChange={(e) => setApprovalRefundAmount(e.target.value)}
+                              placeholder={`₹${metrics.remainingRefundableAmount}`}
+                              className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white font-mono text-xs focus:outline-none focus:border-cyan-500"
+                            />
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    <div className="p-2.5 bg-emerald-950/20 border border-emerald-500/30 rounded-xl text-[11px] text-emerald-300">
+                      Approving will mark the order as <strong>CANCELLED</strong> and synchronize with the customer&apos;s Track Order page in real time.
+                    </div>
+
+                    <div className="flex gap-2 pt-1">
+                      <button
+                        type="button"
+                        onClick={() => setApprovalModalOrder(null)}
+                        className="flex-1 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold rounded-xl transition cursor-pointer"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="submit"
+                        disabled={isApprovingRequest}
+                        className="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-xl transition shadow-lg shadow-emerald-600/30 flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-60"
+                      >
+                        <CheckCircle className="w-3.5 h-3.5" />
+                        <span>{isApprovingRequest ? 'Approving...' : 'Confirm Approval'}</span>
+                      </button>
+                    </div>
+                  </form>
+                );
+              })()}
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* ─── MODAL: REJECT CUSTOMER CANCELLATION REQUEST (Requirements 3, 6, 8) ─── */}
+      <AnimatePresence>
+        {rejectionModalOrder && (
+          <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4">
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-slate-900 border border-slate-800 rounded-3xl max-w-md w-full p-6 text-slate-100 space-y-4 shadow-2xl"
+            >
+              <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+                <div className="flex items-center gap-2">
+                  <div className="w-8 h-8 rounded-xl bg-red-600/30 text-red-400 border border-red-500/40 flex items-center justify-center">
+                    <X className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-white text-base">Reject Cancellation Request</h3>
+                    <p className="text-xs text-red-300 font-mono">
+                      {rejectionModalOrder.order_number}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setRejectionModalOrder(null)}
+                  className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <form onSubmit={handleRejectSubmit} className="space-y-4">
+                <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 text-xs space-y-1">
+                  <p className="text-slate-400">
+                    Customer: <span className="text-white font-semibold">{rejectionModalOrder.customer_name}</span>
+                  </p>
+                  <p className="text-slate-400">
+                    Customer Reason: <span className="text-amber-300">{rejectionModalOrder.cancellation_request?.reason}</span>
+                  </p>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold uppercase tracking-wider text-slate-300 mb-1.5">
+                    Rejection Reason *
+                  </label>
+                  <select
+                    value={rejectionReason}
+                    onChange={(e) => setRejectionReason(e.target.value)}
+                    className="w-full px-3 py-2.5 bg-slate-800 border border-slate-700 rounded-xl text-white text-xs focus:outline-none focus:border-red-500"
+                  >
+                    <option value="Order has already entered dispatch processing">Order has already entered dispatch processing</option>
+                    <option value="Fresh food items have already been prepared and packed">Fresh food items have already been prepared and packed</option>
+                    <option value="Courier partner has already accepted pickup">Courier partner has already accepted pickup</option>
+                    <option value="Perishable goods cannot be cancelled after cooking">Perishable goods cannot be cancelled after cooking</option>
+                    <option value="Customer requested to continue fulfillment">Customer requested to continue fulfillment</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold uppercase tracking-wider text-slate-300 mb-1.5">
+                    Additional Admin Note (Visible to Customer)
+                  </label>
+                  <textarea
+                    rows={2}
+                    value={rejectionComment}
+                    onChange={(e) => setRejectionComment(e.target.value)}
+                    placeholder="e.g. Your package is packed with courier AWB and is on the way."
+                    className="w-full px-3.5 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white text-xs focus:outline-none focus:border-red-500 resize-none"
+                  />
+                </div>
+
+                <div className="p-2.5 bg-amber-950/20 border border-amber-500/30 rounded-xl text-[11px] text-amber-300">
+                  Rejecting will <strong>keep the order active</strong> in kitchen/delivery fulfillment and notify the customer of the decision.
+                </div>
+
+                <div className="flex gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => setRejectionModalOrder(null)}
+                    className="flex-1 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold rounded-xl transition cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isRejectingRequest}
+                    className="flex-1 py-2.5 bg-red-600 hover:bg-red-500 text-white text-xs font-bold rounded-xl transition shadow-lg shadow-red-600/30 flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-60"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                    <span>{isRejectingRequest ? 'Rejecting...' : 'Confirm Rejection'}</span>
+                  </button>
+                </div>
+              </form>
             </motion.div>
           </div>
         )}
