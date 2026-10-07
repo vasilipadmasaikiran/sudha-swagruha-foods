@@ -33,6 +33,7 @@ function ScrollToTop() {
 
 import { useProductStore } from '@/hooks/useProductStore';
 import { useSettingsStore } from '@/hooks/useSettingsStore';
+import { useAboutStore } from '@/hooks/useAboutStore';
 
 function AppLayout({ children }: { children: React.ReactNode }) {
   const { pathname } = useLocation();
@@ -40,22 +41,26 @@ function AppLayout({ children }: { children: React.ReactNode }) {
   
   const { fetchProducts, fetchCatalogAndSettings, subscribeToCatalogAndSettings } = useProductStore();
   const { fetchSettings, subscribeToSettings } = useSettingsStore();
+  const { fetchAboutContent, subscribeToAboutRealtime } = useAboutStore();
   
   useEffect(() => {
     // Initial fetch from cloud database
     fetchProducts();
     fetchCatalogAndSettings();
     fetchSettings();
+    fetchAboutContent();
 
     // Subscribe to live changes so customer storefront updates in real-time
     const unsubCatalog = subscribeToCatalogAndSettings();
     const unsubSettings = subscribeToSettings();
+    const unsubAbout = subscribeToAboutRealtime();
 
     return () => {
       unsubCatalog();
       unsubSettings();
+      unsubAbout();
     };
-  }, [fetchProducts, fetchCatalogAndSettings, subscribeToCatalogAndSettings, fetchSettings, subscribeToSettings]);
+  }, [fetchProducts, fetchCatalogAndSettings, subscribeToCatalogAndSettings, fetchSettings, subscribeToSettings, fetchAboutContent, subscribeToAboutRealtime]);
 
   if (isAdmin) {
     return <>{children}</>;
@@ -84,6 +89,7 @@ function AppRoutes() {
         <Route path="/order-success" element={<OrderSuccessPage />} />
         <Route path="/track-order" element={<TrackOrderPage />} />
         <Route path="/about" element={<AboutPage />} />
+        <Route path="/about-us" element={<AboutPage />} />
         <Route path="/contact" element={<ContactPage />} />
         <Route path="/admin-console" element={<AdminConsolePage />} />
         <Route path="/admin" element={<AdminConsolePage />} />

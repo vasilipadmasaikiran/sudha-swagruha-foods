@@ -30,6 +30,7 @@ export type AdminCategory =
   | 'inventory'
   | 'customers'
   | 'users'
+  | 'website'
   | 'settings';
 
 export interface RolePermissions {
@@ -44,13 +45,14 @@ export interface RolePermissions {
   canManageInventory: boolean;
   canManageProducts: boolean;
   canViewReports: boolean;
+  canManageAboutUs: boolean;
 }
 
 export const ROLE_DEFINITIONS: Record<AdminRole, RolePermissions> = {
   ROOT_ADMIN: {
     name: 'Root / Super Admin',
-    description: 'Full unrestricted access to all administration modules, user roles, orders, settings, and business configurations.',
-    allowedCategories: ['dashboard', 'orders', 'products', 'inventory', 'customers', 'users', 'settings'],
+    description: 'Full unrestricted access to all administration modules, user roles, orders, settings, website content, and business configurations.',
+    allowedCategories: ['dashboard', 'orders', 'products', 'inventory', 'customers', 'users', 'website', 'settings'],
     canManageUsers: true,
     canManageRoles: true,
     canConfigureSettings: true,
@@ -59,6 +61,7 @@ export const ROLE_DEFINITIONS: Record<AdminRole, RolePermissions> = {
     canManageInventory: true,
     canManageProducts: true,
     canViewReports: true,
+    canManageAboutUs: true,
   },
   STORE_KEEPER: {
     name: 'Store Keeper',
@@ -72,6 +75,7 @@ export const ROLE_DEFINITIONS: Record<AdminRole, RolePermissions> = {
     canManageInventory: true,
     canManageProducts: false,
     canViewReports: false,
+    canManageAboutUs: false,
   },
   ORDER_PROCESSOR: {
     name: 'Order Processor',
@@ -85,6 +89,7 @@ export const ROLE_DEFINITIONS: Record<AdminRole, RolePermissions> = {
     canManageInventory: false,
     canManageProducts: false,
     canViewReports: false,
+    canManageAboutUs: false,
   },
 };
 

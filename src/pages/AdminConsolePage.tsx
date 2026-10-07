@@ -36,6 +36,7 @@ import {
   Cloud,
   User,
   Users,
+  BookOpen,
 } from 'lucide-react';
 import { useProductStore, type DiscountAnnouncement, type CouponItem } from '@/hooks/useProductStore';
 import { useAuthStore } from '@/hooks/useStore';
@@ -51,6 +52,7 @@ import AdminSettingsTab from '@/components/admin/AdminSettingsTab';
 import AdminPaymentsTab from '@/components/admin/AdminPaymentsTab';
 import AdminDatabaseTab from '@/components/admin/AdminDatabaseTab';
 import AdminEmailTab from '@/components/admin/AdminEmailTab';
+import AdminAboutUsTab from '@/components/admin/AdminAboutUsTab';
 import AppImage from '@/components/common/AppImage';
 import { useAdminAuthStore, ROLE_DEFINITIONS, type AdminCategory, type AdminRole } from '@/hooks/useAdminAuthStore';
 import { categories, type Product, type ProductVariant } from '@/data/products';
@@ -67,6 +69,7 @@ export type ActiveCategoryTab =
 
 export type SettingsSubTab =
   | 'business'
+  | 'about-us'
   | 'email'
   | 'contact'
   | 'payments'
@@ -599,6 +602,18 @@ export default function AdminConsolePage() {
                       <Layers className="w-4 h-4 text-amber-400" />
                       <span>Stock Control</span>
                     </button>
+                    {canAccess('settings') && (
+                      <button
+                        onClick={() => {
+                          setActiveTab('settings');
+                          setSettingsSubTab('about-us');
+                        }}
+                        className="px-4 py-2 rounded-xl bg-amber-600/30 hover:bg-amber-600/50 text-amber-300 text-xs font-bold border border-amber-500/40 transition-all flex items-center gap-1.5 cursor-pointer"
+                      >
+                        <BookOpen className="w-4 h-4 text-amber-400" />
+                        <span>About Us CMS</span>
+                      </button>
+                    )}
                   </div>
                 </div>
 
@@ -928,6 +943,17 @@ export default function AdminConsolePage() {
                   </button>
 
                   <button
+                    onClick={() => setSettingsSubTab('about-us')}
+                    className={`px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                      settingsSubTab === 'about-us'
+                        ? 'bg-amber-600 text-white shadow-md'
+                        : 'text-slate-400 hover:text-white hover:bg-slate-800'
+                    }`}
+                  >
+                    📖 About Us Page CMS
+                  </button>
+
+                  <button
                     onClick={() => setSettingsSubTab('email')}
                     className={`px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
                       settingsSubTab === 'email'
@@ -996,6 +1022,7 @@ export default function AdminConsolePage() {
 
                 {/* Subtab Content */}
                 {settingsSubTab === 'business' && <AdminBusinessSettingsTab />}
+                {settingsSubTab === 'about-us' && <AdminAboutUsTab />}
                 {settingsSubTab === 'email' && <AdminEmailTab />}
                 {settingsSubTab === 'contact' && <AdminSettingsTab />}
                 {settingsSubTab === 'payments' && <AdminPaymentsTab />}

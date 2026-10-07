@@ -44,7 +44,7 @@ export default function Navbar() {
   const navLinks = [
     { href: '/', label: t.nav.home },
     { href: '/products', label: t.nav.products },
-    { href: '/about', label: t.nav.about },
+    { href: '/about-us', label: t.nav.about },
     { href: '/contact', label: t.nav.contact },
     { href: '/track-order', label: t.nav.trackOrder },
   ];
@@ -89,7 +89,7 @@ export default function Navbar() {
                   key={link.href}
                   to={link.href}
                   className={`text-sm font-medium transition-colors hover:text-brand-green ${
-                    location.pathname === link.href
+                    location.pathname === link.href || (link.href === '/about-us' && location.pathname === '/about')
                       ? 'text-brand-green font-semibold'
                       : 'text-gray-700'
                   }`}
@@ -201,7 +201,7 @@ export default function Navbar() {
                     key={link.href}
                     to={link.href}
                     className={`block px-4 py-3 rounded-xl text-sm font-medium transition-colors ${
-                      location.pathname === link.href
+                      location.pathname === link.href || (link.href === '/about-us' && location.pathname === '/about')
                         ? 'bg-brand-light-green text-brand-green font-semibold'
                         : 'text-gray-700 hover:bg-gray-50'
                     }`}

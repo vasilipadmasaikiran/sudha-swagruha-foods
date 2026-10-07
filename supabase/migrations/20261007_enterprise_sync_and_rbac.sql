@@ -100,6 +100,62 @@ SET
   value = store_settings.value || EXCLUDED.value,
   updated_at = NOW();
 
+-- Seed default About Us page CMS content
+INSERT INTO public.store_settings (key, value)
+VALUES (
+  'about_us_content',
+  '{
+    "isPublished": true,
+    "pageTitle": "From Amma’s Kitchen to Your Home",
+    "pageSubtitle": "30+ Years of Authentic Telugu Heritage & Love",
+    "heroImage": "https://images.unsplash.com/photo-1596040033229-a9821ebd058d?w=1600&auto=format&fit=crop&q=80",
+    "introduction": "For over three decades, Sudha Swagruha Foods has been dedicated to preserving the golden flavors of authentic Andhra and Telangana kitchens. Every pickle, podi, and sweet is prepared by hand using age-old ancestral recipes, sun-dried chillies, and cold-pressed oils.",
+    "ourStory": "Our journey began in 1994 in a small traditional kitchen in Benz Circle, Vijayawada. Smt. Sudha Rani began making traditional Avakaya pickles and Kandi Podi for neighbours and relatives who longed for the authentic taste of their grandmother''s cooking.\n\nWord of mouth quickly turned a modest kitchen into a beloved regional brand. What set us apart was an uncompromising rule that continues today: never use commercial preservatives, artificial vinegar, or artificial food colors.\n\nToday, while we deliver to homes across India and across the globe, our preparation remains strictly small-batch. Our spices are stone-pounded, our mangoes are hand-selected from Rajahmundry orchards, and our sweets are made fresh daily in pure organic ghee.",
+    "storyImage": "https://images.unsplash.com/photo-1610057099443-fde8c4d50f91?w=1000&auto=format&fit=crop&q=80",
+    "mission": "To bring genuine homemade warmth, uncompromising nutrition, and nostalgic ancestral Telugu recipes to food lovers worldwide without modern shortcuts or artificial chemicals.",
+    "vision": "To become the world’s most trusted ambassador of South Indian heritage delicacies, celebrating the selfless love of home cooks and empowering traditional artisans.",
+    "values": [
+      { "id": "val-1", "title": "100% Homemade (అమ్మ చేతి ప్రేమ)", "description": "Cooked in micro-batches with patience and ancestral wisdom, exactly like home.", "iconName": "Heart" },
+      { "id": "val-2", "title": "Wood-Pressed Oils & Pure Spices", "description": "We use genuine cold-pressed groundnut and sesame oils with zero blends.", "iconName": "Leaf" },
+      { "id": "val-3", "title": "Zero Chemical Preservatives", "description": "Preserved naturally using sea salt, roasted mustard, turmeric, and pure oils.", "iconName": "ShieldCheck" },
+      { "id": "val-4", "title": "Unbroken Heritage Recipes", "description": "Recipes handed down over three generations with exact traditional proportions.", "iconName": "Award" }
+    ],
+    "people": [
+      {
+        "id": "person-1",
+        "name": "Smt. Sudha Rani V.",
+        "designation": "Founder & Master Recipe Curator",
+        "profileImage": "https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=600&auto=format&fit=crop&q=80",
+        "shortBio": "Began crafting authentic Andhra pickles in 1994, safeguarding 40+ heirloom family recipes.",
+        "detailedBio": "Smt. Sudha Rani pioneered the concept of pure traditional homemade foods in Vijayawada. Her deep understanding of spice balances, seasonal pickling cycles, and fermentation techniques remains the gold standard of every product that leaves our facility.",
+        "displayOrder": 1,
+        "isActive": true
+      },
+      {
+        "id": "person-2",
+        "name": "Sri Padmasaikiran V.",
+        "designation": "Managing Director & Operations Head",
+        "profileImage": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=600&auto=format&fit=crop&q=80",
+        "shortBio": "Spearheading hygienic packaging, international logistics, and direct farm sourcing.",
+        "detailedBio": "With a passion for authentic culinary heritage and supply-chain precision, Sri Padmasaikiran ensures our farm-fresh Guntur chillies, Guntur garlic, and organic spices reach kitchen tables fresh, securely packaged, and on schedule.",
+        "displayOrder": 2,
+        "isActive": true
+      },
+      {
+        "id": "person-3",
+        "name": "Chef Lakshmi Prasanna",
+        "designation": "Head of Quality & Traditional Sweets",
+        "profileImage": "https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=600&auto=format&fit=crop&q=80",
+        "shortBio": "Oversees artisanal sweet-making: Bellam Pootharekulu, Sunnundalu, and Kakinada Khaja.",
+        "detailedBio": "Specializing in organic jaggery-based Telugu delicacies, Lakshmi guarantees that each piece of sweet has the delicate balance of roasted urad dal, fragrant cardamom, and pure country cow ghee.",
+        "displayOrder": 3,
+        "isActive": true
+      }
+    ]
+  }'::jsonb
+)
+ON CONFLICT (key) DO NOTHING;
+
 -- 5. Enable Row Level Security (RLS)
 ALTER TABLE public.orders ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.admin_users ENABLE ROW LEVEL SECURITY;

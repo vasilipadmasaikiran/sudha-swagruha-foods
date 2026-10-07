@@ -99,3 +99,20 @@ export async function logAdminAction(
     details: sanitizedDetails,
   });
 }
+
+export function logAuditEvent(params: {
+  user_email: string;
+  action: string;
+  entity: string;
+  entity_id?: string;
+  metadata?: Record<string, unknown>;
+}) {
+  return logAdminAction(
+    params.user_email,
+    'ROOT_ADMIN',
+    params.action,
+    params.entity,
+    params.entity_id,
+    params.metadata
+  );
+}
