@@ -3,12 +3,21 @@
 // Replace with real Supabase data in production
 // ============================================================
 
+export type MeasurementUnit = 'g' | 'kg' | 'ml' | 'l' | 'pcs' | 'packs';
+export type PricingModel = 'fixed_pack' | 'per_unit';
+export type ProductStatus = 'active' | 'low_stock' | 'out_of_stock' | 'inactive' | 'archived';
+
 export interface ProductVariant {
+  id?: string;
   weight: string;
   price: number;
   comparePrice?: number;
   stock: number;
+  reservedStock?: number;
   sku: string;
+  weightValue?: number;
+  unit?: MeasurementUnit;
+  is_active?: boolean;
 }
 
 export interface Product {
@@ -23,12 +32,22 @@ export interface Product {
   ingredients_en: string;
   ingredients_te: string;
   variants: ProductVariant[];
+  base_unit?: MeasurementUnit;
+  pricing_model?: PricingModel;
+  base_price_per_unit?: number;
+  min_order_qty?: number;
+  max_order_qty?: number;
+  qty_step?: number;
+  low_stock_threshold?: number;
+  status?: ProductStatus;
   is_active: boolean;
+  is_archived?: boolean;
   is_demo: boolean;
   badge?: 'new' | 'hot' | 'bestseller';
   rating?: number;
   reviewCount?: number;
   created_at: string;
+  updated_at?: string;
 }
 
 export interface Category {

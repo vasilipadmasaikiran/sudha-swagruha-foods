@@ -31,6 +31,8 @@ import {
   Receipt,
   Sparkles,
   Check,
+  CreditCard,
+  CheckCircle2,
 } from 'lucide-react';
 import { useOrderStore } from '@/hooks/useOrderStore';
 import { useAdminAuthStore } from '@/hooks/useAdminAuthStore';
@@ -143,11 +145,16 @@ export default function AdminOrdersTab() {
   const [refundReason, setRefundReason] = useState('Administrative compensation / partial refund');
   const [isProcessingRefund, setIsProcessingRefund] = useState(false);
 
-  // Manual / Offline Payment Recording State (Requirements 15, 16, 17)
+  // Manual / Offline Payment Recording State (Requirements 1-9)
   const [isRecordingPayment, setIsRecordingPayment] = useState(false);
   const [paymentInputAmount, setPaymentInputAmount] = useState<string>('');
-  const [paymentInputMethod, setPaymentInputMethod] = useState<string>('upi');
+  const [paymentInputMethod, setPaymentInputMethod] = useState<string>('cash');
   const [paymentInputRef, setPaymentInputRef] = useState<string>('');
+  const [paymentInputDate, setPaymentInputDate] = useState<string>(
+    new Date().toISOString().slice(0, 10)
+  );
+  const [paymentInputNotes, setPaymentInputNotes] = useState<string>('');
+  const [paymentValidationError, setPaymentValidationError] = useState<string | null>(null);
   const [isSubmittingPayment, setIsSubmittingPayment] = useState(false);
 
   // Auto-fetch from Supabase on mount and listen to realtime updates
@@ -1896,119 +1903,264 @@ export default function AdminOrdersTab() {
                       </div>
                     </div>
 
-                    {/* Dedicated Payment History Section (Requirement 17) */}
-                    <div className="p-4 bg-slate-950/80 rounded-2xl border border-slate-800 space-y-2.5">
+                    {/* ─── MANUAL PAYMENT SECTION (Requirements 1-9) ─── */}
+                    <div className="p-4 bg-slate-950/80 rounded-2xl border border-slate-800 space-y-3">
                       <div className="flex items-center justify-between pb-2 border-b border-slate-800">
-                        <span className="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-1.5">
-                          <Receipt className="w-4 h-4 text-blue-400" />
-                          <span>Payment History</span>
-                        </span>
-                        <div className="flex items-center gap-2">
-                          <span className="text-[11px] text-slate-400 font-mono">
-                            {paymentRecords.length} record{paymentRecords.length === 1 ? '' : 's'}
+                        <div>
+                          <span className="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-1.5">
+                            <CreditCard className="w-4 h-4 text-emerald-400" />
+                            <span>Manual Payment Received</span>
                           </span>
-                          {amountDue > 0 && selectedOrder.order_status !== 'cancelled' && (
-                            <button
-                              onClick={() => {
-                                setPaymentInputAmount(amountDue.toString());
-                                setIsRecordingPayment((prev) => !prev);
-                              }}
-                              className="px-2 py-0.5 bg-blue-600/30 hover:bg-blue-600/50 text-blue-300 border border-blue-500/40 rounded-lg text-[10px] font-bold cursor-pointer transition-colors"
-                            >
-                              {isRecordingPayment ? 'Cancel' : '+ Record Payment'}
-                            </button>
-                          )}
+                          <p className="text-[11px] text-slate-400 mt-0.5">
+                            Record full or partial offline payments. Updates database, orders, and dashboard in realtime.
+                          </p>
+                        </div>
+                        <span
+                          className={`text-[10px] font-bold px-2 py-0.5 rounded-full border uppercase ${
+                            selectedOrder.payment_status === 'paid'
+                              ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30'
+                              : selectedOrder.payment_status === 'partially_paid'
+                              ? 'bg-blue-500/20 text-blue-400 border-blue-500/30'
+                              : 'bg-amber-500/20 text-amber-400 border-amber-500/30'
+                          }`}
+                        >
+                          Status: {selectedOrder.payment_status.toUpperCase()}
+                        </span>
+                      </div>
+
+                      {/* Financial Status Quick Glance */}
+                      <div className="grid grid-cols-3 gap-2 text-xs font-mono bg-slate-900/80 p-3 rounded-xl border border-slate-800">
+                        <div>
+                          <span className="text-[10px] font-sans text-slate-400 block">Order Total:</span>
+                          <span className="font-bold text-white text-sm">₹{selectedOrder.total}</span>
+                        </div>
+                        <div>
+                          <span className="text-[10px] font-sans text-emerald-400 block">Amount Received:</span>
+                          <span className="font-bold text-emerald-400 text-sm">₹{amountPaid}</span>
+                        </div>
+                        <div>
+                          <span className="text-[10px] font-sans text-amber-400 block">Amount Due:</span>
+                          <span className="font-bold text-amber-400 text-sm">₹{amountDue}</span>
                         </div>
                       </div>
 
-                      {/* Inline Record Payment Form */}
-                      {isRecordingPayment && (
-                        <div className="p-3 bg-slate-900 rounded-xl border border-blue-500/30 space-y-2 text-xs">
-                          <p className="font-bold text-white text-[11px] flex items-center gap-1">
-                            <span>Record Manual / Offline Payment</span>
-                            <span className="text-slate-400 font-normal">(Outstanding Due: ₹{amountDue})</span>
-                          </p>
-                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                            <div>
-                              <label className="text-[10px] text-slate-400 block mb-0.5">Amount (₹)</label>
-                              <input
-                                type="number"
-                                step="0.01"
-                                max={amountDue}
-                                value={paymentInputAmount}
-                                onChange={(e) => setPaymentInputAmount(e.target.value)}
-                                className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1 text-white font-mono"
-                                placeholder={`Max ₹${amountDue}`}
-                              />
+                      {/* Validation Error Alert Banner */}
+                      {paymentValidationError && (
+                        <div className="p-3 bg-red-950/60 border border-red-500/40 rounded-xl text-xs text-red-200 flex items-start gap-2">
+                          <AlertTriangle className="w-4 h-4 text-red-400 flex-shrink-0 mt-0.5" />
+                          <div>
+                            <span className="font-bold block text-red-300">Payment Validation Error</span>
+                            <span>{paymentValidationError}</span>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Manual Payment Input Form */}
+                      {amountDue > 0 ? (
+                        <div className="p-3.5 bg-slate-900/90 rounded-xl border border-emerald-500/30 space-y-3 text-xs">
+                          <div className="flex items-center justify-between">
+                            <span className="font-bold text-white flex items-center gap-1.5">
+                              <span>Enter Payment Details</span>
+                            </span>
+                            <div className="flex gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setPaymentInputAmount(amountDue.toString());
+                                  setPaymentValidationError(null);
+                                }}
+                                className="px-2 py-0.5 rounded bg-emerald-600/30 hover:bg-emerald-600/50 text-emerald-300 border border-emerald-500/40 text-[10px] font-bold cursor-pointer"
+                              >
+                                Pay Full Due (₹{amountDue})
+                              </button>
+                              {amountDue > 100 && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setPaymentInputAmount((Math.round(amountDue / 2)).toString());
+                                    setPaymentValidationError(null);
+                                  }}
+                                  className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-[10px] cursor-pointer"
+                                >
+                                  Half (₹{Math.round(amountDue / 2)})
+                                </button>
+                              )}
                             </div>
+                          </div>
+
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                             <div>
-                              <label className="text-[10px] text-slate-400 block mb-0.5">Payment Method</label>
+                              <label className="text-[11px] font-semibold text-slate-300 block mb-1">
+                                Amount Received (₹) *
+                              </label>
+                              <div className="relative">
+                                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 font-mono">₹</span>
+                                <input
+                                  type="number"
+                                  step="0.01"
+                                  min="1"
+                                  max={amountDue}
+                                  value={paymentInputAmount}
+                                  onChange={(e) => {
+                                    setPaymentInputAmount(e.target.value);
+                                    setPaymentValidationError(null);
+                                  }}
+                                  className="w-full bg-slate-950 border border-slate-700 rounded-xl pl-7 pr-3 py-2 text-white font-mono text-sm focus:border-emerald-500 focus:outline-none"
+                                  placeholder={`Max ₹${amountDue}`}
+                                  required
+                                />
+                              </div>
+                            </div>
+
+                            <div>
+                              <label className="text-[11px] font-semibold text-slate-300 block mb-1">
+                                Payment Method *
+                              </label>
                               <select
                                 value={paymentInputMethod}
                                 onChange={(e) => setPaymentInputMethod(e.target.value)}
-                                className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1 text-white capitalize"
+                                className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white text-xs focus:border-emerald-500 focus:outline-none capitalize"
                               >
-                                <option value="upi">UPI / GPay / PhonePe</option>
-                                <option value="cash_on_delivery">Cash on Delivery (COD)</option>
-                                <option value="card">Debit / Credit Card</option>
-                                <option value="bank_transfer">Bank Transfer / NEFT</option>
-                                <option value="manual">Other Manual</option>
+                                <option value="cash">Cash</option>
+                                <option value="upi">UPI (GPay / PhonePe / Paytm)</option>
+                                <option value="bank_transfer">Bank Transfer (NEFT / IMPS / RTGS)</option>
+                                <option value="cheque">Cheque</option>
+                                <option value="card">Card (Debit / Credit)</option>
+                                <option value="other">Other</option>
                               </select>
                             </div>
+
                             <div>
-                              <label className="text-[10px] text-slate-400 block mb-0.5">Txn / Ref Number</label>
+                              <label className="text-[11px] font-semibold text-slate-300 block mb-1">
+                                Payment Reference / Transaction ID
+                              </label>
                               <input
                                 type="text"
                                 value={paymentInputRef}
                                 onChange={(e) => setPaymentInputRef(e.target.value)}
-                                className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1 text-white font-mono"
-                                placeholder="e.g. UPI-198273"
+                                className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white font-mono text-xs focus:border-emerald-500 focus:outline-none"
+                                placeholder="e.g. CASH-1002 or UPI-987213"
+                              />
+                            </div>
+
+                            <div>
+                              <label className="text-[11px] font-semibold text-slate-300 block mb-1">
+                                Payment Date
+                              </label>
+                              <input
+                                type="date"
+                                value={paymentInputDate}
+                                onChange={(e) => setPaymentInputDate(e.target.value)}
+                                className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white font-mono text-xs focus:border-emerald-500 focus:outline-none"
+                              />
+                            </div>
+
+                            <div className="sm:col-span-2">
+                              <label className="text-[11px] font-semibold text-slate-300 block mb-1">
+                                Notes (Optional)
+                              </label>
+                              <input
+                                type="text"
+                                value={paymentInputNotes}
+                                onChange={(e) => setPaymentInputNotes(e.target.value)}
+                                className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white text-xs focus:border-emerald-500 focus:outline-none"
+                                placeholder="e.g. Received partial advance cash from customer"
                               />
                             </div>
                           </div>
-                          <div className="flex justify-end gap-2 pt-1">
+
+                          <div className="flex justify-end gap-2 pt-2 border-t border-slate-800">
                             <button
-                              onClick={() => setIsRecordingPayment(false)}
-                              className="px-3 py-1 bg-slate-800 text-slate-300 rounded-lg text-xs hover:bg-slate-700 cursor-pointer"
-                            >
-                              Cancel
-                            </button>
-                            <button
+                              type="button"
                               disabled={isSubmittingPayment}
                               onClick={async () => {
                                 const amt = parseFloat(paymentInputAmount);
                                 if (isNaN(amt) || amt <= 0) {
-                                  toast.error('Please enter a valid payment amount');
+                                  setPaymentValidationError('Payment amount must be greater than ₹0.00');
                                   return;
                                 }
+                                if (amt > amountDue) {
+                                  setPaymentValidationError(
+                                    `Payment rejected: ₹${amt} exceeds outstanding due ₹${amountDue}. Total paid cannot exceed order total.`
+                                  );
+                                  return;
+                                }
+
                                 setIsSubmittingPayment(true);
+                                setPaymentValidationError(null);
                                 try {
                                   const res = await recordOrderPayment(selectedOrder.id, {
                                     amount: amt,
                                     paymentMethod: paymentInputMethod,
                                     transactionId: paymentInputRef || undefined,
+                                    paymentDate: paymentInputDate ? new Date(paymentInputDate).toISOString() : new Date().toISOString(),
+                                    notes: paymentInputNotes || undefined,
                                     recordedBy: currentUser?.full_name || 'Admin',
+                                    recordedByRole: currentUser?.role || 'Store Owner',
                                   });
+
                                   if (res.success && res.order) {
-                                    toast.success(`Payment of ₹${amt} recorded successfully!`);
+                                    toast.success(`Payment of ₹${amt.toLocaleString('en-IN')} recorded successfully!`);
                                     setSelectedOrder(res.order);
-                                    setIsRecordingPayment(false);
                                     setPaymentInputAmount('');
                                     setPaymentInputRef('');
+                                    setPaymentInputNotes('');
+                                    setPaymentValidationError(null);
+
+                                    // Auto-send payment confirmation email if customer has email address
+                                    if (res.order.customer_email) {
+                                      EmailService.sendPaymentConfirmation(
+                                        res.order,
+                                        {
+                                          amount: amt,
+                                          payment_method: paymentInputMethod,
+                                          reference: paymentInputRef || undefined,
+                                          payment_date: paymentInputDate,
+                                          notes: paymentInputNotes || undefined,
+                                          total_paid: res.order.amount_paid,
+                                          amount_due: res.order.amount_due,
+                                          payment_status: res.order.payment_status,
+                                        },
+                                        useSettingsStore.getState().settings
+                                      ).catch((err) => console.warn('Payment receipt email send failed:', err));
+                                    }
                                   } else {
+                                    setPaymentValidationError(res.error || 'Failed to record payment');
                                     toast.error(res.error || 'Failed to record payment');
                                   }
                                 } finally {
                                   setIsSubmittingPayment(false);
                                 }
                               }}
-                              className="px-3 py-1 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-bold cursor-pointer disabled:opacity-50"
+                              className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold cursor-pointer transition shadow-lg shadow-emerald-600/30 disabled:opacity-50 flex items-center gap-1.5"
                             >
-                              {isSubmittingPayment ? 'Saving...' : 'Confirm & Save Payment'}
+                              <CreditCard className="w-3.5 h-3.5" />
+                              <span>{isSubmittingPayment ? 'Recording...' : 'Record Payment'}</span>
                             </button>
                           </div>
                         </div>
+                      ) : (
+                        <div className="p-3 bg-emerald-950/30 border border-emerald-500/30 rounded-xl text-xs text-emerald-300 flex items-center justify-between">
+                          <span className="flex items-center gap-1.5 font-bold">
+                            <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                            <span>This order is fully paid. No outstanding balance due.</span>
+                          </span>
+                          <span className="font-mono font-bold text-white">Paid: ₹{amountPaid} / ₹{selectedOrder.total}</span>
+                        </div>
                       )}
+                    </div>
+
+                    {/* Dedicated Payment History Section (Requirement 6) */}
+                    <div className="p-4 bg-slate-950/80 rounded-2xl border border-slate-800 space-y-2.5">
+                      <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+                        <span className="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-1.5">
+                          <Receipt className="w-4 h-4 text-blue-400" />
+                          <span>Payment History</span>
+                        </span>
+                        <span className="text-[11px] text-slate-400 font-mono">
+                          {paymentRecords.length} record{paymentRecords.length === 1 ? '' : 's'}
+                        </span>
+                      </div>
 
                       {paymentRecords.length === 0 ? (
                         <p className="text-xs text-slate-500 italic py-2">
@@ -2020,9 +2172,10 @@ export default function AdminOrdersTab() {
                             <thead className="text-[10px] text-slate-400 uppercase border-b border-slate-800 font-sans">
                               <tr>
                                 <th className="py-2 pr-3">Date</th>
-                                <th className="py-2 pr-3">Transaction ID</th>
+                                <th className="py-2 pr-3">Method</th>
+                                <th className="py-2 pr-3">Reference / Txn ID</th>
                                 <th className="py-2 pr-3">Amount</th>
-                                <th className="py-2 pr-3">Method / Provider</th>
+                                <th className="py-2 pr-3">Recorded By</th>
                                 <th className="py-2 text-right">Status</th>
                               </tr>
                             </thead>
@@ -2030,12 +2183,23 @@ export default function AdminOrdersTab() {
                               {paymentRecords.map((pay, pIdx) => (
                                 <tr key={pIdx}>
                                   <td className="py-2 pr-3 text-slate-400">
-                                    {new Date(pay.paid_at).toLocaleDateString()}
+                                    {new Date(pay.paid_at || pay.created_at || Date.now()).toLocaleDateString('en-IN', {
+                                      day: '2-digit',
+                                      month: 'short',
+                                      year: 'numeric',
+                                    })}
                                   </td>
-                                  <td className="py-2 pr-3 text-white font-bold">{pay.transaction_id}</td>
-                                  <td className="py-2 pr-3 text-emerald-400 font-bold">₹{pay.amount}</td>
-                                  <td className="py-2 pr-3 text-slate-300 capitalize">
-                                    {pay.payment_method || 'Online'} ({pay.provider})
+                                  <td className="py-2 pr-3 text-white uppercase font-bold">
+                                    {pay.payment_method || pay.provider || 'Cash'}
+                                  </td>
+                                  <td className="py-2 pr-3 text-slate-300 font-mono">
+                                    {pay.transaction_id || pay.reference || '—'}
+                                  </td>
+                                  <td className="py-2 pr-3 text-emerald-400 font-bold font-mono">
+                                    ₹{pay.amount.toLocaleString('en-IN')}
+                                  </td>
+                                  <td className="py-2 pr-3 text-slate-400 font-sans text-[11px]">
+                                    {pay.recorded_by || 'Admin'}
                                   </td>
                                   <td className="py-2 text-right">
                                     <span
@@ -2045,7 +2209,7 @@ export default function AdminOrdersTab() {
                                           : 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
                                       }`}
                                     >
-                                      {pay.status}
+                                      {pay.status.toUpperCase()}
                                     </span>
                                   </td>
                                 </tr>

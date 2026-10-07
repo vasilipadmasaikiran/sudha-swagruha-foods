@@ -111,6 +111,16 @@ export interface DbProduct {
   stock: number;
   weight: string;
   sku: string;
+  variants?: any[];
+  base_unit?: string;
+  pricing_model?: string;
+  base_price_per_unit?: number | null;
+  min_order_qty?: number;
+  max_order_qty?: number;
+  qty_step?: number;
+  low_stock_threshold?: number;
+  status?: string;
+  is_archived?: boolean;
   is_active: boolean;
   created_at: string;
   updated_at: string;
@@ -190,16 +200,28 @@ export interface CustomerCancellationRequest {
 }
 
 export interface OrderPaymentRecord {
-  id: string; // e.g. "pay_1791234567" or razorpay payment id
+  id: string; // paymentId (e.g. "pay_1791234567")
+  payment_id?: string;
   order_id: string;
+  orderId?: string;
   order_number: string;
-  transaction_id: string;
+  transaction_id: string; // reference
+  reference?: string | null;
   amount: number;
   status: 'pending' | 'success' | 'failed' | 'refunded';
-  provider: string; // 'razorpay' | 'cash_on_delivery' | 'manual' | 'bank_transfer'
-  payment_method?: string | null; // 'card' | 'upi' | 'netbanking' | 'cod'
-  paid_at: string;
+  provider: string; // 'razorpay' | 'cash' | 'upi' | 'bank_transfer' | 'cheque' | 'card' | 'other' | 'manual'
+  payment_method?: string | null; // 'cash' | 'upi' | 'bank_transfer' | 'cheque' | 'card' | 'other'
+  paymentMethod?: string | null;
+  paid_at: string; // paymentDate
+  payment_date?: string;
+  paymentDate?: string;
   notes?: string | null;
+  recorded_by?: string | null;
+  recordedBy?: string | null;
+  recorded_by_role?: string | null;
+  recordedByRole?: string | null;
+  created_at?: string;
+  createdAt?: string;
 }
 
 export interface DbOrder {

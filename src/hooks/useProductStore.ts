@@ -6,6 +6,11 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { sampleProducts, type Product, type ProductVariant } from '@/data/products';
 import { productService, supabase, isSupabaseConfigured } from '@/services/supabase';
+import {
+  consolidateProductCatalog,
+  computeProductStatus,
+  type ConsolidationReport,
+} from '@/utils/productConsolidation';
 
 export interface DiscountAnnouncement {
   id: string;
@@ -57,6 +62,23 @@ interface ProductStore {
     comparePrice?: number,
     stock?: number
   ) => void;
+  adjustStock: (
+    productId: string,
+    variantIndex: number,
+    changeQty: number,
+    reason: string,
+    adjustedBy?: string
+  ) => { success: boolean; newStock: number; error?: string };
+  deductOrderStock: (
+    items: Array<{ productId: string; weight: string; quantity: number }>,
+    orderNumber: string
+  ) => boolean;
+  restockOrderItems: (
+    items: Array<{ productId: string; weight: string; quantity: number }>,
+    orderNumber: string,
+    reason?: string
+  ) => boolean;
+  consolidateCatalog: () => ConsolidationReport;
   resetToDefaults: () => void;
 
   // Announcement Actions
@@ -141,31 +163,8 @@ export const useProductStore = create<ProductStore>()(
         try {
           const dbProducts = await productService.getAll();
           if (dbProducts && dbProducts.length > 0) {
-            const mappedProducts: Product[] = dbProducts.map((dbP) => ({
-              id: dbP.id,
-              slug: dbP.slug,
-              name_en: dbP.name_en,
-              name_te: dbP.name_te,
-              description_en: dbP.description_en,
-              description_te: dbP.description_te,
-              category: dbP.category as any,
-              images: dbP.images,
-              ingredients_en: dbP.ingredients_en,
-              ingredients_te: dbP.ingredients_te,
-              is_active: dbP.is_active,
-              is_demo: false,
-              created_at: dbP.created_at,
-              variants: [
-                {
-                  weight: dbP.weight,
-                  price: dbP.price,
-                  comparePrice: dbP.compare_price || undefined,
-                  stock: dbP.stock,
-                  sku: dbP.sku,
-                },
-              ],
-            }));
-            set({ products: mappedProducts, isLoading: false });
+            const { products: consolidated } = consolidateProductCatalog(dbProducts);
+            set({ products: consolidated, isLoading: false });
           }
         } catch (err: any) {
           console.warn('Products fetch notice:', err.message);
@@ -335,12 +334,205 @@ export const useProductStore = create<ProductStore>()(
                 ...updatedVariants[variantIndex],
                 price,
                 ...(comparePrice !== undefined ? { comparePrice } : {}),
-                ...(stock !== undefined ? { stock } : {}),
+                ...(stock !== undefined ? { stock: Math.max(0, stock) } : {}),
               };
             }
-            return { ...p, variants: updatedVariants };
+            const totalStock = updatedVariants.reduce((sum, v) => sum + (v.stock || 0), 0);
+            const status = computeProductStatus(
+              p.is_active,
+              totalStock,
+              p.low_stock_threshold || 10,
+              p.is_archived
+            );
+            return { ...p, variants: updatedVariants, status };
           }),
         }));
+      },
+
+      adjustStock: (productId, variantIndex, changeQty, reason, adjustedBy = 'Admin') => {
+        let result = { success: false, newStock: 0, error: '' };
+        set((state) => {
+          const product = state.products.find((p) => p.id === productId);
+          if (!product || !product.variants[variantIndex]) {
+            result.error = 'Product or variant not found';
+            return state;
+          }
+
+          const targetVariant = product.variants[variantIndex];
+          const prevStock = targetVariant.stock || 0;
+          const calculatedStock = Math.max(0, prevStock + changeQty);
+
+          const updatedVariants = [...product.variants];
+          updatedVariants[variantIndex] = {
+            ...targetVariant,
+            stock: calculatedStock,
+          };
+
+          const totalStock = updatedVariants.reduce((sum, v) => sum + (v.stock || 0), 0);
+          const status = computeProductStatus(
+            product.is_active,
+            totalStock,
+            product.low_stock_threshold || 10,
+            product.is_archived
+          );
+
+          result = { success: true, newStock: calculatedStock, error: '' };
+
+          // Persist to audit history in localStorage
+          try {
+            const historyKey = 'ssf_inventory_history';
+            const raw = localStorage.getItem(historyKey);
+            const list = raw ? JSON.parse(raw) : [];
+            list.unshift({
+              id: `adj-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+              productId: product.id,
+              productName: product.name_en,
+              variantIndex,
+              weight: targetVariant.weight,
+              previousStock: prevStock,
+              newStock: calculatedStock,
+              changeQty,
+              reason,
+              adjustedBy,
+              timestamp: new Date().toISOString(),
+            });
+            localStorage.setItem(historyKey, JSON.stringify(list.slice(0, 100)));
+          } catch (e) {
+            console.warn('Inventory history log notice:', e);
+          }
+
+          return {
+            products: state.products.map((p) =>
+              p.id === productId ? { ...p, variants: updatedVariants, status } : p
+            ),
+          };
+        });
+        return result;
+      },
+
+      deductOrderStock: (items, orderNumber) => {
+        let allSuccess = true;
+        set((state) => {
+          const updatedProducts = state.products.map((prod) => {
+            const matchingItems = items.filter(
+              (it) => it.productId === prod.id || it.productId === prod.slug
+            );
+            if (matchingItems.length === 0) return prod;
+
+            const updatedVariants = [...prod.variants];
+            for (const item of matchingItems) {
+              const vIdx = updatedVariants.findIndex((v) => v.weight === item.weight);
+              if (vIdx >= 0) {
+                const currentStock = updatedVariants[vIdx].stock || 0;
+                const newStock = Math.max(0, currentStock - item.quantity);
+                updatedVariants[vIdx] = {
+                  ...updatedVariants[vIdx],
+                  stock: newStock,
+                };
+
+                // Audit log
+                try {
+                  const historyKey = 'ssf_inventory_history';
+                  const raw = localStorage.getItem(historyKey);
+                  const list = raw ? JSON.parse(raw) : [];
+                  list.unshift({
+                    id: `adj-order-${Date.now()}-${vIdx}`,
+                    productId: prod.id,
+                    productName: prod.name_en,
+                    variantIndex: vIdx,
+                    weight: item.weight,
+                    previousStock: currentStock,
+                    newStock,
+                    changeQty: -item.quantity,
+                    reason: `Customer Order ${orderNumber}`,
+                    adjustedBy: 'Checkout System',
+                    timestamp: new Date().toISOString(),
+                  });
+                  localStorage.setItem(historyKey, JSON.stringify(list.slice(0, 100)));
+                } catch (e) {
+                  console.warn('Inventory log notice:', e);
+                }
+              }
+            }
+
+            const totalStock = updatedVariants.reduce((sum, v) => sum + (v.stock || 0), 0);
+            const status = computeProductStatus(
+              prod.is_active,
+              totalStock,
+              prod.low_stock_threshold || 10,
+              prod.is_archived
+            );
+            return { ...prod, variants: updatedVariants, status };
+          });
+
+          return { products: updatedProducts };
+        });
+        return allSuccess;
+      },
+
+      restockOrderItems: (items, orderNumber, reason = 'Order Cancelled') => {
+        set((state) => {
+          const updatedProducts = state.products.map((prod) => {
+            const matchingItems = items.filter(
+              (it) => it.productId === prod.id || it.productId === prod.slug
+            );
+            if (matchingItems.length === 0) return prod;
+
+            const updatedVariants = [...prod.variants];
+            for (const item of matchingItems) {
+              const vIdx = updatedVariants.findIndex((v) => v.weight === item.weight);
+              if (vIdx >= 0) {
+                const currentStock = updatedVariants[vIdx].stock || 0;
+                const newStock = currentStock + item.quantity;
+                updatedVariants[vIdx] = {
+                  ...updatedVariants[vIdx],
+                  stock: newStock,
+                };
+
+                // Audit log
+                try {
+                  const historyKey = 'ssf_inventory_history';
+                  const raw = localStorage.getItem(historyKey);
+                  const list = raw ? JSON.parse(raw) : [];
+                  list.unshift({
+                    id: `adj-restock-${Date.now()}-${vIdx}`,
+                    productId: prod.id,
+                    productName: prod.name_en,
+                    variantIndex: vIdx,
+                    weight: item.weight,
+                    previousStock: currentStock,
+                    newStock,
+                    changeQty: +item.quantity,
+                    reason: `${reason} (${orderNumber})`,
+                    adjustedBy: 'System / Order Manager',
+                    timestamp: new Date().toISOString(),
+                  });
+                  localStorage.setItem(historyKey, JSON.stringify(list.slice(0, 100)));
+                } catch (e) {
+                  console.warn('Inventory restock log notice:', e);
+                }
+              }
+            }
+
+            const totalStock = updatedVariants.reduce((sum, v) => sum + (v.stock || 0), 0);
+            const status = computeProductStatus(
+              prod.is_active,
+              totalStock,
+              prod.low_stock_threshold || 10,
+              prod.is_archived
+            );
+            return { ...prod, variants: updatedVariants, status };
+          });
+
+          return { products: updatedProducts };
+        });
+        return true;
+      },
+
+      consolidateCatalog: () => {
+        const { products: consolidated, report } = consolidateProductCatalog(get().products);
+        set({ products: consolidated });
+        return report;
       },
 
       resetToDefaults: () => {
@@ -545,6 +737,12 @@ export const useProductStore = create<ProductStore>()(
         announcement: state.announcement,
         coupons: state.coupons,
       }),
+      onRehydrateStorage: () => (state) => {
+        if (state && Array.isArray(state.products) && state.products.length > 0) {
+          const { products: consolidated } = consolidateProductCatalog(state.products);
+          state.products = consolidated;
+        }
+      },
     }
   )
 );

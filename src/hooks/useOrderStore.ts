@@ -10,8 +10,9 @@ import { supabase, isSupabaseConfigured, normalizeOrderTracking } from '@/servic
 import { RefundService, calculateOrderRefundableMetrics, roundToTwoDecimals } from '@/services/refundService';
 import { NotificationService } from '@/services/notificationService';
 import { useSettingsStore } from '@/hooks/useSettingsStore';
+import { useProductStore } from '@/hooks/useProductStore';
 import { logAdminAction } from '@/services/auditLogger';
-import { roundToTwo, derivePaymentStatus } from '@/services/orderCalculationService';
+import { roundToTwo, derivePaymentStatus, validateManualPayment } from '@/services/orderCalculationService';
 
 export interface OrderUpdatePayload {
   order_status?: DbOrder['order_status'];
@@ -23,6 +24,9 @@ export interface OrderUpdatePayload {
   payment_status?: DbOrder['payment_status'];
   amount_paid?: number;
   amount_due?: number;
+  payments?: OrderPaymentRecord[];
+  refunds?: OrderRefundRecord[];
+  refunded_amount?: number;
 }
 
 interface OrderStore {
@@ -103,8 +107,10 @@ interface OrderStore {
       transactionId?: string;
       provider?: string;
       paymentMethod?: string;
+      paymentDate?: string;
       notes?: string;
       recordedBy?: string;
+      recordedByRole?: string;
     }
   ) => Promise<{ success: boolean; order?: DbOrder; error?: string }>;
   deleteOrder: (orderId: string) => Promise<void>;
@@ -304,6 +310,22 @@ export const useOrderStore = create<OrderStore>()(
           orders: [normalized, ...state.orders.filter((o) => o.order_number !== normalized.order_number)],
         }));
 
+        // Authoritative stock deduction across ordered variants
+        try {
+          if (Array.isArray(normalized.items)) {
+            useProductStore.getState().deductOrderStock(
+              normalized.items.map((it) => ({
+                productId: it.product_id,
+                weight: it.weight,
+                quantity: it.quantity,
+              })),
+              normalized.order_number
+            );
+          }
+        } catch (stockErr) {
+          console.warn('Inventory deduction notice:', stockErr);
+        }
+
         if (isSupabaseConfigured()) {
           try {
             const cleanUserNotes = (normalized.notes || '').replace(/\[SSF_TRACKING:[\s\S]*?\]/g, '').trim();
@@ -438,9 +460,9 @@ export const useOrderStore = create<OrderStore>()(
           cancelled_at: existing.cancelled_at || null,
           cancelled_by: existing.cancelled_by || null,
           cancellation_request: existing.cancellation_request || null,
-          refunded_amount: existing.refunded_amount || 0,
-          refunds: existing.refunds || [],
-          payments: existing.payments || [],
+          refunded_amount: payload.refunded_amount !== undefined ? payload.refunded_amount : (existing.refunded_amount || 0),
+          refunds: payload.refunds !== undefined ? payload.refunds : (existing.refunds || []),
+          payments: payload.payments !== undefined ? payload.payments : (existing.payments || []),
           taxable_amount: existing.taxable_amount,
           gst_rate: existing.gst_rate,
           gst_amount: existing.gst_amount,
@@ -463,6 +485,9 @@ export const useOrderStore = create<OrderStore>()(
           payment_status: newPaymentStatus,
           amount_paid: newAmountPaid,
           amount_due: newAmountDue,
+          payments: trackingMetadata.payments,
+          refunds: trackingMetadata.refunds,
+          refunded_amount: trackingMetadata.refunded_amount,
           tracking_id: newTrackingId,
           courier_name: newCourier,
           tracking_url: newTrackingUrl,
@@ -493,6 +518,9 @@ export const useOrderStore = create<OrderStore>()(
               tracking_url: newTrackingUrl,
               amount_paid: newAmountPaid,
               amount_due: newAmountDue,
+              payments: trackingMetadata.payments,
+              refunds: trackingMetadata.refunds,
+              refunded_amount: trackingMetadata.refunded_amount,
               taxable_amount: existing.taxable_amount,
               gst_rate: existing.gst_rate,
               gst_amount: existing.gst_amount,
@@ -612,6 +640,23 @@ export const useOrderStore = create<OrderStore>()(
             o.id === order.id || o.order_number === order.order_number ? updatedOrder : o
           ),
         }));
+
+        // Restock inventory for cancelled order items
+        try {
+          if (Array.isArray(order.items)) {
+            useProductStore.getState().restockOrderItems(
+              order.items.map((it) => ({
+                productId: it.product_id,
+                weight: it.weight,
+                quantity: it.quantity,
+              })),
+              order.order_number,
+              'Order Cancellation Restock'
+            );
+          }
+        } catch (restockErr) {
+          console.warn('Inventory restock notice:', restockErr);
+        }
 
         // Sync with Supabase DB
         if (isSupabaseConfigured()) {
@@ -1126,6 +1171,23 @@ export const useOrderStore = create<OrderStore>()(
           ),
         }));
 
+        // Restock inventory for cancelled item quantity
+        try {
+          useProductStore.getState().restockOrderItems(
+            [
+              {
+                productId: targetItem.product_id,
+                weight: targetItem.weight,
+                quantity: requestedCancelQty,
+              },
+            ],
+            order.order_number,
+            'Order Item Cancellation Restock'
+          );
+        } catch (restockErr) {
+          console.warn('Inventory item restock notice:', restockErr);
+        }
+
         // Sync with Supabase DB
         if (isSupabaseConfigured()) {
           try {
@@ -1268,59 +1330,78 @@ export const useOrderStore = create<OrderStore>()(
         return { success: true, order: updatedOrder, refund: refundRecord };
       },
 
-      // ─── Record Order Payment (Requirements 15, 16, 17, 20) ───────
+      // ─── Record Order Payment (Requirements 2-9) ───────
       recordOrderPayment: async (orderId, paymentData) => {
         const order = get().orders.find((o) => o.id === orderId || o.order_number === orderId);
         if (!order) {
-          return { success: false, error: 'Order not found' };
+          return { success: false, error: 'Order not found in database or store' };
         }
+
+        // 1. Authoritative Backend/Service Validation (Never trust frontend values)
+        const validation = validateManualPayment(order, paymentData.amount);
+        if (!validation.valid) {
+          return { success: false, error: validation.error };
+        }
+
         const now = new Date().toISOString();
-        const paymentAmount = roundToTwo(paymentData.amount);
-        if (isNaN(paymentAmount) || paymentAmount <= 0) {
-          return { success: false, error: 'Invalid payment amount' };
-        }
+        const paymentDate = paymentData.paymentDate || now;
+        const recordedBy = paymentData.recordedBy || 'Admin';
+        const recordedByRole = paymentData.recordedByRole || 'Store Owner';
+        const txnId = paymentData.transactionId?.trim() || `MANUAL-${Date.now().toString().slice(-6)}`;
+        const paymentMethod = paymentData.paymentMethod || 'cash';
 
         const newPayment: OrderPaymentRecord = {
           id: `pay_${Date.now()}`,
+          payment_id: `pay_${Date.now()}`,
           order_id: order.id,
+          orderId: order.id,
           order_number: order.order_number,
-          transaction_id: paymentData.transactionId || `TXN-${Date.now().toString().slice(-6)}`,
-          amount: paymentAmount,
+          transaction_id: txnId,
+          reference: txnId,
+          amount: validation.paymentAmount,
           status: 'success',
           provider: paymentData.provider || 'manual',
-          payment_method: paymentData.paymentMethod || 'upi',
-          paid_at: now,
-          notes: paymentData.notes || `Recorded by ${paymentData.recordedBy || 'Admin'}`,
+          payment_method: paymentMethod,
+          paymentMethod: paymentMethod,
+          paid_at: paymentDate,
+          payment_date: paymentDate,
+          paymentDate: paymentDate,
+          notes: paymentData.notes || `Manual payment recorded by ${recordedBy}`,
+          recorded_by: recordedBy,
+          recordedBy: recordedBy,
+          recorded_by_role: recordedByRole,
+          recordedByRole: recordedByRole,
+          created_at: now,
+          createdAt: now,
         };
 
         const existingPayments = Array.isArray(order.payments) ? [...order.payments] : [];
         const updatedPayments = [...existingPayments, newPayment];
-        const totalPaid = roundToTwo(
-          updatedPayments.reduce((sum, p) => (p.status === 'success' ? sum + p.amount : sum), 0)
-        );
-        const totalRefunded = roundToTwo(order.refunded_amount || 0);
-        const grandTotal = roundToTwo(order.total || 0);
-        const amountDue = Math.max(0, roundToTwo(grandTotal - totalPaid));
-        const newPaymentStatus = derivePaymentStatus(grandTotal, totalPaid, totalRefunded);
+        const totalPaid = validation.newTotalPaid;
+        const amountDue = validation.newAmountDue;
+        const newPaymentStatus = validation.newPaymentStatus;
 
         const updatedHistory: OrderStatusHistoryItem[] = [
           ...(order.order_status_history || []),
           {
             status: order.order_status,
             timestamp: now,
-            updated_by: paymentData.recordedBy || 'Admin',
-            notes: `Payment recorded: ₹${paymentAmount} via ${(paymentData.paymentMethod || 'Manual').toUpperCase()} (Ref: ${newPayment.transaction_id}). Total Paid: ₹${totalPaid}, Due: ₹${amountDue}`,
+            updated_by: recordedBy,
+            notes: `Manual payment recorded: ₹${validation.paymentAmount} via ${paymentMethod.toUpperCase()} (Ref: ${txnId}). Total Paid: ₹${totalPaid}, Due: ₹${amountDue}`,
           },
         ];
 
+        // 2. Persist to Supabase and update local state via updateOrderDetails
         const updatedOrder = await get().updateOrderDetails(order.id, {
           payment_status: newPaymentStatus,
           amount_paid: totalPaid,
           amount_due: amountDue,
+          payments: updatedPayments,
           notes: order.notes || undefined,
+          updated_by: recordedBy,
         });
 
-        // Ensure payments array and status history are explicitly preserved on order
+        // Ensure in-memory Zustand store is immediately updated with full payments array
         const finalOrder: DbOrder = {
           ...updatedOrder,
           payments: updatedPayments,
@@ -1336,9 +1417,18 @@ export const useOrderStore = create<OrderStore>()(
           ),
         }));
 
-        await logAdminAction(paymentData.recordedBy || 'Admin', 'ROOT_ADMIN', 'RECORD_PAYMENT', 'ORDER', order.order_number, {
-          amount: paymentAmount,
-          transactionId: newPayment.transaction_id,
+        // 3. Audit Logging: MANUAL_PAYMENT_RECORDED
+        await logAdminAction(recordedBy, recordedByRole, 'MANUAL_PAYMENT_RECORDED', 'ORDER', order.order_number, {
+          orderId: order.id,
+          paymentId: newPayment.id,
+          amount: validation.paymentAmount,
+          paymentMethod,
+          reference: txnId,
+          status: 'SUCCESS',
+          paymentDate,
+          notes: newPayment.notes,
+          recordedBy,
+          recordedByRole,
           totalPaid,
           amountDue,
           paymentStatus: newPaymentStatus,

@@ -18,17 +18,20 @@ import {
   Image as ImageIcon,
   CheckCircle2,
 } from 'lucide-react';
-import { useSettingsStore, type StoreSettings } from '@/hooks/useSettingsStore';
+import { useSettingsStore, defaultTaxSettings, type StoreSettings } from '@/hooks/useSettingsStore';
 import { useAdminAuthStore } from '@/hooks/useAdminAuthStore';
 import { logAdminAction } from '@/services/auditLogger';
 import AppImage from '@/components/common/AppImage';
 import toast from 'react-hot-toast';
 
 export default function AdminBusinessSettingsTab() {
-  const { settings, updateSettings, resetSettings } = useSettingsStore();
+  const { settings, updateSettings, updateTaxSettings, resetSettings } = useSettingsStore();
   const { currentUser } = useAdminAuthStore();
 
-  const [form, setForm] = useState<StoreSettings>({ ...settings });
+  const [form, setForm] = useState<StoreSettings>({
+    ...settings,
+    tax: settings.tax || defaultTaxSettings,
+  });
   const [isSaving, setIsSaving] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -41,6 +44,9 @@ export default function AdminBusinessSettingsTab() {
     setIsSaving(true);
     try {
       updateSettings(form);
+      if (form.tax) {
+        updateTaxSettings(form.tax);
+      }
 
       if (currentUser) {
         logAdminAction(
@@ -49,12 +55,12 @@ export default function AdminBusinessSettingsTab() {
           'UPDATE_BUSINESS_INFO',
           'SETTINGS',
           'store_contact',
-          { businessName: form.businessName }
+          { businessName: form.businessName, gstRate: form.tax?.gstRate }
         );
       }
 
       toast.success(
-        `Business branding saved! Storefront updated to "${form.businessName}"`,
+        `Business branding & Tax settings saved! Storefront updated to "${form.businessName}"`,
         { icon: '🌿', duration: 5000 }
       );
     } catch {
@@ -264,18 +270,297 @@ export default function AdminBusinessSettingsTab() {
               />
             </div>
 
+            {/* Detailed Physical Address Breakdown (Issue #4 & Requirement 22) */}
+            <div>
+              <label className="block font-bold uppercase tracking-wider text-slate-300 mb-1.5 text-xs">
+                Address Line 1 (Street / Landmark)
+              </label>
+              <input
+                type="text"
+                value={form.addressLine1 || ''}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setForm((prev) => ({
+                    ...prev,
+                    addressLine1: val,
+                    businessAddress: `${val}, ${prev.addressLine2 ? prev.addressLine2 + ', ' : ''}${prev.city || ''}, ${prev.state || ''} - ${prev.postalCode || ''}, ${prev.country || 'India'}`.trim(),
+                  }));
+                }}
+                placeholder="Plot 18, Traditional Foods Lane"
+                className="w-full px-3.5 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-white focus:outline-none focus:border-emerald-500 text-xs"
+              />
+            </div>
+
+            <div>
+              <label className="block font-bold uppercase tracking-wider text-slate-300 mb-1.5 text-xs">
+                Address Line 2 (Area / Locality)
+              </label>
+              <input
+                type="text"
+                value={form.addressLine2 || ''}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setForm((prev) => ({
+                    ...prev,
+                    addressLine2: val,
+                    businessAddress: `${prev.addressLine1 || ''}, ${val ? val + ', ' : ''}${prev.city || ''}, ${prev.state || ''} - ${prev.postalCode || ''}, ${prev.country || 'India'}`.trim(),
+                  }));
+                }}
+                placeholder="Benz Circle"
+                className="w-full px-3.5 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-white focus:outline-none focus:border-emerald-500 text-xs"
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block font-bold uppercase tracking-wider text-slate-300 mb-1.5 text-xs">
+                  City
+                </label>
+                <input
+                  type="text"
+                  value={form.city || ''}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setForm((prev) => ({
+                      ...prev,
+                      city: val,
+                      businessAddress: `${prev.addressLine1 || ''}, ${prev.addressLine2 ? prev.addressLine2 + ', ' : ''}${val}, ${prev.state || ''} - ${prev.postalCode || ''}, ${prev.country || 'India'}`.trim(),
+                    }));
+                  }}
+                  placeholder="Vijayawada"
+                  className="w-full px-3.5 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-white focus:outline-none focus:border-emerald-500 text-xs"
+                />
+              </div>
+
+              <div>
+                <label className="block font-bold uppercase tracking-wider text-slate-300 mb-1.5 text-xs">
+                  State
+                </label>
+                <input
+                  type="text"
+                  value={form.state || ''}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setForm((prev) => ({
+                      ...prev,
+                      state: val,
+                      businessAddress: `${prev.addressLine1 || ''}, ${prev.addressLine2 ? prev.addressLine2 + ', ' : ''}${prev.city || ''}, ${val} - ${prev.postalCode || ''}, ${prev.country || 'India'}`.trim(),
+                    }));
+                  }}
+                  placeholder="Andhra Pradesh"
+                  className="w-full px-3.5 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-white focus:outline-none focus:border-emerald-500 text-xs"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block font-bold uppercase tracking-wider text-slate-300 mb-1.5 text-xs">
+                  Postal / PIN Code
+                </label>
+                <input
+                  type="text"
+                  value={form.postalCode || ''}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setForm((prev) => ({
+                      ...prev,
+                      postalCode: val,
+                      businessAddress: `${prev.addressLine1 || ''}, ${prev.addressLine2 ? prev.addressLine2 + ', ' : ''}${prev.city || ''}, ${prev.state || ''} - ${val}, ${prev.country || 'India'}`.trim(),
+                    }));
+                  }}
+                  placeholder="520010"
+                  className="w-full px-3.5 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-white font-mono focus:outline-none focus:border-emerald-500 text-xs"
+                />
+              </div>
+
+              <div>
+                <label className="block font-bold uppercase tracking-wider text-slate-300 mb-1.5 text-xs">
+                  Country
+                </label>
+                <input
+                  type="text"
+                  value={form.country || 'India'}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setForm((prev) => ({
+                      ...prev,
+                      country: val,
+                      businessAddress: `${prev.addressLine1 || ''}, ${prev.addressLine2 ? prev.addressLine2 + ', ' : ''}${prev.city || ''}, ${prev.state || ''} - ${prev.postalCode || ''}, ${val}`.trim(),
+                    }));
+                  }}
+                  placeholder="India"
+                  className="w-full px-3.5 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-white focus:outline-none focus:border-emerald-500 text-xs"
+                />
+              </div>
+            </div>
+
             <div className="sm:col-span-2">
-              <label className="block font-bold uppercase tracking-wider text-slate-300 mb-1.5">
-                Physical Store / Commercial Kitchen Address *
+              <label className="block font-bold uppercase tracking-wider text-slate-300 mb-1.5 text-xs flex items-center justify-between">
+                <span>Complete Physical Address (Single string fallback) *</span>
+                <span className="text-[11px] text-emerald-400 font-normal">Used across emails, invoices & footer</span>
               </label>
               <input
                 type="text"
                 value={form.businessAddress}
                 onChange={(e) => setForm({ ...form, businessAddress: e.target.value })}
                 placeholder="Plot 18, Traditional Foods Lane, Benz Circle, Vijayawada, Andhra Pradesh - 520010"
-                className="w-full px-3.5 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-white focus:outline-none focus:border-emerald-500"
+                className="w-full px-3.5 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-white focus:outline-none focus:border-emerald-500 text-xs"
+                required
               />
             </div>
+          </div>
+        </div>
+
+        {/* ─── SECTION 3: TAX & GST CONFIGURATION (Requirements 17-20) ─── */}
+        <div className="bg-slate-950/70 p-6 rounded-3xl border border-slate-800 shadow-xl space-y-4">
+          <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+            <div className="flex items-center gap-2">
+              <span className="text-base">🏛️</span>
+              <h3 className="text-sm font-bold text-white uppercase tracking-wider">
+                3. Business Tax & GST Configuration
+              </h3>
+            </div>
+            <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+              Centralized Engine
+            </span>
+          </div>
+
+          <p className="text-xs text-slate-400">
+            Central single source of truth for GST. Automatically feeds the central calculation engine, cart, checkout, invoices, and sales reports. Historical orders preserve their snapshot rate and are never mutated.
+          </p>
+
+          <div className="grid sm:grid-cols-2 gap-5 pt-2">
+            {/* GST Enabled Toggle */}
+            <div className="p-4 bg-slate-900 rounded-2xl border border-slate-800 flex items-center justify-between">
+              <div>
+                <p className="text-xs font-bold text-white">GST Calculation Status</p>
+                <p className="text-[11px] text-slate-400 mt-0.5">
+                  {form.tax?.gstEnabled ? 'GST applied on customer checkout' : 'GST currently disabled (0% tax)'}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() =>
+                  setForm((prev) => ({
+                    ...prev,
+                    tax: { ...(prev.tax || defaultTaxSettings), gstEnabled: !prev.tax?.gstEnabled },
+                  }))
+                }
+                className={`px-4 py-2 rounded-xl text-xs font-bold transition cursor-pointer flex items-center gap-1.5 ${
+                  form.tax?.gstEnabled
+                    ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-600/30'
+                    : 'bg-slate-800 text-slate-400 border border-slate-700'
+                }`}
+              >
+                <span>{form.tax?.gstEnabled ? 'GST: ON' : 'GST: OFF'}</span>
+              </button>
+            </div>
+
+            {/* GST Rate Percentage */}
+            <div className="p-4 bg-slate-900 rounded-2xl border border-slate-800 space-y-2">
+              <label className="block text-xs font-bold text-white">
+                GST Rate Percentage (%) *
+              </label>
+              <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  max="100"
+                  value={form.tax?.gstRate ?? 18}
+                  onChange={(e) =>
+                    setForm((prev) => ({
+                      ...prev,
+                      tax: {
+                        ...(prev.tax || defaultTaxSettings),
+                        gstRate: Math.max(0, parseFloat(e.target.value) || 0),
+                      },
+                    }))
+                  }
+                  className="w-28 px-3.5 py-2 bg-slate-950 border border-slate-700 rounded-xl text-white font-mono text-base font-bold focus:border-emerald-500 focus:outline-none"
+                />
+                <span className="text-slate-400 font-bold text-sm">%</span>
+
+                {/* Quick Presets */}
+                <div className="flex flex-wrap gap-1">
+                  {[0, 5, 12, 18].map((rate) => (
+                    <button
+                      key={rate}
+                      type="button"
+                      onClick={() =>
+                        setForm((prev) => ({
+                          ...prev,
+                          tax: { ...(prev.tax || defaultTaxSettings), gstRate: rate },
+                        }))
+                      }
+                      className={`px-2 py-1 rounded-lg text-[10px] font-bold font-mono transition cursor-pointer ${
+                        form.tax?.gstRate === rate
+                          ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40'
+                          : 'bg-slate-800 text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      {rate}%
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* GSTIN Identification */}
+            <div>
+              <label className="block text-xs font-bold uppercase tracking-wider text-slate-300 mb-1.5">
+                GSTIN / Tax Identification Number
+              </label>
+              <input
+                type="text"
+                value={form.tax?.gstNumber || ''}
+                onChange={(e) =>
+                  setForm((prev) => ({
+                    ...prev,
+                    tax: { ...(prev.tax || defaultTaxSettings), gstNumber: e.target.value.trim() },
+                  }))
+                }
+                placeholder="37AAAAA0000A1Z5"
+                className="w-full px-3.5 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-white font-mono text-xs uppercase focus:outline-none focus:border-emerald-500"
+              />
+            </div>
+
+            {/* HSN / SAC Code */}
+            <div>
+              <label className="block text-xs font-bold uppercase tracking-wider text-slate-300 mb-1.5">
+                HSN / SAC Code (Food & Confectionery)
+              </label>
+              <input
+                type="text"
+                value={form.tax?.hsnCode || ''}
+                onChange={(e) =>
+                  setForm((prev) => ({
+                    ...prev,
+                    tax: { ...(prev.tax || defaultTaxSettings), hsnCode: e.target.value.trim() },
+                  }))
+                }
+                placeholder="21069099"
+                className="w-full px-3.5 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-white font-mono text-xs focus:outline-none focus:border-emerald-500"
+              />
+            </div>
+          </div>
+
+          {/* Live Calculation Example Preview */}
+          <div className="p-3 bg-slate-900/60 rounded-xl border border-slate-800 text-xs font-mono flex items-center justify-between text-slate-300">
+            <span>
+              Preview Calculation on ₹1,000 Order:{' '}
+              {form.tax?.gstEnabled ? (
+                <strong className="text-emerald-400">
+                  Taxable ₹1,000 + GST ({form.tax?.gstRate}%) ₹
+                  {((1000 * (form.tax?.gstRate || 0)) / 100).toFixed(2)} = ₹
+                  {(1000 + (1000 * (form.tax?.gstRate || 0)) / 100).toFixed(2)}
+                </strong>
+              ) : (
+                <strong className="text-amber-400">GST Disabled • Total ₹1,000.00</strong>
+              )}
+            </span>
+            <span className="text-[10px] text-slate-500 uppercase font-sans font-bold">Live Synchronized</span>
           </div>
         </div>
 

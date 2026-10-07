@@ -29,11 +29,252 @@ export function isValidEmail(email?: string | null): boolean {
 }
 
 /**
+ * Enterprise Email Footer Renderer (Production Fix - Requirement 4)
+ * Null-safely builds and renders the centralized physical business address footer
+ * for all transactional customer and recipient email templates.
+ * Dynamically synchronizes with Store Settings without modifying historical sent emails.
+ * Never outputs 'undefined' or 'null'.
+ */
+export function renderEmailBusinessFooter(
+  settings?: (Partial<StoreSettings> & { businessName?: string; businessPhone?: string; businessWhatsApp?: string; businessAddress?: string; businessEmail?: string; smtp?: SmtpSettings }) | null
+): string {
+  const brand = settings?.businessName?.trim() || 'Sudha Swagruha Foods';
+  const phone = settings?.businessPhone?.trim() || settings?.businessWhatsApp?.trim() || '8374634989';
+  const email = settings?.businessEmail?.trim() || settings?.smtp?.senderEmail?.trim() || 'info@sudhaswagruhafoods.com';
+
+  // Construct structured physical address lines safely without undefined or null
+  const line1 = settings?.addressLine1?.trim() || '';
+  const line2 = settings?.addressLine2?.trim() || '';
+  const city = settings?.city?.trim() || '';
+  const state = settings?.state?.trim() || '';
+  const postalCode = settings?.postalCode?.trim() || '';
+  const country = settings?.country?.trim() || 'India';
+  const fallbackAddress = settings?.businessAddress?.trim() || '';
+
+  const addressLines: string[] = [];
+  if (line1) addressLines.push(line1);
+  if (line2) addressLines.push(line2);
+
+  const cityStateZip = [city, state, postalCode].filter(Boolean).join(', ');
+  if (cityStateZip) addressLines.push(cityStateZip);
+
+  if (addressLines.length === 0 && fallbackAddress) {
+    addressLines.push(fallbackAddress);
+  } else if (addressLines.length > 0 && country) {
+    addressLines.push(country);
+  }
+
+  const formattedAddress = addressLines.filter(Boolean).join(' • ');
+
+  return `
+    <!-- Centralized Physical Business Footer (Auto-synchronized with Store Settings) -->
+    <div style="background-color: #f8fafc; padding: 24px 20px; text-align: center; border-top: 1px solid #e2e8f0; font-size: 12px; color: #64748b; line-height: 1.6;">
+      <p style="margin: 0 0 6px 0; font-weight: 700; color: #1e293b; font-size: 13px;">🌿 ${brand}</p>
+      ${formattedAddress ? `<p style="margin: 0 0 6px 0; color: #475569;">${formattedAddress}</p>` : ''}
+      <p style="margin: 0; color: #64748b;">
+        ${phone ? `<span>📞 Phone: +91 ${phone}</span>` : ''}
+        ${phone && email ? ` • ` : ''}
+        ${email ? `<span>✉️ Email: <a href="mailto:${email}" style="color: #047857; text-decoration: none;">${email}</a></span>` : ''}
+      </p>
+      <p style="margin: 12px 0 0 0; font-size: 11px; color: #94a3b8; border-top: 1px solid #e2e8f0; padding-top: 10px;">
+        Authentic Traditional Homemade Delicacies • Handcrafted with Heritage Care
+      </p>
+    </div>
+  `;
+}
+
+/**
+ * Dynamic Template Variable Substitutor
+ * Replaces centralized tokens such as {{businessName}}, {{businessAddress}}, {{addressLine1}},
+ * {{addressLine2}}, {{city}}, {{state}}, {{postalCode}}, {{country}}, {{businessPhone}}, {{businessEmail}}.
+ * Safely handles missing/empty values with empty string.
+ */
+export function replaceEmailTemplateVariables(
+  template: string,
+  variables: Record<string, string | number | undefined | null>
+): string {
+  if (!template) return '';
+  return template.replace(/\{\{\s*(\w+)\s*\}\}/g, (_, key) => {
+    const val = variables[key];
+    return val !== undefined && val !== null ? String(val) : '';
+  });
+}
+
+/**
+ * Generates branded HTML email for payment confirmation (both online and manual payments)
+ */
+export function generatePaymentConfirmationHtml(
+  order: DbOrder,
+  payment: {
+    amount: number;
+    payment_method: string;
+    reference?: string;
+    payment_date?: string;
+    notes?: string;
+    total_paid?: number;
+    amount_due?: number;
+    payment_status?: string;
+  },
+  settings?: (Partial<StoreSettings> & { businessName?: string; businessPhone?: string; businessAddress?: string; smtp?: SmtpSettings }) | null
+): string {
+  const brand = settings?.businessName || 'Sudha Swagruha Foods';
+  const origin = typeof window !== 'undefined' ? window.location.origin : 'https://vasilipadmasaikiran.github.io/sudha-swagruha-foods';
+  const trackingUrl = `${origin}/track-order?order=${encodeURIComponent(order.order_number)}`;
+  const totalPaid = Number(payment.total_paid !== undefined ? payment.total_paid : (order.amount_paid ?? 0));
+  const amountDue = Number(payment.amount_due !== undefined ? payment.amount_due : (order.amount_due ?? 0));
+  const status = payment.payment_status || order.payment_status || 'unpaid';
+  const isFullyPaid = status === 'paid' || amountDue <= 0;
+
+  return `
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Payment Receipt - ${order.order_number} - ${brand}</title>
+</head>
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #f8fafc; padding: 24px 0; color: #1e293b;">
+  <div style="max-width: 600px; margin: 0 auto; background: #ffffff; border-radius: 16px; overflow: hidden; border: 1px solid #e2e8f0; box-shadow: 0 4px 16px rgba(0,0,0,0.06);">
+    <div style="background: linear-gradient(135deg, #064e3b 0%, #047857 100%); padding: 28px; text-align: center; color: #ffffff;">
+      <h1 style="margin: 0 0 6px 0; font-size: 24px; font-weight: 800;">🌿 ${brand}</h1>
+      <p style="margin: 0; font-size: 13px; color: #d1fae5;">Official Payment Receipt • రసీదు</p>
+      <div style="display: inline-block; margin-top: 14px; background: rgba(255,255,255,0.18); padding: 6px 14px; border-radius: 20px; font-size: 13px; font-weight: 600; border: 1px solid rgba(255,255,255,0.3);">
+        ${isFullyPaid ? '✓ Fully Paid' : '⏳ Partial Payment Recorded'}
+      </div>
+    </div>
+
+    <div style="padding: 24px;">
+      <p style="font-size: 15px; margin: 0 0 12px 0;">Namaskaram <strong>${order.customer_name}</strong>,</p>
+      <p style="font-size: 14px; color: #475569; line-height: 1.6; margin: 0 0 20px 0;">
+        We have received a payment of <strong style="color: #047857; font-size: 16px;">₹${payment.amount.toLocaleString('en-IN')}</strong> for your order <strong>#${order.order_number}</strong>.
+      </p>
+
+      <!-- Payment Breakdown Box -->
+      <div style="background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 12px; padding: 18px; margin-bottom: 20px;">
+        <table style="width: 100%; border-collapse: collapse; font-size: 13px;">
+          <tr>
+            <td style="color: #166534; padding: 4px 0;"><strong>Amount Received:</strong></td>
+            <td style="text-align: right; font-size: 16px; font-weight: bold; color: #047857; padding: 4px 0;">₹${payment.amount.toLocaleString('en-IN')}</td>
+          </tr>
+          <tr>
+            <td style="color: #166534; padding: 4px 0;"><strong>Payment Method:</strong></td>
+            <td style="text-align: right; font-weight: 600; color: #14532d; text-transform: uppercase; padding: 4px 0;">${payment.payment_method}</td>
+          </tr>
+          ${payment.reference ? `
+          <tr>
+            <td style="color: #166534; padding: 4px 0;"><strong>Transaction Reference:</strong></td>
+            <td style="text-align: right; font-family: monospace; color: #14532d; padding: 4px 0;">${payment.reference}</td>
+          </tr>` : ''}
+          <tr>
+            <td style="color: #166534; padding: 4px 0;"><strong>Payment Date:</strong></td>
+            <td style="text-align: right; color: #14532d; padding: 4px 0;">${payment.payment_date || new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}</td>
+          </tr>
+          ${payment.notes ? `
+          <tr>
+            <td style="color: #166534; padding: 4px 0;"><strong>Notes:</strong></td>
+            <td style="text-align: right; color: #14532d; padding: 4px 0;">${payment.notes}</td>
+          </tr>` : ''}
+        </table>
+      </div>
+
+      <!-- Financial Status Summary -->
+      <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 16px; margin-bottom: 24px; font-size: 13px;">
+        <table style="width: 100%; border-collapse: collapse;">
+          <tr>
+            <td style="padding: 4px 0; color: #64748b;">Order Grand Total:</td>
+            <td style="padding: 4px 0; text-align: right; font-weight: 600; color: #1e293b;">₹${order.total.toLocaleString('en-IN')}</td>
+          </tr>
+          <tr>
+            <td style="padding: 4px 0; color: #64748b;">Total Paid to Date:</td>
+            <td style="padding: 4px 0; text-align: right; font-weight: 600; color: #047857;">₹${totalPaid.toLocaleString('en-IN')}</td>
+          </tr>
+          <tr style="border-top: 1px solid #cbd5e1;">
+            <td style="padding: 8px 0 0 0; font-weight: 700; color: ${amountDue > 0 ? '#b45309' : '#047857'};">Balance Due:</td>
+            <td style="padding: 8px 0 0 0; text-align: right; font-weight: 800; font-size: 15px; color: ${amountDue > 0 ? '#b45309' : '#047857'};">₹${amountDue.toLocaleString('en-IN')}</td>
+          </tr>
+        </table>
+      </div>
+
+      <!-- Action Button -->
+      <div style="text-align: center; margin-bottom: 20px;">
+        <a href="${trackingUrl}" style="background: #047857; color: #ffffff; text-decoration: none; padding: 12px 28px; border-radius: 10px; font-weight: 700; font-size: 14px; display: inline-block;">
+          View Order Status
+        </a>
+      </div>
+    </div>
+
+    ${renderEmailBusinessFooter(settings)}
+  </div>
+</body>
+</html>
+  `;
+}
+
+/**
+ * Generates branded HTML email for customer cancellation request
+ */
+export function generateCancellationRequestedHtml(
+  order: DbOrder,
+  request: CustomerCancellationRequest,
+  settings?: (Partial<StoreSettings> & { businessName?: string }) | null
+): string {
+  const brand = settings?.businessName || 'Sudha Swagruha Foods';
+  return `<!DOCTYPE html><html><body style="font-family: Arial, sans-serif; background: #fafafa; padding: 20px;">
+    <div style="max-width: 600px; margin: 0 auto; background: #fff; border-radius: 16px; border: 1px solid #eaeaea; overflow: hidden;">
+      <div style="padding: 24px;">
+        <h2 style="color: #0f5132; margin-top: 0;">${brand}</h2>
+        <div style="background: #fff3cd; border-left: 4px solid #ffc107; padding: 15px; border-radius: 8px; margin-bottom: 20px;">
+          <h3 style="margin: 0 0 8px; color: #664d03;">Cancellation Request Received</h3>
+          <p style="margin: 0; color: #664d03; font-size: 14px;">Your cancellation request for Order <strong>#${order.order_number}</strong> has been submitted and is awaiting approval by our management team.</p>
+        </div>
+        <table style="width: 100%; font-size: 14px; margin-bottom: 20px; border-collapse: collapse;">
+          <tr><td style="padding: 8px 0; color: #666;">Reason:</td><td style="padding: 8px 0; font-weight: bold; text-align: right;">${request.reason}</td></tr>
+          ${request.customer_comment ? `<tr><td style="padding: 8px 0; color: #666;">Customer Note:</td><td style="padding: 8px 0; text-align: right;">${request.customer_comment}</td></tr>` : ''}
+          <tr><td style="padding: 8px 0; color: #666;">Estimated Refund:</td><td style="padding: 8px 0; font-weight: bold; color: #0f5132; text-align: right;">₹${request.estimated_refund_amount || order.total}</td></tr>
+          <tr><td style="padding: 8px 0; color: #666;">Status:</td><td style="padding: 8px 0; font-weight: bold; color: #e65100; text-align: right;">Awaiting Approval</td></tr>
+        </table>
+        <p style="font-size: 13px; color: #777;">Please note: Your order remains active until approved. You can track live updates on our tracking page.</p>
+      </div>
+      ${renderEmailBusinessFooter(settings)}
+    </div>
+  </body></html>`;
+}
+
+/**
+ * Generates branded HTML email for customer cancellation rejection
+ */
+export function generateCancellationRejectedHtml(
+  order: DbOrder,
+  request: CustomerCancellationRequest,
+  settings?: (Partial<StoreSettings> & { businessName?: string }) | null
+): string {
+  const brand = settings?.businessName || 'Sudha Swagruha Foods';
+  return `<!DOCTYPE html><html><body style="font-family: Arial, sans-serif; background: #fafafa; padding: 20px;">
+    <div style="max-width: 600px; margin: 0 auto; background: #fff; border-radius: 16px; border: 1px solid #eaeaea; overflow: hidden;">
+      <div style="padding: 24px;">
+        <h2 style="color: #0f5132; margin-top: 0;">${brand}</h2>
+        <div style="background: #e8f4fd; border-left: 4px solid #0288d1; padding: 15px; border-radius: 8px; margin-bottom: 20px;">
+          <h3 style="margin: 0 0 8px; color: #01579b;">Cancellation Request Update</h3>
+          <p style="margin: 0; color: #01579b; font-size: 14px;">Your cancellation request for Order <strong>#${order.order_number}</strong> could not be processed.</p>
+        </div>
+        <table style="width: 100%; font-size: 14px; margin-bottom: 20px; border-collapse: collapse;">
+          <tr><td style="padding: 8px 0; color: #666;">Decision:</td><td style="padding: 8px 0; font-weight: bold; color: #c62828; text-align: right;">Rejected</td></tr>
+          <tr><td style="padding: 8px 0; color: #666;">Reason:</td><td style="padding: 8px 0; font-weight: bold; text-align: right;">${request.rejection_reason || 'Order has already progressed to preparation/dispatch'}</td></tr>
+          ${request.admin_comment ? `<tr><td style="padding: 8px 0; color: #666;">Store Note:</td><td style="padding: 8px 0; text-align: right;">${request.admin_comment}</td></tr>` : ''}
+          <tr><td style="padding: 8px 0; color: #666;">Current Order Status:</td><td style="padding: 8px 0; font-weight: bold; color: #0f5132; text-align: right;">${order.order_status.toUpperCase()} (Active)</td></tr>
+        </table>
+        <p style="font-size: 13px; color: #777;">Your order will be fulfilled and delivered as scheduled. Thank you for choosing ${brand}!</p>
+      </div>
+      ${renderEmailBusinessFooter(settings)}
+    </div>
+  </body></html>`;
+}
+
+/**
  * Generates branded HTML email for order confirmation
  */
 export function generateOrderConfirmationHtml(
   order: DbOrder,
-  settings: { businessName?: string; businessPhone?: string; businessWhatsApp?: string; businessAddress?: string; smtp?: SmtpSettings }
+  settings: Partial<StoreSettings> & { businessName?: string; businessPhone?: string; businessWhatsApp?: string; businessAddress?: string; smtp?: SmtpSettings }
 ): string {
   const brand = settings.businessName || 'Sudha Swagruha Foods';
   const phone = settings.businessWhatsApp || settings.businessPhone || '8374634989';
@@ -156,11 +397,8 @@ export function generateOrderConfirmationHtml(
       </p>
     </div>
 
-    <!-- Footer -->
-    <div style="background: #f1f5f9; padding: 20px 24px; text-align: center; border-top: 1px solid #e2e8f0; font-size: 12px; color: #64748b;">
-      <p style="margin: 0 0 4px 0;"><strong>${brand}</strong> • Authentic Delicacies</p>
-      <p style="margin: 0;">${address}</p>
-    </div>
+    <!-- Centralized Physical Business Footer -->
+    ${renderEmailBusinessFooter(settings)}
   </div>
 </body>
 </html>
@@ -172,9 +410,9 @@ export function generateOrderConfirmationHtml(
  */
 export function generateStatusUpdateHtml(
   order: DbOrder,
-  settings: { businessName?: string; businessPhone?: string; businessAddress?: string }
+  settings: (Partial<StoreSettings> & { businessName?: string; businessPhone?: string; businessAddress?: string }) | null = {}
 ): string {
-  const brand = settings.businessName || 'Sudha Swagruha Foods';
+  const brand = settings?.businessName || 'Sudha Swagruha Foods';
   const origin = typeof window !== 'undefined' ? window.location.origin : 'https://vasilipadmasaikiran.github.io/sudha-swagruha-foods';
   const trackingUrl = `${origin}/track-order?order=${encodeURIComponent(order.order_number)}`;
 
@@ -217,6 +455,7 @@ export function generateStatusUpdateHtml(
         </a>
       </div>
     </div>
+    ${renderEmailBusinessFooter(settings)}
   </div>
 </body>
 </html>
@@ -231,9 +470,9 @@ export function generateItemRemovedHtml(
   item: { product_name_en: string; quantity: number; weight: string; total_price: number },
   refundAmount: number,
   reason: string,
-  settings: { businessName?: string; businessPhone?: string; businessAddress?: string }
+  settings: (Partial<StoreSettings> & { businessName?: string; businessPhone?: string; businessAddress?: string }) | null = {}
 ): string {
-  const brand = settings.businessName || 'Sudha Swagruha Foods';
+  const brand = settings?.businessName || 'Sudha Swagruha Foods';
   const origin = typeof window !== 'undefined' ? window.location.origin : 'https://sudhaswagruhafoods.com';
   const trackingUrl = `${origin}/track-order?order=${encodeURIComponent(order.order_number)}`;
 
@@ -290,6 +529,7 @@ export function generateItemRemovedHtml(
         Have questions? Reply to this email or chat with our team on WhatsApp.
       </p>
     </div>
+    ${renderEmailBusinessFooter(settings)}
   </div>
 </body>
 </html>
@@ -303,9 +543,9 @@ export function generateOrderCancelledHtml(
   order: DbOrder,
   reason: string,
   refundAmount: number,
-  settings: { businessName?: string; businessPhone?: string; businessAddress?: string }
+  settings: (Partial<StoreSettings> & { businessName?: string; businessPhone?: string; businessAddress?: string }) | null = {}
 ): string {
-  const brand = settings.businessName || 'Sudha Swagruha Foods';
+  const brand = settings?.businessName || 'Sudha Swagruha Foods';
   const origin = typeof window !== 'undefined' ? window.location.origin : 'https://sudhaswagruhafoods.com';
   const trackingUrl = `${origin}/track-order?order=${encodeURIComponent(order.order_number)}`;
 
@@ -354,6 +594,7 @@ export function generateOrderCancelledHtml(
         </a>
       </div>
     </div>
+    ${renderEmailBusinessFooter(settings)}
   </div>
 </body>
 </html>
@@ -366,9 +607,9 @@ export function generateOrderCancelledHtml(
 export function generateRefundUpdateHtml(
   order: DbOrder,
   refund: { amount: number; reason: string; status: string; id: string; provider_refund_id?: string | null },
-  settings: { businessName?: string }
+  settings: (Partial<StoreSettings> & { businessName?: string; businessPhone?: string; businessAddress?: string }) | null = {}
 ): string {
-  const brand = settings.businessName || 'Sudha Swagruha Foods';
+  const brand = settings?.businessName || 'Sudha Swagruha Foods';
   const origin = typeof window !== 'undefined' ? window.location.origin : 'https://sudhaswagruhafoods.com';
   const trackingUrl = `${origin}/track-order?order=${encodeURIComponent(order.order_number)}`;
 
@@ -417,6 +658,7 @@ export function generateRefundUpdateHtml(
         </a>
       </div>
     </div>
+    ${renderEmailBusinessFooter(settings)}
   </div>
 </body>
 </html>
@@ -630,6 +872,45 @@ export const EmailService = {
   },
 
   /**
+   * Send Official Payment Confirmation Email to Customer (Requirement 1 & 4)
+   * Dispatched on manual payment recorded or payment gateway confirmation
+   */
+  async sendPaymentConfirmation(
+    order: DbOrder,
+    payment: {
+      amount: number;
+      payment_method: string;
+      reference?: string;
+      payment_date?: string;
+      notes?: string;
+      total_paid?: number;
+      amount_due?: number;
+      payment_status?: string;
+    },
+    settings: StoreSettings
+  ): Promise<EmailSendResult> {
+    const smtp = settings.smtp;
+    if (!smtp?.enabled) return { success: true, message: 'Email intimation is disabled' };
+
+    const recipient = order.customer_email?.trim();
+    if (!recipient || !isValidEmail(recipient)) return { success: true, message: 'No recipient email' };
+
+    const subject = `Payment Received! Order #${order.order_number} - ${settings.businessName} 🌿`;
+    const html = generatePaymentConfirmationHtml(order, payment, settings);
+    const text = `Payment of Rs. ${payment.amount} received for Order #${order.order_number} (${payment.payment_method}). Balance Due: Rs. ${payment.amount_due !== undefined ? payment.amount_due : order.amount_due}.`;
+
+    return this.dispatchEmail({
+      to: recipient,
+      subject,
+      html,
+      text,
+      smtp,
+      fromName: smtp.senderName || settings.businessName,
+      fromEmail: smtp.senderEmail || 'info@sudhaswagruhafoods.com',
+    });
+  },
+
+  /**
    * Send Customer Cancellation Request Intimation Email
    */
   async sendCancellationRequested(
@@ -646,22 +927,7 @@ export const EmailService = {
     const brand = settings.businessName || 'Sudha Swagruha Foods';
     const subject = `Cancellation Request Received - Order #${order.order_number} - ${brand}`;
     const text = `We have received your cancellation request for Order #${order.order_number} (Reason: ${request.reason}). It is currently awaiting review by our store team.`;
-    const html = `<!DOCTYPE html><html><body style="font-family: Arial, sans-serif; background: #fafafa; padding: 20px;">
-      <div style="max-width: 600px; margin: 0 auto; background: #fff; padding: 30px; border-radius: 16px; border: 1px solid #eaeaea;">
-        <h2 style="color: #0f5132; margin-top: 0;">${brand}</h2>
-        <div style="background: #fff3cd; border-left: 4px solid #ffc107; padding: 15px; border-radius: 8px; margin-bottom: 20px;">
-          <h3 style="margin: 0 0 8px; color: #664d03;">Cancellation Request Received</h3>
-          <p style="margin: 0; color: #664d03; font-size: 14px;">Your cancellation request for Order <strong>#${order.order_number}</strong> has been submitted and is awaiting approval by our management team.</p>
-        </div>
-        <table style="width: 100%; font-size: 14px; margin-bottom: 20px; border-collapse: collapse;">
-          <tr><td style="padding: 8px 0; color: #666;">Reason:</td><td style="padding: 8px 0; font-weight: bold; text-align: right;">${request.reason}</td></tr>
-          ${request.customer_comment ? `<tr><td style="padding: 8px 0; color: #666;">Customer Note:</td><td style="padding: 8px 0; text-align: right;">${request.customer_comment}</td></tr>` : ''}
-          <tr><td style="padding: 8px 0; color: #666;">Estimated Refund:</td><td style="padding: 8px 0; font-weight: bold; color: #0f5132; text-align: right;">₹${request.estimated_refund_amount || order.total}</td></tr>
-          <tr><td style="padding: 8px 0; color: #666;">Status:</td><td style="padding: 8px 0; font-weight: bold; color: #e65100; text-align: right;">Awaiting Approval</td></tr>
-        </table>
-        <p style="font-size: 13px; color: #777;">Please note: Your order remains active until approved. You can track live updates on our tracking page.</p>
-      </div>
-    </body></html>`;
+    const html = generateCancellationRequestedHtml(order, request, settings);
 
     return this.dispatchEmail({
       to: recipient,
@@ -691,22 +957,7 @@ export const EmailService = {
     const brand = settings.businessName || 'Sudha Swagruha Foods';
     const subject = `Update Regarding Cancellation Request - Order #${order.order_number} - ${brand}`;
     const text = `Your cancellation request for Order #${order.order_number} could not be approved (${request.rejection_reason || 'Order already in dispatch process'}). Your order remains active.`;
-    const html = `<!DOCTYPE html><html><body style="font-family: Arial, sans-serif; background: #fafafa; padding: 20px;">
-      <div style="max-width: 600px; margin: 0 auto; background: #fff; padding: 30px; border-radius: 16px; border: 1px solid #eaeaea;">
-        <h2 style="color: #0f5132; margin-top: 0;">${brand}</h2>
-        <div style="background: #e8f4fd; border-left: 4px solid #0288d1; padding: 15px; border-radius: 8px; margin-bottom: 20px;">
-          <h3 style="margin: 0 0 8px; color: #01579b;">Cancellation Request Update</h3>
-          <p style="margin: 0; color: #01579b; font-size: 14px;">Your cancellation request for Order <strong>#${order.order_number}</strong> could not be processed.</p>
-        </div>
-        <table style="width: 100%; font-size: 14px; margin-bottom: 20px; border-collapse: collapse;">
-          <tr><td style="padding: 8px 0; color: #666;">Decision:</td><td style="padding: 8px 0; font-weight: bold; color: #c62828; text-align: right;">Rejected</td></tr>
-          <tr><td style="padding: 8px 0; color: #666;">Reason:</td><td style="padding: 8px 0; font-weight: bold; text-align: right;">${request.rejection_reason || 'Order has already progressed to preparation/dispatch'}</td></tr>
-          ${request.admin_comment ? `<tr><td style="padding: 8px 0; color: #666;">Store Note:</td><td style="padding: 8px 0; text-align: right;">${request.admin_comment}</td></tr>` : ''}
-          <tr><td style="padding: 8px 0; color: #666;">Current Order Status:</td><td style="padding: 8px 0; font-weight: bold; color: #0f5132; text-align: right;">${order.order_status.toUpperCase()} (Active)</td></tr>
-        </table>
-        <p style="font-size: 13px; color: #777;">Your order will be fulfilled and delivered as scheduled. Thank you for choosing ${brand}!</p>
-      </div>
-    </body></html>`;
+    const html = generateCancellationRejectedHtml(order, request, settings);
 
     return this.dispatchEmail({
       to: recipient,
@@ -988,14 +1239,8 @@ export const EmailService = {
       </div>
     </div>
 
-    <!-- Footer -->
-    <div style="background-color: #f1f5f9; padding: 20px 24px; text-align: center; border-top: 1px solid #e2e8f0; font-size: 12px; color: #64748b; line-height: 1.5;">
-      <p style="margin: 0 0 6px 0;">${brand} • Traditional Homestyle Andhra Sweets, Pickles & Savories</p>
-      <p style="margin: 0 0 8px 0;">${address} • WhatsApp Support: +91 ${phone}</p>
-      <p style="margin: 12px 0 0 0; font-size: 11px; color: #94a3b8; border-top: 1px solid #e2e8f0; pt-2;">
-        You are receiving this communication as a registered patron of ${brand}.
-      </p>
-    </div>
+    <!-- Centralized Physical Business Footer -->
+    ${renderEmailBusinessFooter(params.settings)}
 
   </div>
 </body>
@@ -1054,6 +1299,7 @@ export const EmailService = {
 
 // Backwards compatibility wrappers
 export const sendOrderConfirmationEmail = EmailService.sendOrderConfirmation.bind(EmailService);
+export const sendPaymentConfirmationEmail = EmailService.sendPaymentConfirmation.bind(EmailService);
 export const sendTestEmail = EmailService.sendTestEmail.bind(EmailService);
 
 

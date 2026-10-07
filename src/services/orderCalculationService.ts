@@ -195,3 +195,77 @@ export function derivePaymentStatus(
 
   return 'partially_paid';
 }
+
+export interface ManualPaymentValidationResult {
+  valid: boolean;
+  error?: string;
+  paymentAmount: number;
+  currentPaid: number;
+  newTotalPaid: number;
+  orderTotal: number;
+  newAmountDue: number;
+  newPaymentStatus: 'unpaid' | 'partially_paid' | 'paid' | 'refunded' | 'partially_refunded';
+}
+
+/**
+ * Validates manual payments with authoritative business rules:
+ * 1. Payment amount must be strictly > 0
+ * 2. New Total Paid must NOT exceed Order Total
+ * 3. Never trusts frontend; recalculates amounts and status
+ */
+export function validateManualPayment(
+  order: { total?: number; amount_paid?: number; refunded_amount?: number; payment_status?: string },
+  incomingPaymentAmount: number
+): ManualPaymentValidationResult {
+  const paymentAmount = roundToTwo(incomingPaymentAmount);
+  const orderTotal = roundToTwo(Number(order.total || 0));
+  const currentPaid = roundToTwo(
+    order.amount_paid !== undefined
+      ? order.amount_paid
+      : order.payment_status === 'paid'
+      ? orderTotal
+      : 0
+  );
+  const currentRefunded = roundToTwo(Number(order.refunded_amount || 0));
+
+  if (isNaN(paymentAmount) || paymentAmount <= 0) {
+    return {
+      valid: false,
+      error: 'Payment amount must be greater than ₹0.00',
+      paymentAmount: 0,
+      currentPaid,
+      newTotalPaid: currentPaid,
+      orderTotal,
+      newAmountDue: Math.max(0, roundToTwo(orderTotal - currentPaid)),
+      newPaymentStatus: derivePaymentStatus(orderTotal, currentPaid, currentRefunded),
+    };
+  }
+
+  const newTotalPaid = roundToTwo(currentPaid + paymentAmount);
+  if (newTotalPaid > orderTotal) {
+    const maxAllowed = Math.max(0, roundToTwo(orderTotal - currentPaid));
+    return {
+      valid: false,
+      error: `Payment rejected: ₹${currentPaid.toLocaleString('en-IN')} already paid + ₹${paymentAmount.toLocaleString('en-IN')} exceeds order total ₹${orderTotal.toLocaleString('en-IN')}. Maximum allowable payment is ₹${maxAllowed.toLocaleString('en-IN')}.`,
+      paymentAmount,
+      currentPaid,
+      newTotalPaid,
+      orderTotal,
+      newAmountDue: maxAllowed,
+      newPaymentStatus: derivePaymentStatus(orderTotal, currentPaid, currentRefunded),
+    };
+  }
+
+  const newAmountDue = Math.max(0, roundToTwo(orderTotal - newTotalPaid));
+  const newPaymentStatus = derivePaymentStatus(orderTotal, newTotalPaid, currentRefunded);
+
+  return {
+    valid: true,
+    paymentAmount,
+    currentPaid,
+    newTotalPaid,
+    orderTotal,
+    newAmountDue,
+    newPaymentStatus,
+  };
+}

@@ -21,11 +21,13 @@ export default function CartDrawer() {
     discount,
     couponCode,
     getFinancialSummary,
+    validateCartStock,
   } = useCartStore();
   const { language } = useLanguageStore();
   const t = translations[language];
 
   const financialSummary = getFinancialSummary();
+  const stockValidation = validateCartStock();
   const subtotal = financialSummary.originalSubtotal;
   const delivery = financialSummary.shippingAmount;
   const total = financialSummary.grandTotal;
@@ -206,13 +208,34 @@ export default function CartDrawer() {
                   </div>
                 </div>
 
-                <Link
-                  to="/checkout"
-                  onClick={closeCart}
-                  className="block w-full mt-4 bg-brand-green text-white text-center py-3.5 rounded-xl font-bold hover:bg-brand-green-dark transition-colors shadow-green-glow"
-                >
-                  {t.cart.proceedToCheckout} →
-                </Link>
+                {!stockValidation.isValid && (
+                  <div className="mt-3 p-3 bg-red-50 border border-red-200 rounded-xl text-xs text-red-700">
+                    <p className="font-bold mb-1">⚠️ Stock limit exceeded:</p>
+                    {stockValidation.issues.map((iss, i) => (
+                      <p key={i}>
+                        • {iss.name} ({iss.weight}): only {iss.available} available (in cart: {iss.requested})
+                      </p>
+                    ))}
+                    <p className="mt-1 text-[11px] text-red-600 font-medium">Please reduce quantity to proceed.</p>
+                  </div>
+                )}
+
+                {stockValidation.isValid ? (
+                  <Link
+                    to="/checkout"
+                    onClick={closeCart}
+                    className="block w-full mt-4 bg-brand-green text-white text-center py-3.5 rounded-xl font-bold hover:bg-brand-green-dark transition-colors shadow-green-glow"
+                  >
+                    {t.cart.proceedToCheckout} →
+                  </Link>
+                ) : (
+                  <button
+                    disabled
+                    className="block w-full mt-4 bg-gray-200 text-gray-500 text-center py-3.5 rounded-xl font-bold cursor-not-allowed"
+                  >
+                    Adjust Cart to Proceed
+                  </button>
+                )}
               </div>
             )}
           </motion.div>

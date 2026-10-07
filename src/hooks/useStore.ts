@@ -9,6 +9,7 @@ import { useProductStore, type CouponItem } from './useProductStore';
 import { useSettingsStore } from './useSettingsStore';
 import { supabase, isSupabaseConfigured } from '@/services/supabase';
 import { calculateOrderFinancials, type OrderFinancialSummary } from '@/services/orderCalculationService';
+import { calculateLinePrice } from '@/services/productPricingService';
 
 // ─── Cart Types ───────────────────────────────────────────────
 export interface CartItem {
@@ -23,13 +24,17 @@ interface CartStore {
   isOpen: boolean;
   couponCode: string;
   discount: number;
-  addItem: (product: Product, variant: ProductVariant, quantity?: number) => void;
+  addItem: (product: Product, variant: ProductVariant, quantity?: number) => { success: boolean; addedQty: number; message?: string };
   removeItem: (productId: string, weight: string) => void;
-  updateQuantity: (productId: string, weight: string, quantity: number) => void;
+  updateQuantity: (productId: string, weight: string, quantity: number) => { success: boolean; newQty: number; message?: string };
   clearCart: () => void;
   openCart: () => void;
   closeCart: () => void;
   applyCoupon: (code: string) => Promise<boolean>;
+  validateCartStock: () => {
+    isValid: boolean;
+    issues: Array<{ name: string; weight: string; requested: number; available: number }>;
+  };
   getFinancialSummary: () => OrderFinancialSummary;
   getSubtotal: () => number;
   getDeliveryCharge: () => number;
@@ -46,27 +51,61 @@ export const useCartStore = create<CartStore>()(
       discount: 0,
 
       addItem: (product, variant, quantity = 1) => {
+        const liveProducts = useProductStore.getState().products;
+        const liveProduct = liveProducts.find((p) => p.id === product.id || p.slug === product.slug);
+        const liveVariant = liveProduct?.variants.find((v) => v.weight === variant.weight) || variant;
+        const availableStock = liveVariant.stock ?? 0;
+
+        if (availableStock <= 0) {
+          return {
+            success: false,
+            addedQty: 0,
+            message: `${product.name_en} (${variant.weight}) is out of stock.`,
+          };
+        }
+
+        let addedQty = 0;
+        let success = true;
+        let message = '';
+
         set((state) => {
           const existing = state.items.find(
-            (i) => i.product.id === product.id && i.variant.weight === variant.weight
+            (i) => (i.product.id === product.id || i.product.slug === product.slug) && i.variant.weight === variant.weight
           );
+
           if (existing) {
+            const desiredQty = existing.quantity + quantity;
+            const cappedQty = Math.min(desiredQty, availableStock);
+            addedQty = cappedQty - existing.quantity;
+
+            if (desiredQty > availableStock) {
+              message = `Only ${availableStock} available in stock. Cart updated to maximum available.`;
+            }
+
             return {
               items: state.items.map((i) =>
-                i.product.id === product.id && i.variant.weight === variant.weight
-                  ? { ...i, quantity: i.quantity + quantity }
+                (i.product.id === product.id || i.product.slug === product.slug) && i.variant.weight === variant.weight
+                  ? { ...i, variant: liveVariant, quantity: cappedQty }
                   : i
               ),
             };
           }
-          return { items: [...state.items, { product, variant, quantity }] };
+
+          const cappedQty = Math.min(quantity, availableStock);
+          addedQty = cappedQty;
+          if (quantity > availableStock) {
+            message = `Only ${availableStock} available in stock. Added maximum available.`;
+          }
+          return { items: [...state.items, { product: liveProduct || product, variant: liveVariant, quantity: cappedQty }] };
         });
+
+        return { success, addedQty, message };
       },
 
       removeItem: (productId, weight) => {
         set((state) => ({
           items: state.items.filter(
-            (i) => !(i.product.id === productId && i.variant.weight === weight)
+            (i) => !((i.product.id === productId || i.product.slug === productId) && i.variant.weight === weight)
           ),
         }));
       },
@@ -74,15 +113,57 @@ export const useCartStore = create<CartStore>()(
       updateQuantity: (productId, weight, quantity) => {
         if (quantity <= 0) {
           get().removeItem(productId, weight);
-          return;
+          return { success: true, newQty: 0 };
         }
+
+        const liveProducts = useProductStore.getState().products;
+        const liveProduct = liveProducts.find((p) => p.id === productId || p.slug === productId);
+        const liveVariant = liveProduct?.variants.find((v) => v.weight === weight);
+        const availableStock = liveVariant?.stock ?? 999;
+
+        const cappedQty = Math.min(quantity, availableStock);
+        let message = '';
+        if (quantity > availableStock) {
+          message = `Only ${availableStock} packs available in stock.`;
+        }
+
         set((state) => ({
           items: state.items.map((i) =>
-            i.product.id === productId && i.variant.weight === weight
-              ? { ...i, quantity }
+            (i.product.id === productId || i.product.slug === productId) && i.variant.weight === weight
+              ? { ...i, quantity: cappedQty }
               : i
           ),
         }));
+
+        return { success: true, newQty: cappedQty, message };
+      },
+
+      validateCartStock: () => {
+        const liveProducts = useProductStore.getState().products;
+        const issues: Array<{ name: string; weight: string; requested: number; available: number }> = [];
+
+        for (const item of get().items) {
+          const liveProduct = liveProducts.find(
+            (p) => p.id === item.product.id || p.slug === item.product.slug
+          );
+          const liveVariant =
+            liveProduct?.variants.find((v) => v.weight === item.variant.weight) || item.variant;
+          const availableStock = Math.max(0, liveVariant?.stock ?? 0);
+
+          if (item.quantity > availableStock) {
+            issues.push({
+              name: item.product.name_en,
+              weight: item.variant.weight,
+              requested: item.quantity,
+              available: availableStock,
+            });
+          }
+        }
+
+        return {
+          isValid: issues.length === 0,
+          issues,
+        };
       },
 
       clearCart: () => set({ items: [], couponCode: '', discount: 0 }),
@@ -217,12 +298,15 @@ export const useCartStore = create<CartStore>()(
       },
 
       getFinancialSummary: () => {
-        const rawItems = get().items.map((it) => ({
-          product_id: it.product.id,
-          unit_price: it.variant.price,
-          quantity: it.quantity,
-          total_price: it.variant.price * it.quantity,
-        }));
+        const rawItems = get().items.map((it) => {
+          const calc = calculateLinePrice(it.product, it.variant, it.quantity);
+          return {
+            product_id: it.product.id,
+            unit_price: calc.unitPrice,
+            quantity: it.quantity,
+            total_price: calc.totalPrice,
+          };
+        });
         const rawSubtotal = rawItems.reduce((s, it) => s + it.total_price, 0);
         const shippingCharge = rawSubtotal >= 499 || rawSubtotal === 0 ? 0 : 60;
         const taxConfig = useSettingsStore.getState().settings.tax;

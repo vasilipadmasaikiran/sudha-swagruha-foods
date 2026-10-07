@@ -1,16 +1,86 @@
 // ============================================================
 // AppImage Component - Robust Image Display with Graceful Fallback
-// Prevents distortion, handles broken URLs, aspect ratios, responsive sizing
+// Prevents distortion, handles broken URLs, aspect ratios, responsive sizing,
+// cache-complete detection (resolves white/blank images), and transparent PNG backdrop
 // ============================================================
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 
-interface AppImageProps extends Omit<React.ImgHTMLAttributes<HTMLImageElement>, 'src'> {
+export interface AppImageProps extends Omit<React.ImgHTMLAttributes<HTMLImageElement>, 'src'> {
   src?: string | null;
   alt: string;
   fallbackSrc?: string;
   className?: string;
   aspectRatio?: 'square' | 'video' | 'portrait' | 'auto';
   containerClassName?: string;
+}
+
+export interface ImageValidationResult {
+  valid: boolean;
+  error?: string;
+  width?: number;
+  height?: number;
+  dataUrl?: string;
+  fileSize?: number;
+}
+
+/**
+ * Validates an image file before upload (MIME, size, corrupted file, 0x0 dimension)
+ */
+export async function validateProductImageFile(file: File): Promise<ImageValidationResult> {
+  const allowedMime = ['image/jpeg', 'image/png', 'image/webp'];
+  if (!allowedMime.includes(file.type)) {
+    return {
+      valid: false,
+      error: `Unsupported image format (${file.type || 'unknown'}). Please upload a JPEG, PNG, or WebP image.`,
+    };
+  }
+
+  // 5MB max
+  const maxBytes = 5 * 1024 * 1024;
+  if (file.size > maxBytes) {
+    return {
+      valid: false,
+      error: `File size (${(file.size / (1024 * 1024)).toFixed(1)}MB) exceeds maximum allowed limit of 5.0MB.`,
+    };
+  }
+
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const dataUrl = e.target?.result as string;
+      const img = new Image();
+      img.onload = () => {
+        if (img.naturalWidth === 0 || img.naturalHeight === 0) {
+          resolve({
+            valid: false,
+            error: 'Corrupted image: zero dimensions detected (0x0).',
+          });
+        } else {
+          resolve({
+            valid: true,
+            width: img.naturalWidth,
+            height: img.naturalHeight,
+            dataUrl,
+            fileSize: file.size,
+          });
+        }
+      };
+      img.onerror = () => {
+        resolve({
+          valid: false,
+          error: 'Image decoding failed. The image file appears to be corrupted or invalid.',
+        });
+      };
+      img.src = dataUrl;
+    };
+    reader.onerror = () => {
+      resolve({
+        valid: false,
+        error: 'Failed to read file from disk.',
+      });
+    };
+    reader.readAsDataURL(file);
+  });
 }
 
 /**
@@ -59,14 +129,40 @@ export default function AppImage({
 }: AppImageProps) {
   const [hasError, setHasError] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const imgRef = useRef<HTMLImageElement | null>(null);
 
   const cleanSrc = normalizeImageUrl(src);
+  const defaultFallback = normalizeImageUrl(fallbackSrc || `${import.meta.env.BASE_URL}images/pickle.jpg`);
+
+  // Proactively check if the DOM image is already loaded and complete from cache.
+  // This solves the production bug where cached images have complete=true before React binds onLoad,
+  // preventing onLoad from firing and leaving the element permanently trapped in opacity-0!
+  const checkComplete = useCallback((el: HTMLImageElement | null) => {
+    if (!el) return;
+    if (el.complete) {
+      if (el.naturalWidth > 0 && el.naturalHeight > 0) {
+        setIsLoading(false);
+        setHasError(false);
+      } else {
+        setIsLoading(false);
+        setHasError(true);
+      }
+    }
+  }, []);
 
   useEffect(() => {
-    // Reset state whenever src changes
-    setHasError(!cleanSrc);
-    setIsLoading(Boolean(cleanSrc));
-  }, [cleanSrc]);
+    if (!cleanSrc) {
+      setHasError(true);
+      setIsLoading(false);
+      return;
+    }
+    setHasError(false);
+    setIsLoading(true);
+
+    if (imgRef.current) {
+      checkComplete(imgRef.current);
+    }
+  }, [cleanSrc, checkComplete]);
 
   const aspectClass =
     aspectRatio === 'square'
@@ -79,52 +175,46 @@ export default function AppImage({
 
   return (
     <div
-      className={`relative overflow-hidden bg-slate-100 flex items-center justify-center ${aspectClass} ${containerClassName}`}
+      className={`relative overflow-hidden bg-gradient-to-br from-stone-50 via-slate-50 to-stone-100 flex items-center justify-center ${aspectClass} ${containerClassName}`}
     >
       {/* Skeleton Loading State */}
       {isLoading && !hasError && (
-        <div className="absolute inset-0 bg-gradient-to-r from-gray-100 via-gray-200 to-gray-100 animate-pulse" />
+        <div className="absolute inset-0 bg-gradient-to-r from-gray-100 via-gray-200 to-gray-100 animate-pulse pointer-events-none" />
       )}
 
-      {/* Render Fallback Placeholder on Error or Empty URL */}
+      {/* Render Fallback on Error or Empty URL */}
       {hasError ? (
-        fallbackSrc ? (
-          <img
-            src={normalizeImageUrl(fallbackSrc)}
-            alt={alt || 'Product Image'}
-            className={`${className} transition-opacity duration-300`}
-            loading={loading}
-          />
-        ) : (
-          <div className="w-full h-full min-h-[140px] flex flex-col items-center justify-center p-4 bg-emerald-50/50 text-emerald-800/70 select-none">
-            <svg
-              className="w-10 h-10 mb-2 text-emerald-600/50"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={1.5}
-                d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"
-              />
-            </svg>
-            <span className="text-xs font-semibold text-emerald-900/60 text-center line-clamp-1">
-              {alt || 'Traditional Delicacy'}
-            </span>
-            <span className="text-[10px] text-emerald-700/50 mt-0.5">Sudha Swagruha</span>
-          </div>
-        )
+        <img
+          src={defaultFallback}
+          alt={alt || 'Product Image'}
+          className={`${className} transition-opacity duration-300 opacity-100`}
+          loading={loading}
+          onError={(e) => {
+            (e.target as HTMLImageElement).style.display = 'none';
+          }}
+        />
       ) : (
         <img
+          ref={(node) => {
+            imgRef.current = node;
+            checkComplete(node);
+          }}
           src={cleanSrc}
           alt={alt}
           className={`${className} transition-opacity duration-300 ${
             isLoading ? 'opacity-0' : 'opacity-100'
           }`}
           loading={loading}
-          onLoad={() => setIsLoading(false)}
+          onLoad={(e) => {
+            const target = e.currentTarget;
+            if (target.naturalWidth > 0) {
+              setIsLoading(false);
+              setHasError(false);
+            } else {
+              setIsLoading(false);
+              setHasError(true);
+            }
+          }}
           onError={() => {
             setIsLoading(false);
             setHasError(true);

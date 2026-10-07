@@ -22,15 +22,25 @@ export default function ProductCard({ product, index = 0 }: ProductCardProps) {
   const { language } = useLanguageStore();
   const t = translations[language];
 
-  const selectedVariant = product.variants[selectedVariantIdx];
-  const isOutOfStock = selectedVariant.stock === 0;
+  const selectedVariant = product.variants[selectedVariantIdx] || product.variants[0];
+  const isOutOfStock = (selectedVariant?.stock ?? 0) <= 0;
 
   const handleAddToCart = (e: React.MouseEvent) => {
     e.preventDefault();
-    if (isOutOfStock) return;
-    addItem(product, selectedVariant);
+    if (isOutOfStock) {
+      toast.error(`${product.name_en} (${selectedVariant.weight}) is out of stock`);
+      return;
+    }
+    const res = addItem(product, selectedVariant, 1);
+    if (!res.success) {
+      toast.error(res.message || 'Cannot add to cart');
+      return;
+    }
+    if (res.message) {
+      toast(res.message, { icon: '⚠️' });
+    }
     toast.success(
-      `${language === 'te' ? product.name_te : product.name_en} కార్ట్‌లోకి చేర్చబడింది!`,
+      `${language === 'te' ? product.name_te : product.name_en} (${selectedVariant.weight}) కార్ట్‌లోకి చేర్చబడింది!`,
       {
         icon: '🛒',
         style: {

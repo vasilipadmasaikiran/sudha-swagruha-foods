@@ -14,6 +14,7 @@ import { useProductStore } from '@/hooks/useProductStore';
 import { translations } from '@/i18n/translations';
 import ProductCard from '@/components/ProductCard';
 import AppImage from '@/components/common/AppImage';
+import { calculateLinePrice } from '@/services/productPricingService';
 
 export default function ProductDetailPage() {
   const { slug } = useParams<{ slug: string }>();
@@ -23,7 +24,7 @@ export default function ProductDetailPage() {
   const t = translations[language];
   const { addItem } = useCartStore();
 
-  const product = products.find((p) => p.slug === slug);
+  const product = products.find((p) => p.slug === slug || p.id === slug);
   const [selectedVariantIdx, setSelectedVariantIdx] = useState(0);
   const [quantity, setQuantity] = useState(1);
   const [selectedImage, setSelectedImage] = useState(0);
@@ -43,23 +44,38 @@ export default function ProductDetailPage() {
     );
   }
 
-  const variant = product.variants[selectedVariantIdx];
-  const isOutOfStock = variant.stock === 0;
+  const variant = product.variants[selectedVariantIdx] || product.variants[0];
+  const isOutOfStock = (variant?.stock ?? 0) <= 0;
+  const linePriceCalc = calculateLinePrice(product, variant, quantity);
   const discount = variant.comparePrice
-    ? Math.round(((variant.comparePrice - variant.price) / variant.comparePrice) * 100)
+    ? Math.round(((variant.comparePrice - linePriceCalc.unitPrice) / variant.comparePrice) * 100)
     : 0;
 
   const handleAddToCart = () => {
-    if (isOutOfStock) return;
-    for (let i = 0; i < quantity; i++) {
-      addItem(product, variant);
+    if (isOutOfStock) {
+      toast.error(`${product.name_en} (${variant.weight}) is out of stock`);
+      return;
     }
-    toast.success(`${quantity}× ${product.name_en} added to cart!`, { icon: '🛒' });
+    const res = addItem(product, variant, quantity);
+    if (!res.success) {
+      toast.error(res.message || 'Cannot add to cart');
+      return;
+    }
+    if (res.message) {
+      toast(res.message, { icon: '⚠️' });
+    }
+    toast.success(`${res.addedQty}× ${language === 'te' ? product.name_te : product.name_en} (${variant.weight}) added to cart!`, { icon: '🛒' });
   };
 
   const handleBuyNow = () => {
-    handleAddToCart();
-    navigate('/checkout');
+    if (isOutOfStock) {
+      toast.error('Item is out of stock');
+      return;
+    }
+    const res = addItem(product, variant, quantity);
+    if (res.success) {
+      navigate('/checkout');
+    }
   };
 
   const related = products
@@ -172,7 +188,7 @@ export default function ProductDetailPage() {
 
             {/* Price */}
             <div className="flex items-baseline gap-3">
-              <span className="text-4xl font-bold text-brand-green">₹{variant.price}</span>
+              <span className="text-4xl font-bold text-brand-green">₹{linePriceCalc.unitPrice}</span>
               {variant.comparePrice && (
                 <span className="text-2xl text-gray-400 line-through">₹{variant.comparePrice}</span>
               )}
@@ -181,60 +197,105 @@ export default function ProductDetailPage() {
                   {discount}% OFF
                 </span>
               )}
+              {product.pricing_model === 'per_unit' && product.base_price_per_unit && (
+                <span className="text-xs text-gray-500 font-medium bg-gray-100 px-2 py-1 rounded-lg">
+                  (₹{product.base_price_per_unit}/{product.base_unit || 'kg'} base rate)
+                </span>
+              )}
             </div>
 
-            {/* Weight Selector */}
+            {/* Weight / Measurement Selector */}
             <div>
-              <p className="text-sm font-semibold text-gray-700 mb-2">{t.products.selectWeight}</p>
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-sm font-semibold text-gray-700">{t.products.selectWeight}</p>
+                <span className="text-xs text-brand-green font-medium">
+                  {product.variants.length} options available
+                </span>
+              </div>
               <div className="flex flex-wrap gap-2">
                 {product.variants.map((v, i) => (
                   <button
                     key={v.weight}
-                    onClick={() => setSelectedVariantIdx(i)}
-                    className={`px-5 py-2.5 rounded-xl border-2 font-semibold text-sm transition-all ${
+                    onClick={() => {
+                      setSelectedVariantIdx(i);
+                      setQuantity(1);
+                    }}
+                    className={`px-4 py-2.5 rounded-xl border-2 font-semibold text-sm transition-all flex items-center gap-2 ${
                       selectedVariantIdx === i
                         ? 'bg-brand-green text-white border-brand-green shadow-green-glow'
-                        : 'border-gray-200 text-gray-600 hover:border-brand-green hover:text-brand-green'
+                        : 'border-gray-200 text-gray-700 hover:border-brand-green hover:text-brand-green bg-white'
                     }`}
                   >
-                    {v.weight}
-                    <span className="ml-2 text-xs opacity-75">₹{v.price}</span>
+                    <span>{v.weight}</span>
+                    <span className={`text-xs px-1.5 py-0.5 rounded ${selectedVariantIdx === i ? 'bg-white/20 text-white' : 'bg-gray-100 text-gray-600'}`}>
+                      ₹{v.price}
+                    </span>
+                    {v.stock <= 5 && v.stock > 0 && (
+                      <span className="text-[10px] text-amber-500 font-bold">Only {v.stock} left</span>
+                    )}
+                    {v.stock === 0 && (
+                      <span className="text-[10px] text-red-500 font-bold">Out of stock</span>
+                    )}
                   </button>
                 ))}
               </div>
             </div>
 
-            {/* Quantity */}
+            {/* Quantity Selector */}
             <div>
               <p className="text-sm font-semibold text-gray-700 mb-2">{t.products.quantity}</p>
               <div className="flex items-center gap-3">
-                <div className="flex items-center bg-white border border-gray-200 rounded-xl overflow-hidden">
+                <div className="flex items-center bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm">
                   <button
                     onClick={() => setQuantity(Math.max(1, quantity - 1))}
-                    className="px-4 py-3 hover:bg-gray-50 transition-colors font-bold text-lg text-gray-600"
+                    disabled={isOutOfStock}
+                    className="px-4 py-3 hover:bg-gray-50 transition-colors font-bold text-lg text-gray-600 disabled:opacity-40"
                   >
                     −
                   </button>
                   <span className="px-5 font-bold text-lg text-gray-900">{quantity}</span>
                   <button
-                    onClick={() => setQuantity(Math.min(variant.stock, quantity + 1))}
-                    className="px-4 py-3 hover:bg-gray-50 transition-colors font-bold text-lg text-gray-600"
+                    onClick={() => setQuantity(Math.min(variant.stock || 1, quantity + 1))}
+                    disabled={isOutOfStock || quantity >= (variant.stock || 0)}
+                    className="px-4 py-3 hover:bg-gray-50 transition-colors font-bold text-lg text-gray-600 disabled:opacity-40"
                   >
                     +
                   </button>
                 </div>
-                <span className="text-sm text-gray-500">
-                  {variant.stock > 0
-                    ? `${variant.stock} available`
-                    : t.products.outOfStock}
-                </span>
+                <div className="flex flex-col">
+                  <span className={`text-sm font-semibold ${isOutOfStock ? 'text-red-600' : (variant.stock || 0) <= 5 ? 'text-amber-600' : 'text-emerald-700'}`}>
+                    {isOutOfStock
+                      ? t.products.outOfStock
+                      : (variant.stock || 0) <= 5
+                      ? `Low Stock: Only ${variant.stock} packs left!`
+                      : `${variant.stock} available in stock`}
+                  </span>
+                  <span className="text-xs text-gray-400">SKU: {variant.sku}</span>
+                </div>
               </div>
             </div>
 
-            {/* Subtotal */}
-            <div className="bg-brand-light-green rounded-xl p-3 flex justify-between items-center">
-              <span className="text-gray-700 font-medium">Subtotal ({quantity} items)</span>
-              <span className="font-bold text-brand-green text-lg">₹{variant.price * quantity}</span>
+            {/* Authoritative Pricing Breakdown Table (Section 2.2) */}
+            <div className="bg-white border border-emerald-100 rounded-2xl p-4 shadow-sm space-y-2.5">
+              <div className="flex items-center justify-between text-xs text-gray-500 pb-2 border-b border-gray-100">
+                <span className="font-semibold text-gray-700 uppercase tracking-wider">Selection Summary</span>
+                <span className="text-emerald-700 font-medium">Server-Authoritative Price</span>
+              </div>
+              <div className="grid grid-cols-2 text-sm gap-y-1.5 text-gray-600">
+                <span>Selected Measurement:</span>
+                <span className="text-right font-medium text-gray-900">{variant.weight}</span>
+
+                <span>Unit / Pack Price:</span>
+                <span className="text-right font-medium text-gray-900">₹{linePriceCalc.unitPrice}</span>
+
+                <span>Selected Quantity:</span>
+                <span className="text-right font-medium text-gray-900">{quantity} {quantity === 1 ? 'pack' : 'packs'}</span>
+
+                <div className="col-span-2 pt-2 border-t border-gray-100 flex justify-between items-center">
+                  <span className="font-bold text-gray-900 text-base">Total Line Price:</span>
+                  <span className="font-extrabold text-brand-green text-xl">₹{linePriceCalc.totalPrice}</span>
+                </div>
+              </div>
             </div>
 
             {/* Action Buttons */}

@@ -43,6 +43,7 @@ import { useProductStore, type DiscountAnnouncement, type CouponItem } from '@/h
 import { useAuthStore } from '@/hooks/useStore';
 import { useOrderStore } from '@/hooks/useOrderStore';
 import { useSettingsStore } from '@/hooks/useSettingsStore';
+import { roundToTwo } from '@/services/orderCalculationService';
 import { supabase } from '@/services/supabase';
 import AdminLoginForm from '@/components/admin/AdminLoginForm';
 import AdminOrdersTab from '@/components/admin/AdminOrdersTab';
@@ -57,9 +58,11 @@ import AdminEmailTab from '@/components/admin/AdminEmailTab';
 import AdminSmsTab from '@/components/admin/AdminSmsTab';
 import AdminAboutUsTab from '@/components/admin/AdminAboutUsTab';
 import { AdminSalesTab } from '@/components/admin/AdminSalesTab';
-import AppImage from '@/components/common/AppImage';
+import { AdminDashboardTab } from '@/components/admin/AdminDashboardTab';
+import AppImage, { validateProductImageFile, normalizeImageUrl } from '@/components/common/AppImage';
 import { useAdminAuthStore, ROLE_DEFINITIONS, type AdminCategory, type AdminRole } from '@/hooks/useAdminAuthStore';
-import { categories, type Product, type ProductVariant } from '@/data/products';
+import { categories, type Product, type ProductVariant, type MeasurementUnit, type PricingModel, type ProductStatus } from '@/data/products';
+import { parseWeightString } from '@/utils/productConsolidation';
 import toast from 'react-hot-toast';
 
 export type ActiveCategoryTab =
@@ -129,6 +132,7 @@ export default function AdminConsolePage() {
     toggleCoupon,
     fetchCatalogAndSettings,
     resetToDefaults,
+    consolidateCatalog,
   } = useProductStore();
 
   const [activeTab, setActiveTab] = useState<ActiveCategoryTab>('dashboard');
@@ -192,18 +196,20 @@ export default function AdminConsolePage() {
       p.variants.some((v) => v.comparePrice && v.comparePrice > v.price)
     ).length;
 
-    const totalRevenue = orders
-      .filter((o) => o.order_status !== 'cancelled')
-      .reduce((sum, o) => sum + Number(o.total_amount || 0), 0);
-
+    const nonCancelled = orders.filter((o) => o.order_status !== 'cancelled');
+    const totalGross = nonCancelled.reduce((sum, o) => sum + Number(o.total || o.total_amount || 0), 0);
+    const totalDiscounts = nonCancelled.reduce(
+      (sum, o) => sum + Number(o.discount || 0) + Number(o.coupon_discount || 0) + Number(o.item_discount || 0),
+      0
+    );
+    const totalRefunded = orders.reduce((sum, o) => sum + Number(o.refunded_amount || 0), 0);
     const pendingOrders = orders.filter(
       (o) => o.order_status === 'placed' || o.order_status === 'confirmed' || o.order_status === 'preparing'
     ).length;
-
     const dispatchedOrders = orders.filter((o) => o.order_status === 'shipped').length;
     const deliveredOrders = orders.filter((o) => o.order_status === 'delivered').length;
     const cancelledOrders = orders.filter((o) => o.order_status === 'cancelled').length;
-    const totalRefunded = orders.reduce((sum, o) => sum + Number(o.refunded_amount || 0), 0);
+    const totalRevenue = Math.max(0, roundToTwo(totalGross - totalDiscounts - totalRefunded));
 
     return {
       total,
@@ -593,152 +599,7 @@ export default function AdminConsolePage() {
             {/* CATEGORY 1: DASHBOARD OVERVIEW                               */}
             {/* ============================================================ */}
             {activeTab === 'dashboard' && (
-              <div className="space-y-6">
-                {/* Welcome Card */}
-                <div className="bg-gradient-to-r from-slate-900 via-slate-850 to-emerald-950/40 border border-slate-800 rounded-2xl p-6 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
-                  <div>
-                    <h2 className="text-2xl font-black text-white tracking-tight">
-                      Welcome, {currentUser?.full_name || 'Administrator'}
-                    </h2>
-                    <p className="text-xs text-slate-400 mt-1">
-                      Here is the live operational summary for{' '}
-                      <strong className="text-emerald-400">{settings.businessName}</strong>. All data
-                      is synced with Cloud Database & Realtime.
-                    </p>
-                  </div>
-
-                  <div className="flex flex-wrap items-center gap-2">
-                    <button
-                      onClick={() => setActiveTab('orders')}
-                      className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-lg shadow-emerald-600/30 transition-all flex items-center gap-1.5 cursor-pointer"
-                    >
-                      <ShoppingBag className="w-4 h-4" />
-                      <span>Process Orders ({stats.pendingOrders})</span>
-                    </button>
-                    <button
-                      onClick={() => setActiveTab('inventory')}
-                      className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold border border-slate-700 transition-all flex items-center gap-1.5 cursor-pointer"
-                    >
-                      <Layers className="w-4 h-4 text-amber-400" />
-                      <span>Stock Control</span>
-                    </button>
-                    {canAccess('settings') && (
-                      <button
-                        onClick={() => {
-                          setActiveTab('settings');
-                          setSettingsSubTab('about-us');
-                        }}
-                        className="px-4 py-2 rounded-xl bg-amber-600/30 hover:bg-amber-600/50 text-amber-300 text-xs font-bold border border-amber-500/40 transition-all flex items-center gap-1.5 cursor-pointer"
-                      >
-                        <BookOpen className="w-4 h-4 text-amber-400" />
-                        <span>About Us CMS</span>
-                      </button>
-                    )}
-                  </div>
-                </div>
-
-                {/* KPI Stat Cards */}
-                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
-                  <div className="bg-slate-900 border border-slate-800 rounded-xl p-3.5">
-                    <p className="text-[11px] text-slate-400 font-medium">Pending Kitchen</p>
-                    <p className="text-xl font-black text-amber-400 mt-1">{stats.pendingOrders}</p>
-                    <p className="text-[10px] text-slate-500 mt-0.5">Awaiting prep / pack</p>
-                  </div>
-
-                  <div className="bg-slate-900 border border-slate-800 rounded-xl p-3.5">
-                    <p className="text-[11px] text-slate-400 font-medium">In Transit</p>
-                    <p className="text-xl font-black text-purple-400 mt-1">{stats.dispatchedOrders}</p>
-                    <p className="text-[10px] text-slate-500 mt-0.5">Assigned Tracking ID</p>
-                  </div>
-
-                  <div className="bg-slate-900 border border-slate-800 rounded-xl p-3.5">
-                    <p className="text-[11px] text-slate-400 font-medium">Delivered Orders</p>
-                    <p className="text-xl font-black text-emerald-400 mt-1">{stats.deliveredOrders}</p>
-                    <p className="text-[10px] text-slate-500 mt-0.5">Completed</p>
-                  </div>
-
-                  <div className="bg-red-950/20 border border-red-500/30 rounded-xl p-3.5">
-                    <p className="text-[11px] text-red-300 font-medium">Cancelled Orders</p>
-                    <p className="text-xl font-black text-red-400 mt-1">{stats.cancelledOrders}</p>
-                    <p className="text-[10px] text-slate-500 mt-0.5">Voided orders</p>
-                  </div>
-
-                  <div className="bg-cyan-950/20 border border-cyan-500/30 rounded-xl p-3.5">
-                    <p className="text-[11px] text-cyan-300 font-medium">Refunds Issued</p>
-                    <p className="text-xl font-black text-cyan-400 mt-1">₹{stats.totalRefunded.toLocaleString('en-IN')}</p>
-                    <p className="text-[10px] text-slate-500 mt-0.5">Processed to patrons</p>
-                  </div>
-
-                  <div className="bg-slate-900 border border-slate-800 rounded-xl p-3.5">
-                    <p className="text-[11px] text-slate-400 font-medium">Stock Alerts</p>
-                    <p className="text-xl font-black text-orange-400 mt-1">
-                      {stats.lowStock + stats.outOfStock}
-                    </p>
-                    <p className="text-[10px] text-slate-500 mt-0.5">
-                      {stats.outOfStock} out, {stats.lowStock} low
-                    </p>
-                  </div>
-                </div>
-
-                {/* Recent Orders Preview */}
-                <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5">
-                  <div className="flex items-center justify-between mb-4">
-                    <h3 className="font-bold text-white text-sm flex items-center gap-2">
-                      <ShoppingBag className="w-4 h-4 text-emerald-400" />
-                      <span>Recent Customer Orders</span>
-                    </h3>
-                    <button
-                      onClick={() => setActiveTab('orders')}
-                      className="text-xs text-emerald-400 hover:text-emerald-300 font-semibold cursor-pointer"
-                    >
-                      View All Orders ({orders.length}) →
-                    </button>
-                  </div>
-
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-left text-xs">
-                      <thead className="bg-slate-950/60 border-b border-slate-800 text-slate-400 uppercase tracking-wider font-semibold">
-                        <tr>
-                          <th className="py-2.5 px-3">Order Number</th>
-                          <th className="py-2.5 px-3">Customer</th>
-                          <th className="py-2.5 px-3">Amount</th>
-                          <th className="py-2.5 px-3">Status</th>
-                          <th className="py-2.5 px-3">Tracking ID</th>
-                          <th className="py-2.5 px-3 text-right">Date</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-800/60">
-                        {orders.slice(0, 5).map((o) => (
-                          <tr key={o.id} className="hover:bg-slate-850/50">
-                            <td className="py-2.5 px-3 font-mono font-bold text-white">
-                              {o.order_number}
-                            </td>
-                            <td className="py-2.5 px-3 text-slate-300">
-                              <span className="font-semibold text-white">{o.customer_name}</span>
-                              <span className="block text-[11px] text-slate-500">{o.customer_phone}</span>
-                            </td>
-                            <td className="py-2.5 px-3 font-bold text-white">₹{o.total_amount}</td>
-                            <td className="py-2.5 px-3">
-                              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase bg-slate-800 border border-slate-700 text-slate-300">
-                                {o.order_status}
-                              </span>
-                            </td>
-                            <td className="py-2.5 px-3 font-mono text-emerald-400">
-                              {o.tracking_id || '—'}
-                            </td>
-                            <td className="py-2.5 px-3 text-right text-slate-400 font-mono">
-                              {new Date(o.created_at).toLocaleDateString('en-IN', {
-                                month: 'short',
-                                day: 'numeric',
-                              })}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              </div>
+              <AdminDashboardTab onNavigateToTab={(tab) => setActiveTab(tab as ActiveCategoryTab)} />
             )}
 
             {/* ============================================================ */}
@@ -1137,17 +998,35 @@ export default function AdminConsolePage() {
                 </select>
               </div>
 
-              {/* Add Product Button */}
-              <button
-                onClick={() => {
-                  setEditingProduct(null);
-                  setProductModalOpen(true);
-                }}
-                className="flex items-center justify-center gap-2 px-5 py-2.5 bg-gradient-to-r from-emerald-600 to-green-600 hover:from-emerald-500 hover:to-green-500 text-white rounded-xl font-semibold text-sm shadow-lg shadow-emerald-600/30 transition-all flex-shrink-0"
-              >
-                <Plus className="w-4 h-4" />
-                <span>Add New Product</span>
-              </button>
+              {/* Action Buttons */}
+              <div className="flex items-center gap-2 flex-wrap">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const report = consolidateCatalog();
+                    toast.success(
+                      `Consolidated catalog: merged ${report.mergedProductCount} duplicate entries into ${report.totalConsolidatedProducts} products with selectable variants!`,
+                      { duration: 5000, icon: '🫙' }
+                    );
+                  }}
+                  className="flex items-center justify-center gap-2 px-4 py-2.5 bg-slate-800 hover:bg-slate-750 text-slate-200 border border-slate-700 rounded-xl font-semibold text-sm transition-all flex-shrink-0"
+                  title="Consolidate duplicate weight tiles into single products with selectable weights"
+                >
+                  <Sparkles className="w-4 h-4 text-emerald-400" />
+                  <span>Consolidate Catalog</span>
+                </button>
+
+                <button
+                  onClick={() => {
+                    setEditingProduct(null);
+                    setProductModalOpen(true);
+                  }}
+                  className="flex items-center justify-center gap-2 px-5 py-2.5 bg-gradient-to-r from-emerald-600 to-green-600 hover:from-emerald-500 hover:to-green-500 text-white rounded-xl font-semibold text-sm shadow-lg shadow-emerald-600/30 transition-all flex-shrink-0"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>Add New Product</span>
+                </button>
+              </div>
             </div>
 
             {/* Products Table */}
@@ -1196,17 +1075,14 @@ export default function AdminConsolePage() {
                             <td className="px-5 py-4">
                               <div className="flex items-center gap-3">
                                 <div className="relative w-12 h-12 rounded-xl overflow-hidden bg-slate-800 flex-shrink-0 border border-slate-700">
-                                  <img
-                                    src={product.images[0]}
+                                  <AppImage
+                                    src={product.images && product.images.length > 0 ? product.images[0] : `${import.meta.env.BASE_URL}images/pickle.jpg`}
                                     alt={product.name_en}
                                     className="w-full h-full object-cover"
-                                    onError={(e) => {
-                                      (e.target as HTMLImageElement).src =
-                                        import.meta.env.BASE_URL + 'images/pickle.jpg';
-                                    }}
+                                    fallbackSrc={`${import.meta.env.BASE_URL}images/pickle.jpg`}
                                   />
                                   {product.badge && (
-                                    <span className="absolute top-0.5 right-0.5 px-1 py-0.2 rounded text-[9px] font-bold bg-amber-500 text-slate-950 uppercase">
+                                    <span className="absolute top-0.5 right-0.5 px-1 py-0.2 rounded text-[9px] font-bold bg-amber-500 text-slate-950 uppercase z-10">
                                       {product.badge}
                                     </span>
                                   )}
@@ -1937,6 +1813,20 @@ function ProductEditorModal({
     product?.images[0] || import.meta.env.BASE_URL + 'images/pickle.jpg'
   );
   const [isActive, setIsActive] = useState(product ? product.is_active : true);
+  const [baseUnit, setBaseUnit] = useState<MeasurementUnit>(product?.base_unit || 'g');
+  const [pricingModel, setPricingModel] = useState<PricingModel>(product?.pricing_model || 'fixed_pack');
+  const [basePricePerUnit, setBasePricePerUnit] = useState<number | ''>(
+    product?.base_price_per_unit || (product?.pricing_model === 'per_unit' ? 600 : '')
+  );
+  const [status, setStatus] = useState<ProductStatus>(
+    product?.status || (product?.is_active ? 'active' : 'inactive')
+  );
+  const [minOrderQty, setMinOrderQty] = useState<number>(product?.min_order_qty || 1);
+  const [maxOrderQty, setMaxOrderQty] = useState<number>(product?.max_order_qty || 50);
+  const [qtyStep, setQtyStep] = useState<number>(product?.qty_step || 1);
+  const [lowStockThreshold, setLowStockThreshold] = useState<number>(
+    product?.low_stock_threshold || 10
+  );
 
   // Variants state
   const [variants, setVariants] = useState<ProductVariant[]>(
@@ -1976,6 +1866,31 @@ function ProductEditorModal({
     setVariants(updated);
   };
 
+  const autoCalculatePricesFromBase = () => {
+    if (!basePricePerUnit || Number(basePricePerUnit) <= 0) {
+      toast.error('Please enter a valid base price per unit (e.g. ₹600/kg)');
+      return;
+    }
+    const rate = Number(basePricePerUnit);
+    const updated = variants.map((v) => {
+      const parsed = parseWeightString(v.weight);
+      let ratio = 1;
+      if (baseUnit === 'kg' || baseUnit === 'l') {
+        ratio = parsed.normalizedGrams / 1000;
+      } else {
+        ratio = parsed.normalizedGrams;
+      }
+      const calcPrice = Math.round(ratio * rate);
+      return {
+        ...v,
+        price: calcPrice,
+        comparePrice: Math.round(calcPrice * 1.2),
+      };
+    });
+    setVariants(updated);
+    toast.success('Auto-calculated variant prices from base unit rate!');
+  };
+
   const addVariantRow = () => {
     setVariants([
       ...variants,
@@ -2012,6 +1927,9 @@ function ProductEditorModal({
       return;
     }
 
+    const totalStock = variants.reduce((sum, v) => sum + (v.stock || 0), 0);
+    const resolvedStatus = status || (totalStock === 0 ? 'out_of_stock' : isActive ? 'active' : 'inactive');
+
     onSave({
       name_en: nameEn.trim(),
       name_te: nameTe.trim() || nameEn.trim(),
@@ -2024,7 +1942,16 @@ function ProductEditorModal({
       ingredients_te: ingredientsTe.trim(),
       images: [imageUrl.trim()],
       variants,
-      is_active: isActive,
+      base_unit: baseUnit,
+      pricing_model: pricingModel,
+      base_price_per_unit: basePricePerUnit ? Number(basePricePerUnit) : undefined,
+      min_order_qty: minOrderQty,
+      max_order_qty: maxOrderQty,
+      qty_step: qtyStep,
+      low_stock_threshold: lowStockThreshold,
+      status: resolvedStatus,
+      is_active: resolvedStatus === 'active' || resolvedStatus === 'low_stock',
+      is_archived: resolvedStatus === 'archived',
       is_demo: false,
       rating: product?.rating || 4.8,
       reviewCount: product?.reviewCount || 1,
@@ -2152,32 +2079,59 @@ function ProductEditorModal({
 
             <div>
               <label className="block text-xs font-semibold text-slate-300 mb-1">
-                Image URL or Presets
+                Product Image URL, File Upload & Presets
               </label>
-              <div className="flex gap-2">
+
+              <div className="flex gap-2 items-center">
                 <input
                   type="text"
                   value={imageUrl}
                   onChange={(e) => setImageUrl(e.target.value)}
                   placeholder="https://... or /images/..."
-                  className="flex-1 px-3.5 py-2 bg-slate-800 border border-slate-700 rounded-xl text-sm text-white focus:outline-none focus:border-emerald-500"
+                  className="flex-1 px-3.5 py-2 bg-slate-800 border border-slate-700 rounded-xl text-sm text-white focus:outline-none focus:border-emerald-500 font-mono text-xs"
                   required
                 />
-                <div className="w-10 h-10 rounded-xl overflow-hidden bg-slate-800 border border-slate-700 flex-shrink-0">
-                  <img
+                <div className="w-12 h-12 rounded-xl overflow-hidden bg-slate-800 border border-slate-700 flex-shrink-0">
+                  <AppImage
                     src={imageUrl}
                     alt="Preview"
                     className="w-full h-full object-cover"
-                    onError={(e) => {
-                      (e.target as HTMLImageElement).src =
-                        import.meta.env.BASE_URL + 'images/pickle.jpg';
-                    }}
+                    fallbackSrc={`${import.meta.env.BASE_URL}images/pickle.jpg`}
                   />
                 </div>
               </div>
 
+              {/* Upload file directly with automated integrity validation */}
+              <div className="mt-2.5 p-3 bg-slate-850 rounded-xl border border-slate-750 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2">
+                <div>
+                  <p className="text-xs font-bold text-slate-200">Upload Image File (JPEG, PNG, WebP)</p>
+                  <p className="text-[11px] text-slate-400">Validated for MIME, non-zero dimensions (no blank images), &lt;5MB limit.</p>
+                </div>
+                <label className="cursor-pointer px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-semibold shadow transition flex items-center gap-1.5 flex-shrink-0">
+                  <span>📁 Choose File</span>
+                  <input
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp"
+                    className="hidden"
+                    onChange={async (e) => {
+                      const file = e.target.files?.[0];
+                      if (!file) return;
+                      const result = await validateProductImageFile(file);
+                      if (!result.valid) {
+                        toast.error(result.error || 'Invalid image file');
+                        return;
+                      }
+                      if (result.dataUrl) {
+                        setImageUrl(result.dataUrl);
+                        toast.success(`Image validated (${result.width}×${result.height}px, ${Math.round((result.fileSize || 0) / 1024)}KB)`);
+                      }
+                    }}
+                  />
+                </label>
+              </div>
+
               {/* Quick Preset Buttons */}
-              <div className="flex flex-wrap items-center gap-1.5 mt-2">
+              <div className="flex flex-wrap items-center gap-1.5 mt-2.5">
                 <span className="text-[11px] text-slate-400">Click presets:</span>
                 {IMAGE_PRESETS.map((preset, idx) => (
                   <button
@@ -2195,18 +2149,99 @@ function ProductEditorModal({
 
           {/* Section 3: Pricing & Variants */}
           <div className="space-y-4">
-            <div className="flex items-center justify-between border-b border-slate-800 pb-1">
-              <h3 className="text-xs font-bold uppercase tracking-wider text-emerald-400">
-                3. Weights, Pricing & Discount Compare Values
-              </h3>
-              <button
-                type="button"
-                onClick={addVariantRow}
-                className="text-xs text-emerald-400 hover:text-emerald-300 font-semibold flex items-center gap-1"
-              >
-                <Plus className="w-3.5 h-3.5" />
-                <span>Add Variant</span>
-              </button>
+            <div className="border-b border-slate-800 pb-2 space-y-3">
+              <div className="flex items-center justify-between">
+                <h3 className="text-xs font-bold uppercase tracking-wider text-emerald-400">
+                  3. Measurement, Pricing Model & Variants
+                </h3>
+                <button
+                  type="button"
+                  onClick={addVariantRow}
+                  className="text-xs text-emerald-400 hover:text-emerald-300 font-semibold flex items-center gap-1"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Add Variant</span>
+                </button>
+              </div>
+
+              {/* Model and Unit Controls */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 p-3 bg-slate-850 rounded-xl border border-slate-750">
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-300 mb-1">
+                    Base Measurement Unit
+                  </label>
+                  <select
+                    value={baseUnit}
+                    onChange={(e) => setBaseUnit(e.target.value as MeasurementUnit)}
+                    className="w-full px-3 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-xs text-white"
+                  >
+                    <option value="g">Grams (g)</option>
+                    <option value="kg">Kilograms (kg)</option>
+                    <option value="ml">Millilitres (ml)</option>
+                    <option value="l">Litres (L)</option>
+                    <option value="pcs">Pieces (pcs)</option>
+                    <option value="packs">Packs / Boxes</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-300 mb-1">
+                    Pricing Model
+                  </label>
+                  <select
+                    value={pricingModel}
+                    onChange={(e) => setPricingModel(e.target.value as PricingModel)}
+                    className="w-full px-3 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-xs text-white"
+                  >
+                    <option value="fixed_pack">Model B — Fixed Pack Price</option>
+                    <option value="per_unit">Model A — Price Per Base Unit</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-300 mb-1">
+                    Product Lifecycle Status
+                  </label>
+                  <select
+                    value={status}
+                    onChange={(e) => setStatus(e.target.value as ProductStatus)}
+                    className="w-full px-3 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-xs text-white font-medium"
+                  >
+                    <option value="active">Active / Available</option>
+                    <option value="low_stock">Low Stock Alert</option>
+                    <option value="out_of_stock">Out of Stock</option>
+                    <option value="inactive">Inactive / Draft</option>
+                    <option value="archived">Archived / Discontinued</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Model A Specific Rate Calculation */}
+              {pricingModel === 'per_unit' && (
+                <div className="p-3 bg-emerald-950/30 border border-emerald-800/60 rounded-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                  <div className="flex-1">
+                    <label className="block text-[11px] font-bold text-emerald-300 mb-0.5">
+                      Base Price Rate (₹ per {baseUnit})
+                    </label>
+                    <input
+                      type="number"
+                      min="1"
+                      value={basePricePerUnit}
+                      onChange={(e) => setBasePricePerUnit(e.target.value ? Number(e.target.value) : '')}
+                      placeholder="e.g. 600"
+                      className="w-full sm:w-48 px-3 py-1.5 bg-slate-900 border border-emerald-700 rounded-lg text-xs font-bold text-emerald-400"
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={autoCalculatePricesFromBase}
+                    className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-semibold shadow flex items-center gap-1.5 flex-shrink-0"
+                  >
+                    <Sparkles className="w-3.5 h-3.5" />
+                    <span>Auto-Calculate Variant Selling Prices</span>
+                  </button>
+                </div>
+              )}
             </div>
 
             <div className="space-y-2">

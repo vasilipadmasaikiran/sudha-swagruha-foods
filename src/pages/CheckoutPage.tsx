@@ -319,6 +319,18 @@ export default function CheckoutPage() {
   };
 
   const onSubmit = async (data: CheckoutForm) => {
+    // Strict stock validation before proceeding (Requirement 4.2, 4.3)
+    const { validateCartStock } = useCartStore.getState();
+    const stockCheck = validateCartStock();
+    if (!stockCheck.isValid) {
+      const firstIssue = stockCheck.issues[0];
+      toast.error(
+        `Stock unavailable: ${firstIssue.name} (${firstIssue.weight}) only has ${firstIssue.available} available (requested ${firstIssue.requested}). Please adjust your cart.`,
+        { duration: 5000 }
+      );
+      return;
+    }
+
     setProcessing(true);
 
     const orderNumber = generateOrderNumber();

@@ -5,6 +5,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { supabase, isSupabaseConfigured } from '@/services/supabase';
+import { logAdminAction } from '@/services/auditLogger';
 
 export interface NotificationEventToggles {
   orderConfirmed: boolean;
@@ -73,6 +74,14 @@ export interface StoreSettings {
   businessEmail: string;
   businessAddress: string;
   businessHours: string;
+
+  // Physical Business Coordinates (Issues #4 & #22)
+  addressLine1?: string;
+  addressLine2?: string;
+  city?: string;
+  state?: string;
+  postalCode?: string;
+  country?: string;
 
   // Payment Gateway Configuration
   paymentGatewayEnabled: boolean;
@@ -154,6 +163,12 @@ export const defaultSettings: StoreSettings = {
   businessWhatsApp: '8374634989',
   businessEmail: 'info@sudhaswagruhafoods.com',
   businessAddress: 'Plot 18, Traditional Foods Lane, Benz Circle, Vijayawada, Andhra Pradesh - 520010',
+  addressLine1: 'Plot 18, Traditional Foods Lane',
+  addressLine2: 'Benz Circle',
+  city: 'Vijayawada',
+  state: 'Andhra Pradesh',
+  postalCode: '520010',
+  country: 'India',
   businessHours: '9:00 AM - 9:00 PM (All Days)',
   paymentGatewayEnabled: false,
   razorpayKeyId: '',
@@ -288,9 +303,25 @@ export const useSettingsStore = create<SettingsStore>()(
 
       // ─── Update Settings (Local + Cloud Sync) ─────────────────────
       updateSettings: (updates) => {
-        const next: StoreSettings = { ...get().settings, ...updates };
+        const prev = get().settings;
+        const next: StoreSettings = { ...prev, ...updates };
         set({ settings: next });
         syncDocTitle(next);
+
+        // Audit Logging: BUSINESS_ADDRESS_UPDATED if address changed
+        if (
+          updates.businessAddress !== undefined &&
+          updates.businessAddress !== prev.businessAddress
+        ) {
+          logAdminAction('Admin', 'ROOT_ADMIN', 'BUSINESS_ADDRESS_UPDATED', 'SETTINGS', 'business_address', {
+            previousValue: prev.businessAddress,
+            newValue: next.businessAddress,
+            addressLine1: next.addressLine1,
+            city: next.city,
+            state: next.state,
+            postalCode: next.postalCode,
+          }).catch((e) => console.warn('Audit log notice:', e));
+        }
 
         if (isSupabaseConfigured()) {
           supabase
@@ -307,12 +338,23 @@ export const useSettingsStore = create<SettingsStore>()(
         }
       },
 
-      // ─── Update Tax / GST Settings Specifically (Issues #2, #5, #8) ───
+      // ─── Update Tax / GST Settings Specifically (Issues #3 & #17-20) ───
       updateTaxSettings: (taxUpdates) => {
         const current = get().settings;
-        const nextTax: TaxSettings = { ...(current.tax || defaultTaxSettings), ...taxUpdates };
+        const prevTax = current.tax || defaultTaxSettings;
+        const nextTax: TaxSettings = { ...prevTax, ...taxUpdates };
         const nextSettings: StoreSettings = { ...current, tax: nextTax };
         set({ settings: nextSettings });
+
+        // Audit Logging: GST_CONFIGURATION_UPDATED
+        logAdminAction('Admin', 'ROOT_ADMIN', 'GST_CONFIGURATION_UPDATED', 'SETTINGS', 'tax_gst', {
+          previousGstEnabled: prevTax.gstEnabled,
+          newGstEnabled: nextTax.gstEnabled,
+          previousGstRate: prevTax.gstRate,
+          newGstRate: nextTax.gstRate,
+          gstNumber: nextTax.gstNumber,
+          hsnCode: nextTax.hsnCode,
+        }).catch((e) => console.warn('Audit log notice:', e));
 
         if (isSupabaseConfigured()) {
           supabase
