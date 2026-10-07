@@ -1050,9 +1050,34 @@ export const EmailService = {
   }): Promise<EmailSendResult> {
     const sender = `${fromName} <${fromEmail}>`;
 
-    // 1. Check Resend API (HTTP REST — reliable for client-side and serverless)
+    // 1. Check Resend API (Direct HTTP or Supabase Edge Function Relay)
     const resendKey = smtp.resendApiKey || (smtp.password?.startsWith('re_') ? smtp.password : '');
     if (resendKey) {
+      // First attempt Supabase Edge Function relay (server-side, avoids CORS and browser blocking)
+      try {
+        const { data, error } = await supabase.functions.invoke('send-email', {
+          body: {
+            to: Array.isArray(to) ? to : [to],
+            subject,
+            html,
+            text,
+            fromName,
+            fromEmail,
+            resendApiKey: resendKey,
+          },
+        });
+        if (!error && data?.success) {
+          return {
+            success: true,
+            message: `Email dispatched successfully to ${to} via Supabase Edge Relay (ID: ${data.id || 'ok'})`,
+            details: data,
+          };
+        }
+      } catch (edgeErr) {
+        console.warn('Supabase Edge Function relay unavailable, trying direct fetch:', edgeErr);
+      }
+
+      // Secondary attempt: Direct fetch to Resend API
       try {
         const response = await fetch('https://api.resend.com/emails', {
           method: 'POST',
@@ -1081,9 +1106,14 @@ export const EmailService = {
         };
       } catch (err: any) {
         console.warn('Resend API dispatch error:', err);
+        const isCorsOrNetwork = err.message?.includes('Failed to fetch') || err.name === 'TypeError';
+        const msg = isCorsOrNetwork
+          ? `Resend direct browser dispatch blocked by CORS/Adblocker. Deploy Supabase Edge Function ("supabase functions deploy send-email") or verify "From" domain in Resend.`
+          : `Resend dispatch failed: ${err.message}`;
+
         return {
           success: false,
-          message: `Resend dispatch failed: ${err.message}`,
+          message: msg,
           technicalError: err.message,
         };
       }
