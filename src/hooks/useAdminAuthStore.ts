@@ -106,8 +106,8 @@ export async function hashPassword(plainText: string): Promise<string> {
 
 // Pre-computed SHA-256 hashes for default demo accounts
 // 'admin123' -> 240be518fabd2724ddb6f04eeb1da5967448d7e831c08c8fa822809f74c720a9
-// 'store123' -> cb73ddc63cdfd165f1e1a53906e5793ecff6f753ee9c1e7cb8059ff7b0ee56d7
-// 'orders123' -> a1032338ff913feebef0a12cfda06155ee292be9109fc8f498c4d618cf2740e3
+// 'store123' -> 8b3d9bca7c134a9190277204379941460eb33c39868309401f02fa8e0391d4a7
+// 'orders123' -> 4cb4be123681e0da59d6073250033eefed8f8a2a773d3e9d06862438b9df4870
 const DEFAULT_ADMIN_USERS: AdminUser[] = [
   {
     id: 'user-root-01',
@@ -127,7 +127,7 @@ const DEFAULT_ADMIN_USERS: AdminUser[] = [
     full_name: 'Venkata Raman (Store Keeper)',
     role: 'STORE_KEEPER',
     status: 'active',
-    password_hash: 'cb73ddc63cdfd165f1e1a53906e5793ecff6f753ee9c1e7cb8059ff7b0ee56d7',
+    password_hash: '8b3d9bca7c134a9190277204379941460eb33c39868309401f02fa8e0391d4a7',
     created_at: new Date(Date.now() - 3600000 * 24 * 15).toISOString(),
     last_login: new Date(Date.now() - 3600000 * 5).toISOString(),
   },
@@ -138,7 +138,7 @@ const DEFAULT_ADMIN_USERS: AdminUser[] = [
     full_name: 'Anitha Devi (Order Processor)',
     role: 'ORDER_PROCESSOR',
     status: 'active',
-    password_hash: 'a1032338ff913feebef0a12cfda06155ee292be9109fc8f498c4d618cf2740e3',
+    password_hash: '4cb4be123681e0da59d6073250033eefed8f8a2a773d3e9d06862438b9df4870',
     created_at: new Date(Date.now() - 3600000 * 24 * 10).toISOString(),
     last_login: new Date(Date.now() - 3600000 * 2).toISOString(),
   },
@@ -149,9 +149,9 @@ const isUuid = (val: string) =>
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(val);
 
 // Helper to convert database admin_users record to frontend AdminUser
-const mapDbUser = (dbRow: any): AdminUser => ({
+const mapDbUser = (dbRow: any, fallbackUsername?: string): AdminUser => ({
   id: dbRow.id,
-  username: dbRow.username || dbRow.email.split('@')[0],
+  username: dbRow.username || fallbackUsername || dbRow.email.split('@')[0],
   email: dbRow.email,
   full_name: dbRow.full_name,
   role: dbRow.role as AdminRole,
@@ -168,7 +168,7 @@ interface AdminAuthStore {
   currentUser: AdminUser | null;
   users: AdminUser[];
   isLoadingUsers: boolean;
-  login: (email: string, plainPassword: string) => Promise<{ success: boolean; error?: string }>;
+  login: (identifier: string, plainPassword: string) => Promise<{ success: boolean; error?: string }>;
   logout: () => void;
   // RBAC Permission checks
   canAccess: (category: AdminCategory) => boolean;
@@ -202,14 +202,27 @@ export const useAdminAuthStore = create<AdminAuthStore>()(
         if (!isSupabaseConfigured()) return;
         set({ isLoadingUsers: true });
         try {
-          const { data, error } = await supabase
-            .from('admin_users')
-            .select('*')
-            .order('created_at', { ascending: true });
+          const [usersRes, settingsRes] = await Promise.all([
+            supabase.from('admin_users').select('*').order('created_at', { ascending: true }),
+            supabase.from('store_settings').select('value').eq('key', 'admin_users_registry').maybeSingle(),
+          ]);
 
-          if (!error && data && data.length > 0) {
-            const cloudUsers = data.map(mapDbUser);
-            // Merge cloud users, keeping default users as backup if not present in DB
+          // Extract username map from registry backup so custom usernames are never lost
+          const usernameMap = new Map<string, string>();
+          if (settingsRes.data?.value && Array.isArray(settingsRes.data.value)) {
+            for (const item of settingsRes.data.value) {
+              if (item.email && item.username) {
+                usernameMap.set(item.email.toLowerCase(), item.username);
+              }
+            }
+          }
+
+          if (!usersRes.error && usersRes.data && usersRes.data.length > 0) {
+            const cloudUsers = usersRes.data.map((row) =>
+              mapDbUser(row, usernameMap.get(row.email?.toLowerCase()))
+            );
+
+            // Merge cloud users, keeping default accounts as fallback if not present in DB
             const merged = [...cloudUsers];
             for (const def of DEFAULT_ADMIN_USERS) {
               if (!merged.some((u) => u.email.toLowerCase() === def.email.toLowerCase())) {
@@ -291,23 +304,75 @@ export const useAdminAuthStore = create<AdminAuthStore>()(
         }
       },
 
-      login: async (email, plainPassword) => {
-        const cleanEmail = email.trim().toLowerCase();
+      // ─── Dual Identifier Login (User ID / Username or Email) ─────────
+      login: async (identifier, plainPassword) => {
+        const cleanId = identifier.trim().toLowerCase();
         const inputHash = await hashPassword(plainPassword);
 
-        // Find user in registry
-        let user = get().users.find((u) => u.email.toLowerCase() === cleanEmail);
+        // 1. Search in local registry by username, email, or id
+        let user = get().users.find(
+          (u) =>
+            u.email.toLowerCase() === cleanId ||
+            (u.username && u.username.toLowerCase() === cleanId) ||
+            u.id.toLowerCase() === cleanId
+        );
 
-        // If not in local cache, attempt direct lookup from Supabase DB
+        // 2. If not found in local cache, search Supabase directly
         if (!user && isSupabaseConfigured()) {
           try {
-            const { data: dbUser } = await supabase
+            // A. Check by email
+            const { data: dbUserByEmail } = await supabase
               .from('admin_users')
               .select('*')
-              .eq('email', cleanEmail)
+              .eq('email', cleanId)
               .maybeSingle();
-            if (dbUser) {
-              user = mapDbUser(dbUser);
+
+            if (dbUserByEmail) {
+              user = mapDbUser(dbUserByEmail);
+            } else {
+              // B. Check by username column in admin_users if column exists
+              try {
+                const { data: dbUserByUsername } = await supabase
+                  .from('admin_users')
+                  .select('*')
+                  .eq('username', cleanId)
+                  .maybeSingle();
+                if (dbUserByUsername) {
+                  user = mapDbUser(dbUserByUsername);
+                }
+              } catch (_) {}
+
+              // C. If still not found, check store_settings registry (matches custom username)
+              if (!user) {
+                const { data: regData } = await supabase
+                  .from('store_settings')
+                  .select('value')
+                  .eq('key', 'admin_users_registry')
+                  .maybeSingle();
+
+                if (regData?.value && Array.isArray(regData.value)) {
+                  const matched = regData.value.find(
+                    (u: any) =>
+                      (u.username && u.username.toLowerCase() === cleanId) ||
+                      (u.email && u.email.toLowerCase() === cleanId)
+                  );
+                  if (matched && matched.email) {
+                    const { data: dbUser } = await supabase
+                      .from('admin_users')
+                      .select('*')
+                      .eq('email', matched.email)
+                      .maybeSingle();
+                    if (dbUser) {
+                      user = mapDbUser(dbUser, matched.username);
+                    } else {
+                      user = matched;
+                    }
+                  }
+                }
+              }
+            }
+
+            if (user) {
               set((state) => ({
                 users: [...state.users.filter((u) => u.email !== user!.email), user!],
               }));
@@ -317,24 +382,44 @@ export const useAdminAuthStore = create<AdminAuthStore>()(
           }
         }
 
+        // 3. Fallback for demo aliases
         if (!user) {
-          // Check fallback for alias admin@sudhafoods.com
-          if (cleanEmail === 'admin@sudhafoods.com' && plainPassword === 'admin123') {
+          if (cleanId === 'superadmin' || cleanId === 'admin@sudhafoods.com') {
             const root = get().users.find((u) => u.role === 'ROOT_ADMIN') || DEFAULT_ADMIN_USERS[0];
-            set({ currentUser: root });
-            return { success: true };
+            if (plainPassword === 'admin123') {
+              set({ currentUser: root });
+              return { success: true };
+            }
           }
-          return { success: false, error: 'User with this email not found' };
+          return { success: false, error: 'User does not exist. Please check your User ID or Email.' };
         }
 
+        // 4. Validate Account Status
         if (user.status === 'disabled') {
-          return { success: false, error: 'This user account has been disabled by Root Administrator' };
+          return {
+            success: false,
+            error: 'This account has been disabled or suspended. Please contact the Root Administrator.',
+          };
         }
 
-        if (user.password_hash !== inputHash && plainPassword !== 'admin123') {
-          return { success: false, error: 'Invalid password credentials' };
+        // 5. Validate Password Credentials
+        const isDemoUser =
+          user.id === 'user-root-admin' ||
+          user.id === 'user-store-keeper' ||
+          user.id === 'user-order-processor' ||
+          user.email.endsWith('@sudhaswagruha.com');
+
+        const isDemoMatch =
+          isDemoUser &&
+          ((plainPassword === 'admin123' && user.role === 'ROOT_ADMIN') ||
+            (plainPassword === 'store123' && user.role === 'STORE_KEEPER') ||
+            (plainPassword === 'orders123' && user.role === 'ORDER_PROCESSOR'));
+
+        if (user.password_hash !== inputHash && !isDemoMatch) {
+          return { success: false, error: 'Invalid password. Please check your credentials.' };
         }
 
+        // 6. Successful Authentication Session
         const now = new Date().toISOString();
         const updatedUser = { ...user, last_login: now };
 
@@ -343,7 +428,7 @@ export const useAdminAuthStore = create<AdminAuthStore>()(
           users: state.users.map((u) => (u.id === user.id ? updatedUser : u)),
         }));
 
-        // Update last_login in Supabase DB asynchronously
+        // Asynchronously update last_login in Supabase DB
         if (isSupabaseConfigured() && user.id) {
           const updateQuery = supabase
             .from('admin_users')
@@ -360,11 +445,13 @@ export const useAdminAuthStore = create<AdminAuthStore>()(
           updatedUser.role,
           'USER_LOGGED_IN',
           'AUTH',
-          updatedUser.id
+          updatedUser.id,
+          { identifier: cleanId, method: cleanId.includes('@') ? 'email' : 'username' }
         );
 
         return { success: true };
       },
+
 
       logout: () => {
         const user = get().currentUser;

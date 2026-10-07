@@ -649,14 +649,14 @@ export default function AdminUsersTab() {
                 <div className="grid grid-cols-2 gap-3">
                   <div>
                     <label className="block font-bold uppercase tracking-wider text-slate-300 mb-1">
-                      Username *
+                      User ID / Username *
                     </label>
                     <input
                       type="text"
                       required
                       value={newUsername}
                       onChange={(e) => setNewUsername(e.target.value)}
-                      placeholder="e.g. ramesh_admin"
+                      placeholder="e.g. storekeeper01"
                       className="w-full px-3.5 py-2.5 bg-slate-800 border border-slate-700 rounded-xl text-white font-mono focus:outline-none focus:border-indigo-500"
                     />
                   </div>

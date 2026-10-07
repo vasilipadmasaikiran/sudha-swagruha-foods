@@ -13,7 +13,7 @@ import { useAdminAuthStore, type AdminRole } from '@/hooks/useAdminAuthStore';
 import toast from 'react-hot-toast';
 
 export default function AdminLoginForm({ onLogin }: { onLogin?: () => void }) {
-  const [email, setEmail] = useState('');
+  const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const { setAdmin } = useAuthStore();
@@ -24,29 +24,32 @@ export default function AdminLoginForm({ onLogin }: { onLogin?: () => void }) {
     setLoading(true);
 
     try {
-      // 1. Try RBAC authenticated login
-      const rbacResult = await rbacLogin(email.trim(), password);
+      // 1. Try RBAC authenticated login (supports both User ID/Username and Email)
+      const rbacResult = await rbacLogin(identifier.trim(), password);
       if (rbacResult.success) {
-        setAdmin(true, email.trim());
-        toast.success(`Welcome to Admin Console! Authenticated via RBAC.`);
+        const activeUser = useAdminAuthStore.getState().currentUser;
+        setAdmin(true, activeUser?.email || identifier.trim());
+        toast.success(`Welcome ${activeUser?.full_name || 'Admin'}! Authenticated as ${activeUser?.role || 'Admin'}.`);
         if (onLogin) onLogin();
         return;
       }
 
-      // 2. Fallback to Supabase Auth if credentials match Supabase user
-      const { data, error } = await supabase.auth.signInWithPassword({
-        email: email.trim(),
-        password,
-      });
+      // 2. Fallback to Supabase Auth if credentials match Supabase user and identifier is an email
+      if (identifier.includes('@')) {
+        const { data, error } = await supabase.auth.signInWithPassword({
+          email: identifier.trim(),
+          password,
+        });
 
-      if (!error && data.user) {
-        setAdmin(true, data.user?.email || email.trim());
-        toast.success('Welcome back, Admin!');
-        if (onLogin) onLogin();
-        return;
+        if (!error && data.user) {
+          setAdmin(true, data.user?.email || identifier.trim());
+          toast.success('Welcome back, Admin!');
+          if (onLogin) onLogin();
+          return;
+        }
       }
 
-      toast.error(rbacResult.error || 'Invalid email or password.');
+      toast.error(rbacResult.error || 'Invalid User ID / Email or password.');
     } catch (err: any) {
       toast.error(err.message || 'Authentication error. Please check credentials.');
     } finally {
@@ -54,8 +57,8 @@ export default function AdminLoginForm({ onLogin }: { onLogin?: () => void }) {
     }
   };
 
-  const handleFillRole = (targetEmail: string, pass: string) => {
-    setEmail(targetEmail);
+  const handleFillRole = (targetIdentifier: string, pass: string) => {
+    setIdentifier(targetIdentifier);
     setPassword(pass);
   };
 
@@ -79,17 +82,18 @@ export default function AdminLoginForm({ onLogin }: { onLogin?: () => void }) {
         <form onSubmit={handleLogin} className="space-y-4">
           <div>
             <label className="block text-xs font-semibold text-slate-300 mb-1.5 uppercase tracking-wider">
-              Account Email
+              User ID or Email Address
             </label>
             <div className="relative">
-              <Mail className="w-4 h-4 text-slate-500 absolute left-3.5 top-1/2 -translate-y-1/2" />
+              <UserCheck className="w-4 h-4 text-slate-500 absolute left-3.5 top-1/2 -translate-y-1/2" />
               <input
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                className="w-full pl-10 pr-4 py-3 bg-slate-800 border border-slate-700 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 text-sm"
-                placeholder="admin@sudhaswagruha.com"
+                type="text"
+                value={identifier}
+                onChange={(e) => setIdentifier(e.target.value)}
+                className="w-full pl-10 pr-4 py-3 bg-slate-800 border border-slate-700 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 text-sm font-medium"
+                placeholder="e.g. storekeeper01 or admin@sudhaswagruha.com"
                 required
+                autoComplete="username"
               />
             </div>
           </div>

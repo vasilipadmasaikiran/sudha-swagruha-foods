@@ -1,7 +1,7 @@
 // ============================================================
 // Admin Console Page - Products, Pricing & Announcement Management
 // ============================================================
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
@@ -308,6 +308,13 @@ export default function AdminConsolePage() {
 
   // RBAC Navigation Visibility Enforcement
   const visibleCategories = CATEGORIES.filter((cat) => canAccess(cat.id));
+
+  // Auto-switch to first permitted module if current activeTab is not accessible for this role
+  useEffect(() => {
+    if (visibleCategories.length > 0 && !canAccess(activeTab)) {
+      setActiveTab(visibleCategories[0].id);
+    }
+  }, [currentUser?.role, activeTab, visibleCategories, canAccess]);
 
   // Determine current active role display
   const currentRole = currentUser?.role || 'ROOT_ADMIN';
