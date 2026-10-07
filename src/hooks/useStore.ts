@@ -6,7 +6,9 @@ import { persist } from 'zustand/middleware';
 import type { Language } from '@/i18n/translations';
 import type { Product, ProductVariant } from '@/data/products';
 import { useProductStore, type CouponItem } from './useProductStore';
+import { useSettingsStore } from './useSettingsStore';
 import { supabase, isSupabaseConfigured } from '@/services/supabase';
+import { calculateOrderFinancials, type OrderFinancialSummary } from '@/services/orderCalculationService';
 
 // ─── Cart Types ───────────────────────────────────────────────
 export interface CartItem {
@@ -28,6 +30,7 @@ interface CartStore {
   openCart: () => void;
   closeCart: () => void;
   applyCoupon: (code: string) => Promise<boolean>;
+  getFinancialSummary: () => OrderFinancialSummary;
   getSubtotal: () => number;
   getDeliveryCharge: () => number;
   getTotal: () => number;
@@ -213,24 +216,35 @@ export const useCartStore = create<CartStore>()(
         return false;
       },
 
+      getFinancialSummary: () => {
+        const rawItems = get().items.map((it) => ({
+          product_id: it.product.id,
+          unit_price: it.variant.price,
+          quantity: it.quantity,
+          total_price: it.variant.price * it.quantity,
+        }));
+        const rawSubtotal = rawItems.reduce((s, it) => s + it.total_price, 0);
+        const shippingCharge = rawSubtotal >= 499 || rawSubtotal === 0 ? 0 : 60;
+        const taxConfig = useSettingsStore.getState().settings.tax;
+
+        return calculateOrderFinancials({
+          items: rawItems,
+          couponDiscountPercent: get().discount,
+          shippingCharge,
+          taxConfig,
+        });
+      },
+
       getSubtotal: () => {
-        return get().items.reduce(
-          (sum, item) => sum + item.variant.price * item.quantity,
-          0
-        );
+        return get().getFinancialSummary().originalSubtotal;
       },
 
       getDeliveryCharge: () => {
-        const subtotal = get().getSubtotal();
-        return subtotal >= 499 ? 0 : 60;
+        return get().getFinancialSummary().shippingAmount;
       },
 
       getTotal: () => {
-        const subtotal = get().getSubtotal();
-        const delivery = get().getDeliveryCharge();
-        const discount = get().discount;
-        const discountAmount = Math.floor((subtotal * discount) / 100);
-        return subtotal + delivery - discountAmount;
+        return get().getFinancialSummary().grandTotal;
       },
 
       getItemCount: () => {

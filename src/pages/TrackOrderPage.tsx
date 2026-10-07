@@ -846,76 +846,201 @@ export default function TrackOrderPage() {
 
                 {/* Financial Reconciliation Summary Breakdown with Authoritative Calculations (Requirements 2, 21) */}
                 {(() => {
-                  const metrics = calculateOrderRefundableMetrics(activeOrder);
-                  return (
-                    <div className="mt-6 pt-4 border-t border-gray-100 space-y-3 text-xs">
-                      <div className="flex items-center justify-between">
-                        <h4 className="font-bold text-gray-900 text-sm flex items-center gap-1.5">
-                          <DollarSign className="w-4 h-4 text-brand-green" />
-                          <span>Financial & Refund Summary</span>
-                        </h4>
-                        <span
-                          className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase ${
-                            activeOrder.payment_status === 'paid'
-                              ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
-                              : activeOrder.payment_status === 'partially_refunded'
-                              ? 'bg-amber-100 text-amber-800 border border-amber-200'
-                              : activeOrder.payment_status === 'refunded'
-                              ? 'bg-purple-100 text-purple-800 border border-purple-200'
-                              : 'bg-gray-100 text-gray-700'
-                          }`}
-                        >
-                          Payment: {activeOrder.payment_status.toUpperCase()}
-                        </span>
-                      </div>
+                  const refundMetrics = calculateOrderRefundableMetrics(activeOrder);
+                  const subtotal = activeOrder.subtotal || activeOrder.total;
+                  const itemDiscount = activeOrder.item_discount || 0;
+                  const couponDiscount = activeOrder.coupon_discount || activeOrder.discount || 0;
+                  const totalDiscount = itemDiscount + couponDiscount;
+                  const taxableAmount = activeOrder.taxable_amount || Math.max(0, subtotal - totalDiscount);
+                  const gstRate = activeOrder.gst_rate || 0;
+                  const gstAmount = activeOrder.gst_amount || 0;
+                  const shippingAmount = activeOrder.delivery_charge || 0;
+                  const amountPaid = activeOrder.amount_paid !== undefined ? activeOrder.amount_paid : refundMetrics.paidAmount;
+                  const amountDue = activeOrder.amount_due !== undefined ? activeOrder.amount_due : Math.max(0, activeOrder.total - amountPaid);
+                  const totalRefunded = activeOrder.refunded_amount || refundMetrics.alreadyRefunded;
+                  const remainingRefundable = Math.max(0, amountPaid - totalRefunded);
 
-                      <div className="bg-gray-50/80 p-3.5 rounded-2xl border border-gray-200/80 space-y-2">
-                        <div className="flex justify-between items-center text-gray-600">
-                          <span>Original Order Total</span>
-                          <span className="font-semibold text-gray-900 font-mono text-sm">₹{activeOrder.total}</span>
-                        </div>
-                        <div className="flex justify-between items-center text-gray-600">
-                          <span>Final Amount Paid</span>
-                          <span className="font-bold text-emerald-700 font-mono text-sm">₹{metrics.paidAmount}</span>
-                        </div>
-                        {metrics.alreadyRefunded > 0 && (
-                          <div className="flex justify-between items-center text-amber-800">
-                            <span>Previously Refunded</span>
-                            <span className="font-bold font-mono text-sm text-amber-900">-₹{metrics.alreadyRefunded}</span>
-                          </div>
-                        )}
-                        <div className="flex justify-between items-center text-gray-600">
-                          <span>Total Refunded Amount</span>
-                          <span className="font-bold font-mono text-sm text-brand-green">₹{metrics.alreadyRefunded}</span>
-                        </div>
-                        <div className="flex justify-between items-center text-gray-600">
-                          <span>Remaining Refundable Balance</span>
-                          <span className="font-mono text-sm text-gray-700">₹{metrics.remainingRefundableAmount}</span>
-                        </div>
-                        <div className="flex justify-between items-center pt-2 border-t border-gray-200 text-xs font-bold text-gray-900">
-                          <span>Refund Status</span>
-                          <span className="uppercase text-brand-green font-mono">
-                            {activeOrder.refunded_amount && activeOrder.refunded_amount >= activeOrder.total
-                              ? 'SUCCEEDED'
-                              : activeOrder.refunded_amount && activeOrder.refunded_amount > 0
-                              ? 'PARTIALLY_REFUNDED'
-                              : metrics.isPaid
-                              ? 'NOT_REQUIRED'
-                              : 'UNPAID'}
+                  // Find latest refund for Current Refund display
+                  const refunds = Array.isArray(activeOrder.refunds) ? activeOrder.refunds : [];
+                  const latestRefund = refunds.length > 0 ? refunds[refunds.length - 1] : null;
+                  const previousRefunds = refunds.length > 1
+                    ? refunds.slice(0, -1).reduce((s, r) => s + r.amount, 0)
+                    : 0;
+
+                  return (
+                    <div className="mt-6 pt-4 border-t border-gray-100 space-y-4 text-xs">
+                      {/* ─── 1. Authoritative Order Financial Summary (Issues #3, #9, #11) ─── */}
+                      <div className="bg-gray-50/90 p-4 rounded-2xl border border-gray-200/90 space-y-2.5">
+                        <div className="flex items-center justify-between pb-2 border-b border-gray-200">
+                          <h4 className="font-bold text-gray-900 text-sm flex items-center gap-1.5">
+                            <DollarSign className="w-4 h-4 text-brand-green" />
+                            <span>Order Financial Breakdown</span>
+                          </h4>
+                          <span
+                            className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${
+                              activeOrder.payment_status === 'paid'
+                                ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                                : activeOrder.payment_status === 'partially_refunded'
+                                ? 'bg-amber-100 text-amber-800 border border-amber-300'
+                                : activeOrder.payment_status === 'refunded'
+                                ? 'bg-purple-100 text-purple-800 border border-purple-300'
+                                : activeOrder.payment_status === 'partially_paid'
+                                ? 'bg-blue-100 text-blue-800 border border-blue-300'
+                                : 'bg-gray-200 text-gray-700'
+                            }`}
+                          >
+                            Payment: {activeOrder.payment_status.toUpperCase()}
                           </span>
                         </div>
+
+                        <div className="space-y-1.5 text-gray-700">
+                          <div className="flex justify-between items-center">
+                            <span>Original Subtotal</span>
+                            <span className="font-mono font-medium">₹{subtotal}</span>
+                          </div>
+                          {itemDiscount > 0 && (
+                            <div className="flex justify-between items-center text-emerald-700">
+                              <span>Product / Item Discount</span>
+                              <span className="font-mono font-bold">-₹{itemDiscount}</span>
+                            </div>
+                          )}
+                          {couponDiscount > 0 && (
+                            <div className="flex justify-between items-center text-emerald-700">
+                              <span>Coupon Discount {activeOrder.coupon_code ? `(${activeOrder.coupon_code})` : ''}</span>
+                              <span className="font-mono font-bold">-₹{couponDiscount}</span>
+                            </div>
+                          )}
+                          <div className="flex justify-between items-center text-gray-500 text-[11px]">
+                            <span>Taxable Amount</span>
+                            <span className="font-mono">₹{taxableAmount}</span>
+                          </div>
+                          {gstAmount > 0 && (
+                            <div className="flex justify-between items-center text-gray-700">
+                              <span>GST ({gstRate}%)</span>
+                              <span className="font-mono font-medium">+₹{gstAmount}</span>
+                            </div>
+                          )}
+                          <div className="flex justify-between items-center text-gray-700">
+                            <span>Shipping / Delivery</span>
+                            <span className="font-mono">{shippingAmount === 0 ? 'FREE' : `₹${shippingAmount}`}</span>
+                          </div>
+                          <div className="flex justify-between items-center pt-2 border-t border-gray-200 text-sm font-bold text-gray-900">
+                            <span>Final Order Amount</span>
+                            <span className="font-mono text-brand-green text-base">₹{activeOrder.total}</span>
+                          </div>
+                        </div>
+
+                        {/* Payment Received vs Due Summary */}
+                        <div className="mt-3 pt-3 border-t border-dashed border-gray-300 grid grid-cols-2 gap-3 text-center">
+                          <div className="p-2.5 bg-emerald-50/80 rounded-xl border border-emerald-200">
+                            <p className="text-[10px] text-emerald-800 font-semibold uppercase">Amount Paid</p>
+                            <p className="font-mono font-bold text-emerald-700 text-sm">₹{amountPaid}</p>
+                          </div>
+                          <div className="p-2.5 bg-gray-100 rounded-xl border border-gray-200">
+                            <p className="text-[10px] text-gray-600 font-semibold uppercase">Amount Due</p>
+                            <p className="font-mono font-bold text-gray-800 text-sm">₹{amountDue}</p>
+                          </div>
+                        </div>
                       </div>
 
-                      {/* Expandable Accordion: View Refund Calculation (Requirement 21) */}
-                      <div className="border border-gray-200 rounded-2xl overflow-hidden bg-white">
+                      {/* ─── 2. Dedicated Authoritative Refund Summary (Issues #1, #4) ─── */}
+                      {(totalRefunded > 0 || refunds.length > 0 || activeOrder.payment_status === 'partially_refunded' || activeOrder.payment_status === 'refunded') && (
+                        <div className="bg-amber-50/70 p-4 rounded-2xl border-2 border-amber-200 space-y-3">
+                          <div className="flex items-center justify-between pb-2 border-b border-amber-200">
+                            <div className="flex items-center gap-1.5">
+                              <RotateCcw className="w-4 h-4 text-amber-700" />
+                              <h4 className="font-extrabold text-amber-950 text-sm uppercase tracking-wider">
+                                Refund Summary
+                              </h4>
+                            </div>
+                            <span
+                              className={`px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase ${
+                                latestRefund?.status === 'success' || totalRefunded >= activeOrder.total
+                                  ? 'bg-emerald-600 text-white'
+                                  : latestRefund?.status === 'processing'
+                                  ? 'bg-blue-600 text-white'
+                                  : 'bg-amber-500 text-black font-bold'
+                              }`}
+                            >
+                              Status: {latestRefund?.status ? latestRefund.status.toUpperCase() : totalRefunded > 0 ? 'REFUNDED' : 'PROCESSING'}
+                            </span>
+                          </div>
+
+                          <div className="space-y-1.5 font-mono text-xs text-amber-950">
+                            <div className="flex justify-between">
+                              <span className="font-sans">Original Order Amount:</span>
+                              <span className="font-bold">₹{activeOrder.total}</span>
+                            </div>
+                            <div className="flex justify-between text-emerald-800">
+                              <span className="font-sans">Amount Paid:</span>
+                              <span className="font-bold">₹{amountPaid}</span>
+                            </div>
+                            {previousRefunds > 0 && (
+                              <div className="flex justify-between text-amber-800">
+                                <span className="font-sans">Previously Refunded:</span>
+                                <span>₹{previousRefunds}</span>
+                              </div>
+                            )}
+                            {latestRefund && (
+                              <div className="flex justify-between text-amber-900 font-bold">
+                                <span className="font-sans">Current Refund:</span>
+                                <span>₹{latestRefund.amount}</span>
+                              </div>
+                            )}
+                            <div className="flex justify-between text-brand-green font-bold text-sm pt-1 border-t border-amber-200">
+                              <span className="font-sans">Total Refunded:</span>
+                              <span>₹{totalRefunded}</span>
+                            </div>
+                            <div className="flex justify-between text-gray-700">
+                              <span className="font-sans">Remaining Refundable:</span>
+                              <span>₹{remainingRefundable}</span>
+                            </div>
+                          </div>
+
+                          {/* Refund Metadata & Item Details */}
+                          {latestRefund && (
+                            <div className="mt-2 pt-2 border-t border-amber-200/80 text-[11px] space-y-1 text-amber-900">
+                              <p>
+                                <strong>Refund ID:</strong> <span className="font-mono">{latestRefund.provider_refund_id || latestRefund.id}</span>
+                              </p>
+                              <p>
+                                <strong>Refund Date:</strong> {new Date(latestRefund.requested_at).toLocaleString()}
+                              </p>
+                              <p>
+                                <strong>Refund Reason:</strong> {latestRefund.reason}
+                              </p>
+                            </div>
+                          )}
+
+                          {/* Cancelled Items Breakdown if any */}
+                          {activeOrder.items.some(it => it.status === 'removed' || it.status === 'cancelled') && (
+                            <div className="mt-2 p-2.5 bg-white/80 rounded-xl border border-amber-200 text-[11px]">
+                              <p className="font-bold text-red-700 mb-1">Cancelled Item(s) in this Refund:</p>
+                              <div className="space-y-1">
+                                {activeOrder.items
+                                  .filter(it => it.status === 'removed' || it.status === 'cancelled')
+                                  .map((it, idx) => (
+                                    <div key={idx} className="flex justify-between text-gray-700">
+                                      <span>• {it.product_name_en} ({it.weight}) × {it.cancelled_quantity || it.quantity}</span>
+                                      <span className="font-mono font-bold text-red-600">₹{it.refund_amount || it.total_price}</span>
+                                    </div>
+                                  ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* ─── 3. Expandable Detailed Refund Calculation Breakdown Accordion (Requirement 4) ─── */}
+                      <div className="border border-gray-200 rounded-2xl overflow-hidden bg-white shadow-sm">
                         <button
                           type="button"
                           onClick={() => setShowRefundCalculation(!showRefundCalculation)}
-                          className="w-full px-4 py-2.5 flex items-center justify-between text-xs font-bold text-gray-700 hover:bg-gray-50 cursor-pointer transition"
+                          className="w-full px-4 py-3 flex items-center justify-between text-xs font-bold text-gray-700 hover:bg-gray-50 cursor-pointer transition"
                         >
                           <span className="flex items-center gap-1.5">
-                            <ShieldCheck className="w-3.5 h-3.5 text-brand-green" />
-                            <span>View Detailed Refund Calculation Breakdown</span>
+                            <ShieldCheck className="w-4 h-4 text-brand-green" />
+                            <span>Detailed Financial & Refund Traceability Ledger</span>
                           </span>
                           <ChevronUp
                             className={`w-4 h-4 text-gray-400 transition-transform ${
@@ -934,38 +1059,54 @@ export default function TrackOrderPage() {
                             >
                               <div className="flex justify-between">
                                 <span>Original Product Amount</span>
-                                <span>₹{activeOrder.total}</span>
+                                <span>₹{subtotal}</span>
                               </div>
-                              <div className="flex justify-between text-gray-500">
-                                <span>- Product / Item Discounts</span>
-                                <span>-₹0</span>
+                              {itemDiscount > 0 && (
+                                <div className="flex justify-between text-emerald-700">
+                                  <span>- Product Discount</span>
+                                  <span>-₹{itemDiscount}</span>
+                                </div>
+                              )}
+                              {couponDiscount > 0 && (
+                                <div className="flex justify-between text-emerald-700">
+                                  <span>- Coupon Discount</span>
+                                  <span>-₹{couponDiscount}</span>
+                                </div>
+                              )}
+                              <div className="flex justify-between text-gray-600">
+                                <span>+ GST ({gstRate}%)</span>
+                                <span>+₹{gstAmount}</span>
                               </div>
-                              <div className="flex justify-between text-gray-500">
-                                <span>- Coupon Discounts</span>
-                                <span>-₹0</span>
-                              </div>
-                              <div className="flex justify-between text-gray-500">
-                                <span>+ Taxes & Handling</span>
-                                <span>Included</span>
-                              </div>
-                              <div className="flex justify-between text-gray-500">
+                              <div className="flex justify-between text-gray-600">
                                 <span>+ Shipping Charges</span>
-                                <span>Included</span>
+                                <span>{shippingAmount === 0 ? '₹0' : `+₹${shippingAmount}`}</span>
                               </div>
                               <div className="flex justify-between pt-1 border-t border-gray-300 font-bold text-gray-900">
-                                <span>= Final Amount Paid</span>
-                                <span>₹{metrics.paidAmount}</span>
+                                <span>= Total Amount Paid</span>
+                                <span>₹{amountPaid}</span>
                               </div>
-                              <div className="flex justify-between text-amber-700 pt-1">
-                                <span>- Previous Refunds</span>
-                                <span>-₹{metrics.alreadyRefunded}</span>
-                              </div>
+                              {previousRefunds > 0 && (
+                                <div className="flex justify-between text-amber-700 pt-1">
+                                  <span>- Previous Refund</span>
+                                  <span>-₹{previousRefunds}</span>
+                                </div>
+                              )}
+                              {latestRefund && (
+                                <div className="flex justify-between text-amber-800 font-bold">
+                                  <span>- Current Refund</span>
+                                  <span>-₹{latestRefund.amount}</span>
+                                </div>
+                              )}
                               <div className="flex justify-between pt-1 border-t border-gray-300 font-bold text-brand-green text-sm">
-                                <span>= Net Refund Processed</span>
-                                <span>₹{metrics.alreadyRefunded}</span>
+                                <span>= Total Refunded</span>
+                                <span>₹{totalRefunded}</span>
                               </div>
-                              <p className="text-[10px] text-gray-400 font-sans pt-1">
-                                Authoritative server-side refund calculation according to RBI/payment gateway reconciliation.
+                              <div className="flex justify-between pt-1 text-gray-800 font-bold">
+                                <span>= Remaining Refundable</span>
+                                <span>₹{remainingRefundable}</span>
+                              </div>
+                              <p className="text-[10px] text-gray-400 font-sans pt-2 leading-relaxed">
+                                Traceable authoritative calculation derived from server-side order snapshot and banking reconciliation.
                               </p>
                             </motion.div>
                           )}

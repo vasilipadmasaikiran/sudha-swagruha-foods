@@ -25,6 +25,7 @@ export interface AdminUser {
 
 export type AdminCategory =
   | 'dashboard'
+  | 'sales'
   | 'orders'
   | 'products'
   | 'inventory'
@@ -64,7 +65,7 @@ export const ROLE_DEFINITIONS: Record<AdminRole, RolePermissions> = {
   ROOT_ADMIN: {
     name: 'Root / Super Admin',
     description: 'Full unrestricted access to all administration modules, user roles, orders, settings, website content, and business configurations.',
-    allowedCategories: ['dashboard', 'orders', 'products', 'inventory', 'customers', 'users', 'promotions', 'website', 'settings'],
+    allowedCategories: ['dashboard', 'sales', 'orders', 'products', 'inventory', 'customers', 'users', 'promotions', 'website', 'settings'],
     canManageUsers: true,
     canManageRoles: true,
     canConfigureSettings: true,

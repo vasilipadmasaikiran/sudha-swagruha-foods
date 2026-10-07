@@ -30,6 +30,7 @@ import {
   AlertTriangle,
   Receipt,
   Sparkles,
+  Check,
 } from 'lucide-react';
 import { useOrderStore } from '@/hooks/useOrderStore';
 import { useAdminAuthStore } from '@/hooks/useAdminAuthStore';
@@ -37,7 +38,7 @@ import { useSettingsStore } from '@/hooks/useSettingsStore';
 import { EmailService } from '@/services/emailService';
 import { logAdminAction } from '@/services/auditLogger';
 import { calculateOrderRefundableMetrics, roundToTwoDecimals } from '@/services/refundService';
-import type { DbOrder, OrderItem, OrderRefundRecord } from '@/services/supabase';
+import type { DbOrder, OrderItem, OrderRefundRecord, OrderPaymentRecord } from '@/services/supabase';
 import toast from 'react-hot-toast';
 
 const STATUS_CONFIG: Record<
@@ -84,6 +85,7 @@ export default function AdminOrdersTab() {
     rejectCancellationRequest,
     removeOrderItem,
     initiateOrderRefund,
+    recordOrderPayment,
     fetchOrdersFromSupabase,
     subscribeToOrders,
     isSyncing,
@@ -140,6 +142,13 @@ export default function AdminOrdersTab() {
   const [refundCustomAmount, setRefundCustomAmount] = useState<string>('');
   const [refundReason, setRefundReason] = useState('Administrative compensation / partial refund');
   const [isProcessingRefund, setIsProcessingRefund] = useState(false);
+
+  // Manual / Offline Payment Recording State (Requirements 15, 16, 17)
+  const [isRecordingPayment, setIsRecordingPayment] = useState(false);
+  const [paymentInputAmount, setPaymentInputAmount] = useState<string>('');
+  const [paymentInputMethod, setPaymentInputMethod] = useState<string>('upi');
+  const [paymentInputRef, setPaymentInputRef] = useState<string>('');
+  const [isSubmittingPayment, setIsSubmittingPayment] = useState(false);
 
   // Auto-fetch from Supabase on mount and listen to realtime updates
   const handleRefresh = useCallback(async () => {
@@ -216,11 +225,12 @@ export default function AdminOrdersTab() {
       const q = searchQuery.toLowerCase().trim();
       const matchesSearch =
         !q ||
-        o.order_number.toLowerCase().includes(q) ||
-        o.customer_name.toLowerCase().includes(q) ||
-        o.customer_mobile.includes(q) ||
+        (o.order_number && o.order_number.toLowerCase().includes(q)) ||
+        (o.customer_name && o.customer_name.toLowerCase().includes(q)) ||
+        (o.customer_mobile && o.customer_mobile.includes(q)) ||
         (o.tracking_id && o.tracking_id.toLowerCase().includes(q)) ||
-        o.delivery_address.city.toLowerCase().includes(q);
+        Boolean(o.delivery_address?.city && o.delivery_address.city.toLowerCase().includes(q)) ||
+        Boolean(o.city && o.city.toLowerCase().includes(q));
 
       if (!matchesSearch) return false;
 
@@ -1017,7 +1027,7 @@ export default function AdminOrdersTab() {
                             <span>{new Date(o.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
                           </div>
                           <div className="text-[11px] text-slate-400 mt-1">
-                            📍 {o.delivery_address.city}, {o.delivery_address.state}
+                            📍 {o.delivery_address?.city || o.city || 'N/A'}, {o.delivery_address?.state || o.state || ''}
                           </div>
                         </td>
 
@@ -1083,18 +1093,31 @@ export default function AdminOrdersTab() {
                           </div>
                         </td>
 
-                        {/* Total & Payment */}
+                        {/* Total & Payment (Requirements 15, 16, 32) */}
                         <td className="px-4 py-3.5 align-top">
-                          <div className="font-bold text-white text-sm">₹{o.total}</div>
-                          <div className="mt-1 space-y-0.5">
+                          <div className="font-bold text-white text-sm font-mono">₹{o.total}</div>
+                          <div className="text-[10px] text-slate-400 space-y-0.5 mt-0.5 font-mono">
+                            <div>Subtotal: ₹{o.subtotal || o.total}</div>
+                            {o.discount > 0 && (
+                              <div className="text-emerald-400 font-semibold">Discount: -₹{o.discount}</div>
+                            )}
+                            {o.gst_amount !== undefined && o.gst_amount > 0 && (
+                              <div className="text-slate-400">GST ({o.gst_rate}%): +₹{o.gst_amount}</div>
+                            )}
+                          </div>
+                          <div className="mt-1.5 space-y-0.5">
                             <span
-                              className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${
+                              className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${
                                 o.payment_status === 'paid'
                                   ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
                                   : o.payment_status === 'partially_refunded'
                                   ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
                                   : o.payment_status === 'refunded'
                                   ? 'bg-purple-500/20 text-purple-400 border border-purple-500/30'
+                                  : o.payment_status === 'partially_paid'
+                                  ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30'
+                                  : o.payment_status === 'failed'
+                                  ? 'bg-red-500/20 text-red-400 border border-red-500/30'
                                   : 'bg-slate-700/50 text-slate-300 border border-slate-600'
                               }`}
                             >
@@ -1103,9 +1126,18 @@ export default function AdminOrdersTab() {
                                 : o.payment_status === 'refunded'
                                 ? 'Fully Refunded'
                                 : o.payment_status === 'paid'
-                                ? 'Paid Online'
+                                ? 'PAID'
+                                : o.payment_status === 'partially_paid'
+                                ? `Partially Paid (₹${o.amount_paid || 0})`
+                                : o.payment_status === 'unpaid'
+                                ? 'UNPAID'
                                 : 'Pending / COD'}
                             </span>
+                            {o.amount_due !== undefined && o.amount_due > 0 && o.payment_status !== 'paid' && (
+                              <div className="text-[10px] text-amber-400/90 font-mono">
+                                Due: ₹{o.amount_due}
+                              </div>
+                            )}
                           </div>
                         </td>
 
@@ -1595,18 +1627,18 @@ export default function AdminOrdersTab() {
                 </div>
               </div>
 
-              {/* Delivery Address */}
+              {/* Delivery Address (Null-Safe Protection against Delivered Blank Screen Crash) */}
               <div className="text-xs bg-slate-950/60 p-4 rounded-2xl border border-slate-800/80">
                 <span className="text-slate-400 block mb-1">Delivery Address:</span>
                 <p className="text-slate-200 leading-relaxed">
-                  {selectedOrder.delivery_address.house_no},{' '}
-                  {selectedOrder.delivery_address.street},{' '}
-                  {selectedOrder.delivery_address.area},{' '}
-                  {selectedOrder.delivery_address.city},{' '}
-                  {selectedOrder.delivery_address.district},{' '}
-                  {selectedOrder.delivery_address.state} –{' '}
+                  {selectedOrder.delivery_address?.house_no ? `${selectedOrder.delivery_address.house_no}, ` : ''}
+                  {selectedOrder.delivery_address?.street ? `${selectedOrder.delivery_address.street}, ` : ''}
+                  {selectedOrder.delivery_address?.area ? `${selectedOrder.delivery_address.area}, ` : ''}
+                  {selectedOrder.delivery_address?.city || selectedOrder.city || 'N/A'},{' '}
+                  {selectedOrder.delivery_address?.district ? `${selectedOrder.delivery_address.district}, ` : ''}
+                  {selectedOrder.delivery_address?.state || selectedOrder.state || ''} –{' '}
                   <span className="font-bold text-white font-mono">
-                    {selectedOrder.delivery_address.pincode}
+                    {selectedOrder.delivery_address?.pincode || selectedOrder.pincode || ''}
                   </span>
                 </p>
               </div>
@@ -1615,14 +1647,14 @@ export default function AdminOrdersTab() {
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
-                    Ordered Items ({selectedOrder.items.length})
+                    Ordered Items ({selectedOrder.items?.length || 0})
                   </span>
                   <span className="text-[11px] text-slate-500">
                     Supports individual item & customisation cancellation
                   </span>
                 </div>
                 <div className="bg-slate-950/60 rounded-2xl border border-slate-800 divide-y divide-slate-800 text-xs">
-                  {selectedOrder.items.map((it, idx) => {
+                  {(selectedOrder.items || []).map((it, idx) => {
                     const isRemoved = it.status === 'removed' || it.status === 'cancelled';
                     return (
                       <div
@@ -1688,113 +1720,398 @@ export default function AdminOrdersTab() {
                 </div>
               </div>
 
-              {/* Financial Reconciliation & Refund Management Card */}
+              {/* Authoritative Financial Breakdown & Payment Reconciliation Card (Requirements 15, 16, 17, 18, 33) */}
               {(() => {
                 const metrics = calculateOrderRefundableMetrics(selectedOrder);
+                const subtotal = selectedOrder.subtotal || selectedOrder.total;
+                const itemDiscount = selectedOrder.item_discount || 0;
+                const couponDiscount = selectedOrder.coupon_discount || selectedOrder.discount || 0;
+                const totalDiscount = itemDiscount + couponDiscount;
+                const taxableAmount = selectedOrder.taxable_amount || Math.max(0, subtotal - totalDiscount);
+                const gstRate = selectedOrder.gst_rate || 0;
+                const gstAmount = selectedOrder.gst_amount || 0;
+                const shippingAmount = selectedOrder.delivery_charge || 0;
+                const amountPaid = selectedOrder.amount_paid !== undefined
+                  ? selectedOrder.amount_paid
+                  : (selectedOrder.payment_status === 'paid' ? selectedOrder.total : metrics.paidAmount);
+                const amountDue = selectedOrder.amount_due !== undefined
+                  ? selectedOrder.amount_due
+                  : Math.max(0, selectedOrder.total - amountPaid);
+                const totalRefunded = selectedOrder.refunded_amount || metrics.alreadyRefunded;
+                const netReceived = Math.max(0, amountPaid - totalRefunded);
+                const remainingRefundable = Math.max(0, amountPaid - totalRefunded);
+
+                // Build payment history list (from order payments or synthesized from payment_id)
+                const paymentRecords: OrderPaymentRecord[] = Array.isArray(selectedOrder.payments) && selectedOrder.payments.length > 0
+                  ? selectedOrder.payments
+                  : selectedOrder.payment_id
+                  ? [
+                      {
+                        id: selectedOrder.payment_id,
+                        order_id: selectedOrder.id,
+                        order_number: selectedOrder.order_number,
+                        transaction_id: selectedOrder.payment_id,
+                        amount: amountPaid,
+                        status: selectedOrder.payment_status === 'paid' ? 'success' : 'pending',
+                        provider: selectedOrder.payment_id.startsWith('pay_') ? 'razorpay' : 'manual',
+                        payment_method: 'online',
+                        paid_at: selectedOrder.created_at,
+                        notes: 'Checkout gateway transaction',
+                      },
+                    ]
+                  : [];
+
                 return (
-                  <div className="p-4 bg-slate-950/80 rounded-2xl border border-slate-800 space-y-3">
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
-                        <DollarSign className="w-4 h-4 text-emerald-400" />
-                        <span>Financial Reconciliation & Payment Refunds</span>
-                      </span>
-                      <span
-                        className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
-                          selectedOrder.payment_status === 'paid'
-                            ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
-                            : selectedOrder.payment_status === 'partially_refunded'
-                            ? 'bg-amber-500/10 text-amber-400 border-amber-500/20'
-                            : selectedOrder.payment_status === 'refunded'
-                            ? 'bg-purple-500/10 text-purple-400 border-purple-500/20'
-                            : 'bg-slate-800 text-slate-400 border-slate-700'
-                        }`}
-                      >
-                        {selectedOrder.payment_status.toUpperCase()}
-                      </span>
-                    </div>
-
-                    <div className="grid grid-cols-3 gap-2 text-center">
-                      <div className="p-2.5 bg-slate-900 rounded-xl border border-slate-800">
-                        <p className="text-[10px] text-slate-400">Total Paid</p>
-                        <p className="text-sm font-bold font-mono text-emerald-400">₹{metrics.paidAmount}</p>
-                      </div>
-                      <div className="p-2.5 bg-slate-900 rounded-xl border border-slate-800">
-                        <p className="text-[10px] text-slate-400">Already Refunded</p>
-                        <p className="text-sm font-bold font-mono text-amber-400">₹{metrics.alreadyRefunded}</p>
-                      </div>
-                      <div className="p-2.5 bg-slate-900 rounded-xl border border-slate-800">
-                        <p className="text-[10px] text-slate-400">Max Refundable</p>
-                        <p className="text-sm font-bold font-mono text-cyan-400">₹{metrics.refundableAmount}</p>
-                      </div>
-                    </div>
-
-                    {/* Action buttons */}
-                    <div className="flex flex-wrap gap-2 pt-1">
-                      {selectedOrder.order_status !== 'cancelled' && (hasPermission('canCancelOrders') || currentUser?.role === 'ROOT_ADMIN') && (
-                        <button
-                          onClick={() => {
-                            setCancelModalOrder(selectedOrder);
-                            setCancelReason('Customer requested cancellation');
-                            setCancelCustomReason('');
-                            setCancelCustomRefundAmount(String(metrics.refundableAmount));
-                            setCancelInitiateRefund(metrics.refundableAmount > 0);
-                          }}
-                          className="flex-1 py-2 px-3 bg-red-600/20 hover:bg-red-600/30 border border-red-500/30 text-red-400 text-xs font-semibold rounded-xl flex items-center justify-center gap-1.5 cursor-pointer transition"
+                  <div className="space-y-4">
+                    {/* Financial Summary Card */}
+                    <div className="p-4 bg-slate-950/80 rounded-2xl border border-slate-800 space-y-3">
+                      <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+                        <span className="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-1.5">
+                          <DollarSign className="w-4 h-4 text-emerald-400" />
+                          <span>Authoritative Financial Summary</span>
+                        </span>
+                        <span
+                          className={`text-[10px] font-bold px-2 py-0.5 rounded-full border uppercase ${
+                            selectedOrder.payment_status === 'paid'
+                              ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30'
+                              : selectedOrder.payment_status === 'partially_refunded'
+                              ? 'bg-amber-500/20 text-amber-400 border-amber-500/30'
+                              : selectedOrder.payment_status === 'refunded'
+                              ? 'bg-purple-500/20 text-purple-400 border-purple-500/30'
+                              : selectedOrder.payment_status === 'partially_paid'
+                              ? 'bg-blue-500/20 text-blue-400 border-blue-500/30'
+                              : 'bg-slate-800 text-slate-300 border-slate-700'
+                          }`}
                         >
-                          <Ban className="w-3.5 h-3.5" />
-                          <span>Cancel Entire Order</span>
-                        </button>
+                          Payment: {selectedOrder.payment_status.toUpperCase()}
+                        </span>
+                      </div>
+
+                      <div className="space-y-1.5 text-xs font-mono">
+                        <div className="flex justify-between text-slate-300">
+                          <span className="font-sans">Subtotal</span>
+                          <span>₹{subtotal}</span>
+                        </div>
+                        {itemDiscount > 0 && (
+                          <div className="flex justify-between text-emerald-400">
+                            <span className="font-sans">Product Discount</span>
+                            <span>-₹{itemDiscount}</span>
+                          </div>
+                        )}
+                        {couponDiscount > 0 && (
+                          <div className="flex justify-between text-emerald-400">
+                            <span className="font-sans">Coupon Discount {selectedOrder.coupon_code ? `(${selectedOrder.coupon_code})` : ''}</span>
+                            <span>-₹{couponDiscount}</span>
+                          </div>
+                        )}
+                        <div className="flex justify-between text-slate-400 text-[11px]">
+                          <span className="font-sans">Taxable Amount</span>
+                          <span>₹{taxableAmount}</span>
+                        </div>
+                        {gstAmount > 0 && (
+                          <div className="flex justify-between text-slate-300">
+                            <span className="font-sans">GST ({gstRate}%)</span>
+                            <span>+₹{gstAmount}</span>
+                          </div>
+                        )}
+                        <div className="flex justify-between text-slate-300">
+                          <span className="font-sans">Shipping Charge</span>
+                          <span>{shippingAmount === 0 ? 'FREE' : `+₹${shippingAmount}`}</span>
+                        </div>
+                        <div className="flex justify-between pt-2 border-t border-slate-700 text-sm font-bold text-white">
+                          <span className="font-sans">Order Total</span>
+                          <span className="text-emerald-400">₹{selectedOrder.total}</span>
+                        </div>
+                      </div>
+
+                      {/* Payment Status Metric Cards (Requirement 16) */}
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-2 text-center text-xs">
+                        <div className="p-2.5 bg-slate-900 rounded-xl border border-slate-800">
+                          <p className="text-[10px] text-slate-400 uppercase">Order Total</p>
+                          <p className="text-sm font-bold font-mono text-white mt-0.5">₹{selectedOrder.total}</p>
+                        </div>
+                        <div className="p-2.5 bg-slate-900 rounded-xl border border-slate-800">
+                          <p className="text-[10px] text-emerald-400 uppercase font-semibold">Amount Received</p>
+                          <p className="text-sm font-bold font-mono text-emerald-400 mt-0.5">₹{amountPaid}</p>
+                        </div>
+                        <div className="p-2.5 bg-slate-900 rounded-xl border border-slate-800">
+                          <p className="text-[10px] text-amber-400 uppercase font-semibold">Amount Due</p>
+                          <p className="text-sm font-bold font-mono text-amber-400 mt-0.5">₹{amountDue}</p>
+                        </div>
+                        <div className="p-2.5 bg-slate-900 rounded-xl border border-slate-800">
+                          <p className="text-[10px] text-cyan-400 uppercase font-semibold">Net Received</p>
+                          <p className="text-sm font-bold font-mono text-cyan-400 mt-0.5">₹{netReceived}</p>
+                        </div>
+                      </div>
+
+                      {/* Action Buttons */}
+                      <div className="flex flex-wrap gap-2 pt-2 border-t border-slate-800">
+                        {amountDue > 0 && (
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              const updated = await updateOrderDetails(selectedOrder.id, {
+                                payment_status: 'paid',
+                                updated_by: currentUser?.full_name || 'Admin',
+                              });
+                              setSelectedOrder({ ...updated, amount_paid: selectedOrder.total, amount_due: 0, payment_status: 'paid' });
+                              toast.success(`Order #${selectedOrder.order_number} marked as PAID!`);
+                            }}
+                            className="flex-1 py-2 px-3 bg-emerald-600/30 hover:bg-emerald-600/50 border border-emerald-500/40 text-emerald-300 text-xs font-semibold rounded-xl flex items-center justify-center gap-1.5 cursor-pointer transition"
+                          >
+                            <Check className="w-3.5 h-3.5" />
+                            <span>Mark as Fully Paid (Clear ₹{amountDue} Due)</span>
+                          </button>
+                        )}
+
+                        {selectedOrder.order_status !== 'cancelled' && (hasPermission('canCancelOrders') || currentUser?.role === 'ROOT_ADMIN') && (
+                          <button
+                            onClick={() => {
+                              setCancelModalOrder(selectedOrder);
+                              setCancelReason('Customer requested cancellation');
+                              setCancelCustomReason('');
+                              setCancelCustomRefundAmount(String(remainingRefundable));
+                              setCancelInitiateRefund(remainingRefundable > 0);
+                            }}
+                            className="flex-1 py-2 px-3 bg-red-600/20 hover:bg-red-600/30 border border-red-500/30 text-red-400 text-xs font-semibold rounded-xl flex items-center justify-center gap-1.5 cursor-pointer transition"
+                          >
+                            <Ban className="w-3.5 h-3.5" />
+                            <span>Cancel Entire Order</span>
+                          </button>
+                        )}
+
+                        {remainingRefundable > 0 && (hasPermission('canInitiateRefunds') || currentUser?.role === 'ROOT_ADMIN') && (
+                          <button
+                            onClick={() => {
+                              setRefundModalOrder(selectedOrder);
+                              setRefundCustomAmount(String(remainingRefundable));
+                              setRefundReason('Administrative compensation / partial refund');
+                            }}
+                            className="flex-1 py-2 px-3 bg-cyan-600/20 hover:bg-cyan-600/30 border border-cyan-500/30 text-cyan-400 text-xs font-semibold rounded-xl flex items-center justify-center gap-1.5 cursor-pointer transition"
+                          >
+                            <RotateCcw className="w-3.5 h-3.5" />
+                            <span>Issue Refund (₹{remainingRefundable} max)</span>
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Dedicated Payment History Section (Requirement 17) */}
+                    <div className="p-4 bg-slate-950/80 rounded-2xl border border-slate-800 space-y-2.5">
+                      <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+                        <span className="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-1.5">
+                          <Receipt className="w-4 h-4 text-blue-400" />
+                          <span>Payment History</span>
+                        </span>
+                        <div className="flex items-center gap-2">
+                          <span className="text-[11px] text-slate-400 font-mono">
+                            {paymentRecords.length} record{paymentRecords.length === 1 ? '' : 's'}
+                          </span>
+                          {amountDue > 0 && selectedOrder.order_status !== 'cancelled' && (
+                            <button
+                              onClick={() => {
+                                setPaymentInputAmount(amountDue.toString());
+                                setIsRecordingPayment((prev) => !prev);
+                              }}
+                              className="px-2 py-0.5 bg-blue-600/30 hover:bg-blue-600/50 text-blue-300 border border-blue-500/40 rounded-lg text-[10px] font-bold cursor-pointer transition-colors"
+                            >
+                              {isRecordingPayment ? 'Cancel' : '+ Record Payment'}
+                            </button>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Inline Record Payment Form */}
+                      {isRecordingPayment && (
+                        <div className="p-3 bg-slate-900 rounded-xl border border-blue-500/30 space-y-2 text-xs">
+                          <p className="font-bold text-white text-[11px] flex items-center gap-1">
+                            <span>Record Manual / Offline Payment</span>
+                            <span className="text-slate-400 font-normal">(Outstanding Due: ₹{amountDue})</span>
+                          </p>
+                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                            <div>
+                              <label className="text-[10px] text-slate-400 block mb-0.5">Amount (₹)</label>
+                              <input
+                                type="number"
+                                step="0.01"
+                                max={amountDue}
+                                value={paymentInputAmount}
+                                onChange={(e) => setPaymentInputAmount(e.target.value)}
+                                className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1 text-white font-mono"
+                                placeholder={`Max ₹${amountDue}`}
+                              />
+                            </div>
+                            <div>
+                              <label className="text-[10px] text-slate-400 block mb-0.5">Payment Method</label>
+                              <select
+                                value={paymentInputMethod}
+                                onChange={(e) => setPaymentInputMethod(e.target.value)}
+                                className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1 text-white capitalize"
+                              >
+                                <option value="upi">UPI / GPay / PhonePe</option>
+                                <option value="cash_on_delivery">Cash on Delivery (COD)</option>
+                                <option value="card">Debit / Credit Card</option>
+                                <option value="bank_transfer">Bank Transfer / NEFT</option>
+                                <option value="manual">Other Manual</option>
+                              </select>
+                            </div>
+                            <div>
+                              <label className="text-[10px] text-slate-400 block mb-0.5">Txn / Ref Number</label>
+                              <input
+                                type="text"
+                                value={paymentInputRef}
+                                onChange={(e) => setPaymentInputRef(e.target.value)}
+                                className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1 text-white font-mono"
+                                placeholder="e.g. UPI-198273"
+                              />
+                            </div>
+                          </div>
+                          <div className="flex justify-end gap-2 pt-1">
+                            <button
+                              onClick={() => setIsRecordingPayment(false)}
+                              className="px-3 py-1 bg-slate-800 text-slate-300 rounded-lg text-xs hover:bg-slate-700 cursor-pointer"
+                            >
+                              Cancel
+                            </button>
+                            <button
+                              disabled={isSubmittingPayment}
+                              onClick={async () => {
+                                const amt = parseFloat(paymentInputAmount);
+                                if (isNaN(amt) || amt <= 0) {
+                                  toast.error('Please enter a valid payment amount');
+                                  return;
+                                }
+                                setIsSubmittingPayment(true);
+                                try {
+                                  const res = await recordOrderPayment(selectedOrder.id, {
+                                    amount: amt,
+                                    paymentMethod: paymentInputMethod,
+                                    transactionId: paymentInputRef || undefined,
+                                    recordedBy: currentUser?.full_name || 'Admin',
+                                  });
+                                  if (res.success && res.order) {
+                                    toast.success(`Payment of ₹${amt} recorded successfully!`);
+                                    setSelectedOrder(res.order);
+                                    setIsRecordingPayment(false);
+                                    setPaymentInputAmount('');
+                                    setPaymentInputRef('');
+                                  } else {
+                                    toast.error(res.error || 'Failed to record payment');
+                                  }
+                                } finally {
+                                  setIsSubmittingPayment(false);
+                                }
+                              }}
+                              className="px-3 py-1 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-bold cursor-pointer disabled:opacity-50"
+                            >
+                              {isSubmittingPayment ? 'Saving...' : 'Confirm & Save Payment'}
+                            </button>
+                          </div>
+                        </div>
                       )}
 
-                      {metrics.refundableAmount > 0 && (hasPermission('canInitiateRefunds') || currentUser?.role === 'ROOT_ADMIN') && (
-                        <button
-                          onClick={() => {
-                            setRefundModalOrder(selectedOrder);
-                            setRefundCustomAmount(String(metrics.refundableAmount));
-                            setRefundReason('Administrative compensation / partial refund');
-                          }}
-                          className="flex-1 py-2 px-3 bg-cyan-600/20 hover:bg-cyan-600/30 border border-cyan-500/30 text-cyan-400 text-xs font-semibold rounded-xl flex items-center justify-center gap-1.5 cursor-pointer transition"
-                        >
-                          <RotateCcw className="w-3.5 h-3.5" />
-                          <span>Issue Refund (₹{metrics.refundableAmount})</span>
-                        </button>
-                      )}
-                    </div>
-
-                    {/* Refund History log */}
-                    {selectedOrder.refunds && selectedOrder.refunds.length > 0 && (
-                      <div className="pt-2 border-t border-slate-800/80 space-y-2">
-                        <p className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">
-                          Refund Audit Trail ({selectedOrder.refunds.length})
+                      {paymentRecords.length === 0 ? (
+                        <p className="text-xs text-slate-500 italic py-2">
+                          No payment transactions recorded yet (Order is {selectedOrder.payment_status.toUpperCase()}).
                         </p>
-                        <div className="space-y-1.5 max-h-40 overflow-y-auto">
+                      ) : (
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-left text-xs font-mono">
+                            <thead className="text-[10px] text-slate-400 uppercase border-b border-slate-800 font-sans">
+                              <tr>
+                                <th className="py-2 pr-3">Date</th>
+                                <th className="py-2 pr-3">Transaction ID</th>
+                                <th className="py-2 pr-3">Amount</th>
+                                <th className="py-2 pr-3">Method / Provider</th>
+                                <th className="py-2 text-right">Status</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-800/60">
+                              {paymentRecords.map((pay, pIdx) => (
+                                <tr key={pIdx}>
+                                  <td className="py-2 pr-3 text-slate-400">
+                                    {new Date(pay.paid_at).toLocaleDateString()}
+                                  </td>
+                                  <td className="py-2 pr-3 text-white font-bold">{pay.transaction_id}</td>
+                                  <td className="py-2 pr-3 text-emerald-400 font-bold">₹{pay.amount}</td>
+                                  <td className="py-2 pr-3 text-slate-300 capitalize">
+                                    {pay.payment_method || 'Online'} ({pay.provider})
+                                  </td>
+                                  <td className="py-2 text-right">
+                                    <span
+                                      className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase ${
+                                        pay.status === 'success'
+                                          ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                                          : 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
+                                      }`}
+                                    >
+                                      {pay.status}
+                                    </span>
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Dedicated Refund History Section (Requirement 18) */}
+                    <div className="p-4 bg-slate-950/80 rounded-2xl border border-slate-800 space-y-2.5">
+                      <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+                        <span className="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-1.5">
+                          <RotateCcw className="w-4 h-4 text-cyan-400" />
+                          <span>Refund History</span>
+                        </span>
+                        <span className="text-[11px] text-cyan-400 font-mono font-bold">
+                          Total Refunded: ₹{totalRefunded}
+                        </span>
+                      </div>
+
+                      {(!selectedOrder.refunds || selectedOrder.refunds.length === 0) ? (
+                        <p className="text-xs text-slate-500 italic py-2">
+                          No refund has been processed for this order.
+                        </p>
+                      ) : (
+                        <div className="space-y-1.5">
                           {selectedOrder.refunds.map((rf, rIdx) => (
-                            <div key={rIdx} className="p-2 bg-slate-900/80 rounded-lg border border-slate-800 text-[11px] flex justify-between items-center">
+                            <div
+                              key={rIdx}
+                              className="p-2.5 bg-slate-900/90 rounded-xl border border-slate-800 text-xs flex justify-between items-center"
+                            >
                               <div>
-                                <span className="font-mono font-bold text-white">₹{rf.amount}</span>
-                                <span className="text-slate-400 ml-2">({rf.type})</span>
-                                <p className="text-[10px] text-slate-400">{rf.reason}</p>
-                                {rf.provider_refund_id && (
-                                  <p className="text-[9px] font-mono text-cyan-400">Ref: {rf.provider_refund_id}</p>
-                                )}
+                                <div className="flex items-center gap-2">
+                                  <span className="font-mono font-bold text-white">₹{rf.amount}</span>
+                                  <span className="px-1.5 py-0.2 rounded text-[9px] font-bold uppercase bg-slate-800 text-slate-300">
+                                    {rf.type}
+                                  </span>
+                                  <span className="text-slate-400 text-[11px]">{rf.reason}</span>
+                                </div>
+                                <div className="text-[10px] text-slate-500 mt-0.5 font-mono">
+                                  Ref: {rf.provider_refund_id || rf.id} • Req by: {rf.requested_by}
+                                </div>
                               </div>
                               <div className="text-right">
-                                <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase ${
-                                  rf.status === 'success' ? 'bg-emerald-500/20 text-emerald-400' :
-                                  rf.status === 'processing' ? 'bg-amber-500/20 text-amber-400' :
-                                  'bg-red-500/20 text-red-400'
-                                }`}>
+                                <span
+                                  className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${
+                                    rf.status === 'success'
+                                      ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                                      : rf.status === 'processing'
+                                      ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
+                                      : 'bg-red-500/20 text-red-400 border border-red-500/30'
+                                  }`}
+                                >
                                   {rf.status}
                                 </span>
-                                <p className="text-[9px] text-slate-500 mt-0.5">
+                                <p className="text-[10px] text-slate-500 mt-0.5 font-mono">
                                   {new Date(rf.requested_at).toLocaleDateString()}
                                 </p>
                               </div>
                             </div>
                           ))}
                         </div>
-                      </div>
-                    )}
+                      )}
+                    </div>
                   </div>
                 );
               })()}

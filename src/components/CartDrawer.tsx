@@ -20,14 +20,18 @@ export default function CartDrawer() {
     getTotal,
     discount,
     couponCode,
+    getFinancialSummary,
   } = useCartStore();
   const { language } = useLanguageStore();
   const t = translations[language];
 
-  const subtotal = getSubtotal();
-  const delivery = getDeliveryCharge();
-  const total = getTotal();
-  const discountAmount = Math.floor((subtotal * discount) / 100);
+  const financialSummary = getFinancialSummary();
+  const subtotal = financialSummary.originalSubtotal;
+  const delivery = financialSummary.shippingAmount;
+  const total = financialSummary.grandTotal;
+  const discountAmount = financialSummary.couponDiscount;
+  const gstAmount = financialSummary.gstAmount;
+  const gstRate = financialSummary.gstRate;
 
   return (
     <AnimatePresence>
@@ -190,6 +194,12 @@ export default function CartDrawer() {
                       {delivery === 0 ? t.cart.freeDelivery : `₹${delivery}`}
                     </span>
                   </div>
+                  {gstAmount > 0 && (
+                    <div className="flex justify-between text-sm text-gray-600">
+                      <span>GST ({gstRate}%)</span>
+                      <span>+₹{gstAmount}</span>
+                    </div>
+                  )}
                   <div className="flex justify-between font-bold text-lg border-t border-gray-100 pt-2 mt-2">
                     <span>{t.cart.total}</span>
                     <span className="text-brand-green">₹{total}</span>

@@ -5,12 +5,13 @@
 // ============================================================
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { DbOrder, OrderStatusHistoryItem, OrderRefundRecord, OrderItem, CustomerCancellationRequest } from '@/services/supabase';
+import type { DbOrder, OrderStatusHistoryItem, OrderRefundRecord, OrderPaymentRecord, OrderItem, CustomerCancellationRequest } from '@/services/supabase';
 import { supabase, isSupabaseConfigured, normalizeOrderTracking } from '@/services/supabase';
 import { RefundService, calculateOrderRefundableMetrics, roundToTwoDecimals } from '@/services/refundService';
 import { NotificationService } from '@/services/notificationService';
 import { useSettingsStore } from '@/hooks/useSettingsStore';
 import { logAdminAction } from '@/services/auditLogger';
+import { roundToTwo, derivePaymentStatus } from '@/services/orderCalculationService';
 
 export interface OrderUpdatePayload {
   order_status?: DbOrder['order_status'];
@@ -19,6 +20,9 @@ export interface OrderUpdatePayload {
   tracking_url?: string;
   notes?: string;
   updated_by?: string;
+  payment_status?: DbOrder['payment_status'];
+  amount_paid?: number;
+  amount_due?: number;
 }
 
 interface OrderStore {
@@ -92,6 +96,17 @@ interface OrderStore {
     itemId?: string | null,
     requestedBy?: string
   ) => Promise<{ success: boolean; order?: DbOrder; refund?: OrderRefundRecord; error?: string }>;
+  recordOrderPayment: (
+    orderId: string,
+    payment: {
+      amount: number;
+      transactionId?: string;
+      provider?: string;
+      paymentMethod?: string;
+      notes?: string;
+      recordedBy?: string;
+    }
+  ) => Promise<{ success: boolean; order?: DbOrder; error?: string }>;
   deleteOrder: (orderId: string) => Promise<void>;
   getOrderByNumber: (orderNumber: string) => DbOrder | undefined;
   resetOrders: () => void;
@@ -291,6 +306,32 @@ export const useOrderStore = create<OrderStore>()(
 
         if (isSupabaseConfigured()) {
           try {
+            const cleanUserNotes = (normalized.notes || '').replace(/\[SSF_TRACKING:[\s\S]*?\]/g, '').trim();
+            const trackingMetadata = {
+              tracking_id: normalized.tracking_id || null,
+              courier_name: normalized.courier_name || null,
+              tracking_url: normalized.tracking_url || null,
+              dispatched_at: normalized.dispatched_at || null,
+              history: normalized.order_status_history || [],
+              cancellation_reason: normalized.cancellation_reason || null,
+              cancelled_at: normalized.cancelled_at || null,
+              cancelled_by: normalized.cancelled_by || null,
+              cancellation_request: normalized.cancellation_request || null,
+              refunded_amount: normalized.refunded_amount || 0,
+              refunds: normalized.refunds || [],
+              payments: normalized.payments || [],
+              taxable_amount: normalized.taxable_amount,
+              gst_rate: normalized.gst_rate,
+              gst_amount: normalized.gst_amount,
+              coupon_code: normalized.coupon_code,
+              coupon_discount: normalized.coupon_discount,
+              item_discount: normalized.item_discount,
+              order_discount: normalized.order_discount,
+              amount_paid: normalized.amount_paid,
+              amount_due: normalized.amount_due,
+            };
+            const encodedNotes = `${cleanUserNotes ? cleanUserNotes + ' ' : ''}[SSF_TRACKING:${JSON.stringify(trackingMetadata)}]`;
+
             const orderPayload: Record<string, unknown> = {
               order_number: normalized.order_number,
               customer_id: normalized.customer_id || null,
@@ -308,7 +349,7 @@ export const useOrderStore = create<OrderStore>()(
               customer_mobile: normalized.customer_mobile,
               customer_whatsapp: normalized.customer_whatsapp,
               customer_email: normalized.customer_email || null,
-              notes: normalized.notes || null,
+              notes: encodedNotes,
               created_at: normalized.created_at || new Date().toISOString(),
               updated_at: normalized.updated_at || new Date().toISOString(),
             };
@@ -385,8 +426,7 @@ export const useOrderStore = create<OrderStore>()(
           });
         }
 
-        // Encode metadata seamlessly into notes so that tracking and history are 100% saved in Supabase
-        // even before or after the dedicated columns are created in PostgreSQL
+        // Encode complete metadata seamlessly into notes so that tracking, history, and financial snapshots are 100% saved
         const cleanUserNotes = (newNotes || '').replace(/\[SSF_TRACKING:[\s\S]*?\]/g, '').trim();
         const trackingMetadata = {
           tracking_id: newTrackingId,
@@ -394,17 +434,40 @@ export const useOrderStore = create<OrderStore>()(
           tracking_url: newTrackingUrl,
           dispatched_at: newStatus === 'shipped' ? (existing.dispatched_at || now) : existing.dispatched_at,
           history: existingHistory,
+          cancellation_reason: existing.cancellation_reason || null,
+          cancelled_at: existing.cancelled_at || null,
+          cancelled_by: existing.cancelled_by || null,
+          cancellation_request: existing.cancellation_request || null,
+          refunded_amount: existing.refunded_amount || 0,
+          refunds: existing.refunds || [],
+          payments: existing.payments || [],
+          taxable_amount: existing.taxable_amount,
+          gst_rate: existing.gst_rate,
+          gst_amount: existing.gst_amount,
+          coupon_code: existing.coupon_code,
+          coupon_discount: existing.coupon_discount,
+          item_discount: existing.item_discount,
+          order_discount: existing.order_discount,
+          amount_paid: payload.amount_paid !== undefined ? payload.amount_paid : existing.amount_paid,
+          amount_due: payload.amount_due !== undefined ? payload.amount_due : existing.amount_due,
         };
         const encodedNotes = `${cleanUserNotes ? cleanUserNotes + ' ' : ''}[SSF_TRACKING:${JSON.stringify(trackingMetadata)}]`;
+
+        const newPaymentStatus = payload.payment_status || existing.payment_status;
+        const newAmountPaid = payload.amount_paid !== undefined ? payload.amount_paid : existing.amount_paid;
+        const newAmountDue = payload.amount_due !== undefined ? payload.amount_due : existing.amount_due;
 
         const updatedOrder: DbOrder = normalizeOrderTracking({
           ...existing,
           order_status: newStatus,
+          payment_status: newPaymentStatus,
+          amount_paid: newAmountPaid,
+          amount_due: newAmountDue,
           tracking_id: newTrackingId,
           courier_name: newCourier,
           tracking_url: newTrackingUrl,
           dispatched_at: trackingMetadata.dispatched_at || null,
-          notes: cleanUserNotes,
+          notes: encodedNotes,
           order_status_history: existingHistory,
           updated_at: now,
         });
@@ -422,11 +485,18 @@ export const useOrderStore = create<OrderStore>()(
             // First attempt: Try updating with dedicated columns
             const fullPayload: Record<string, unknown> = {
               order_status: newStatus,
+              payment_status: newPaymentStatus,
               notes: encodedNotes,
               updated_at: now,
               tracking_id: newTrackingId,
               courier_name: newCourier,
               tracking_url: newTrackingUrl,
+              amount_paid: newAmountPaid,
+              amount_due: newAmountDue,
+              taxable_amount: existing.taxable_amount,
+              gst_rate: existing.gst_rate,
+              gst_amount: existing.gst_amount,
+              coupon_discount: existing.coupon_discount,
             };
 
             const { error: fullError } = await supabase
@@ -439,6 +509,7 @@ export const useOrderStore = create<OrderStore>()(
               console.warn('Dedicated tracking columns not yet in DB schema cache; updating via standard schema fallback:', fullError.message);
               const fallbackPayload: Record<string, unknown> = {
                 order_status: newStatus,
+                payment_status: newPaymentStatus,
                 notes: encodedNotes,
                 updated_at: now,
               };
@@ -1195,6 +1266,85 @@ export const useOrderStore = create<OrderStore>()(
         }).catch((e) => console.warn('Refund notification error:', e));
 
         return { success: true, order: updatedOrder, refund: refundRecord };
+      },
+
+      // ─── Record Order Payment (Requirements 15, 16, 17, 20) ───────
+      recordOrderPayment: async (orderId, paymentData) => {
+        const order = get().orders.find((o) => o.id === orderId || o.order_number === orderId);
+        if (!order) {
+          return { success: false, error: 'Order not found' };
+        }
+        const now = new Date().toISOString();
+        const paymentAmount = roundToTwo(paymentData.amount);
+        if (isNaN(paymentAmount) || paymentAmount <= 0) {
+          return { success: false, error: 'Invalid payment amount' };
+        }
+
+        const newPayment: OrderPaymentRecord = {
+          id: `pay_${Date.now()}`,
+          order_id: order.id,
+          order_number: order.order_number,
+          transaction_id: paymentData.transactionId || `TXN-${Date.now().toString().slice(-6)}`,
+          amount: paymentAmount,
+          status: 'success',
+          provider: paymentData.provider || 'manual',
+          payment_method: paymentData.paymentMethod || 'upi',
+          paid_at: now,
+          notes: paymentData.notes || `Recorded by ${paymentData.recordedBy || 'Admin'}`,
+        };
+
+        const existingPayments = Array.isArray(order.payments) ? [...order.payments] : [];
+        const updatedPayments = [...existingPayments, newPayment];
+        const totalPaid = roundToTwo(
+          updatedPayments.reduce((sum, p) => (p.status === 'success' ? sum + p.amount : sum), 0)
+        );
+        const totalRefunded = roundToTwo(order.refunded_amount || 0);
+        const grandTotal = roundToTwo(order.total || 0);
+        const amountDue = Math.max(0, roundToTwo(grandTotal - totalPaid));
+        const newPaymentStatus = derivePaymentStatus(grandTotal, totalPaid, totalRefunded);
+
+        const updatedHistory: OrderStatusHistoryItem[] = [
+          ...(order.order_status_history || []),
+          {
+            status: order.order_status,
+            timestamp: now,
+            updated_by: paymentData.recordedBy || 'Admin',
+            notes: `Payment recorded: ₹${paymentAmount} via ${(paymentData.paymentMethod || 'Manual').toUpperCase()} (Ref: ${newPayment.transaction_id}). Total Paid: ₹${totalPaid}, Due: ₹${amountDue}`,
+          },
+        ];
+
+        const updatedOrder = await get().updateOrderDetails(order.id, {
+          payment_status: newPaymentStatus,
+          amount_paid: totalPaid,
+          amount_due: amountDue,
+          notes: order.notes || undefined,
+        });
+
+        // Ensure payments array and status history are explicitly preserved on order
+        const finalOrder: DbOrder = {
+          ...updatedOrder,
+          payments: updatedPayments,
+          amount_paid: totalPaid,
+          amount_due: amountDue,
+          payment_status: newPaymentStatus,
+          order_status_history: updatedHistory,
+        };
+
+        set((state) => ({
+          orders: state.orders.map((o) =>
+            o.id === order.id || o.order_number === order.order_number ? finalOrder : o
+          ),
+        }));
+
+        await logAdminAction(paymentData.recordedBy || 'Admin', 'ROOT_ADMIN', 'RECORD_PAYMENT', 'ORDER', order.order_number, {
+          amount: paymentAmount,
+          transactionId: newPayment.transaction_id,
+          totalPaid,
+          amountDue,
+          paymentStatus: newPaymentStatus,
+        });
+
+        return { success: true, order: finalOrder };
       },
 
       // ─── Delete order ──────────────────────────────────────────────

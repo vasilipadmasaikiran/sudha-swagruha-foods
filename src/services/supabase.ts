@@ -189,6 +189,19 @@ export interface CustomerCancellationRequest {
   approved_refund_amount?: number;
 }
 
+export interface OrderPaymentRecord {
+  id: string; // e.g. "pay_1791234567" or razorpay payment id
+  order_id: string;
+  order_number: string;
+  transaction_id: string;
+  amount: number;
+  status: 'pending' | 'success' | 'failed' | 'refunded';
+  provider: string; // 'razorpay' | 'cash_on_delivery' | 'manual' | 'bank_transfer'
+  payment_method?: string | null; // 'card' | 'upi' | 'netbanking' | 'cod'
+  paid_at: string;
+  notes?: string | null;
+}
+
 export interface DbOrder {
   id: string;
   order_number: string;
@@ -198,7 +211,7 @@ export interface DbOrder {
   delivery_charge: number;
   discount: number;
   total: number;
-  payment_status: 'pending' | 'paid' | 'failed' | 'refunded' | 'partially_refunded';
+  payment_status: 'pending' | 'paid' | 'failed' | 'refunded' | 'partially_refunded' | 'unpaid' | 'partially_paid';
   payment_id: string | null;
   razorpay_order_id: string | null;
   order_status: 'placed' | 'confirmed' | 'preparing' | 'packed' | 'shipped' | 'delivered' | 'cancelled';
@@ -214,6 +227,17 @@ export interface DbOrder {
   city?: string;
   pincode?: string;
   state?: string;
+  // Authoritative Order Financial Snapshot
+  taxable_amount?: number;
+  gst_rate?: number;
+  gst_amount?: number;
+  coupon_code?: string | null;
+  coupon_discount?: number;
+  item_discount?: number;
+  order_discount?: number;
+  amount_paid?: number;
+  amount_due?: number;
+  payments?: OrderPaymentRecord[];
   // Tracking & Timeline Extensions
   tracking_id?: string | null;
   courier_name?: string | null;
@@ -234,6 +258,7 @@ export interface DbOrder {
 /**
  * Extracts tracking details and history, handling both dedicated DB columns
  * and encoded notes fallback for seamless backward compatibility.
+ * Defensively ensures financial snapshot integrity and null-safety so pages never crash.
  */
 export function normalizeOrderTracking(rawOrder: DbOrder): DbOrder {
   if (!rawOrder) return rawOrder;
@@ -245,12 +270,22 @@ export function normalizeOrderTracking(rawOrder: DbOrder): DbOrder {
   let extractedDispatchedAt = order.dispatched_at || '';
   let extractedCancellationReason = order.cancellation_reason || '';
   let extractedCancelledAt = order.cancelled_at || '';
-  let extractedRefundedAmount = order.refunded_amount || 0;
+  let extractedRefundedAmount = Number(order.refunded_amount || 0);
   let extractedCancellationRequest: CustomerCancellationRequest | null = order.cancellation_request || null;
   let extractedRefunds: OrderRefundRecord[] = Array.isArray(order.refunds) ? [...order.refunds] : [];
+  let extractedPayments: OrderPaymentRecord[] = Array.isArray(order.payments) ? [...order.payments] : [];
   let extractedHistory: OrderStatusHistoryItem[] = Array.isArray(order.order_status_history)
     ? [...order.order_status_history]
     : [];
+
+  let extractedTaxableAmount = order.taxable_amount;
+  let extractedGstRate = order.gst_rate;
+  let extractedGstAmount = order.gst_amount;
+  let extractedCouponCode = order.coupon_code;
+  let extractedCouponDiscount = order.coupon_discount;
+  let extractedItemDiscount = order.item_discount;
+  let extractedAmountPaid = order.amount_paid;
+  let extractedAmountDue = order.amount_due;
 
   // Check for metadata encoded in notes: [SSF_TRACKING:{...}]
   if (order.notes && order.notes.includes('[SSF_TRACKING:')) {
@@ -265,11 +300,21 @@ export function normalizeOrderTracking(rawOrder: DbOrder): DbOrder {
         if (meta.cancellation_reason && !extractedCancellationReason) extractedCancellationReason = meta.cancellation_reason;
         if (meta.cancelled_at && !extractedCancelledAt) extractedCancelledAt = meta.cancelled_at;
         if (meta.cancellation_request && !extractedCancellationRequest) extractedCancellationRequest = meta.cancellation_request;
-        if (meta.refunded_amount && !extractedRefundedAmount) extractedRefundedAmount = meta.refunded_amount;
+        if (meta.refunded_amount !== undefined && !extractedRefundedAmount) extractedRefundedAmount = Number(meta.refunded_amount);
         if (Array.isArray(meta.refunds) && extractedRefunds.length === 0) extractedRefunds = meta.refunds;
+        if (Array.isArray(meta.payments) && extractedPayments.length === 0) extractedPayments = meta.payments;
         if (Array.isArray(meta.history) && extractedHistory.length === 0) {
           extractedHistory = meta.history;
         }
+        // Financial snapshots in notes
+        if (meta.taxable_amount !== undefined && extractedTaxableAmount === undefined) extractedTaxableAmount = meta.taxable_amount;
+        if (meta.gst_rate !== undefined && extractedGstRate === undefined) extractedGstRate = meta.gst_rate;
+        if (meta.gst_amount !== undefined && extractedGstAmount === undefined) extractedGstAmount = meta.gst_amount;
+        if (meta.coupon_code !== undefined && extractedCouponCode === undefined) extractedCouponCode = meta.coupon_code;
+        if (meta.coupon_discount !== undefined && extractedCouponDiscount === undefined) extractedCouponDiscount = meta.coupon_discount;
+        if (meta.item_discount !== undefined && extractedItemDiscount === undefined) extractedItemDiscount = meta.item_discount;
+        if (meta.amount_paid !== undefined && extractedAmountPaid === undefined) extractedAmountPaid = meta.amount_paid;
+        if (meta.amount_due !== undefined && extractedAmountDue === undefined) extractedAmountDue = meta.amount_due;
       }
     } catch (e) {
       console.warn('Could not parse encoded tracking from notes', e);
@@ -309,8 +354,56 @@ export function normalizeOrderTracking(rawOrder: DbOrder): DbOrder {
     }
   }
 
+  // Defensive values for monetary calculations
+  const subtotal = Number(order.subtotal || 0);
+  const deliveryCharge = Number(order.delivery_charge || 0);
+  const discount = Number(order.discount || 0);
+  const total = Number(order.total || order.total_amount || Math.max(0, subtotal + deliveryCharge - discount));
+
+  // Determine amount paid with fallback
+  const isMarkedPaid = order.payment_status === 'paid' || order.payment_status === 'partially_refunded';
+  const effectivePaid = extractedAmountPaid !== undefined
+    ? Number(extractedAmountPaid)
+    : isMarkedPaid
+    ? total
+    : (extractedPayments.filter(p => p.status === 'success').reduce((s, p) => s + p.amount, 0));
+
+  const effectiveDue = extractedAmountDue !== undefined
+    ? Number(extractedAmountDue)
+    : Math.max(0, total - effectivePaid);
+
+  // Safe delivery address to prevent any null-reference crashes
+  const safeDeliveryAddress: DeliveryAddress = {
+    house_no: order.delivery_address?.house_no || '',
+    street: order.delivery_address?.street || '',
+    area: order.delivery_address?.area || '',
+    city: order.delivery_address?.city || order.city || 'Vijayawada',
+    district: order.delivery_address?.district || '',
+    state: order.delivery_address?.state || order.state || 'Andhra Pradesh',
+    pincode: order.delivery_address?.pincode || order.pincode || '520010',
+  };
+
+  // Safe items array
+  const safeItems = Array.isArray(order.items) ? order.items : [];
+
   return {
     ...order,
+    total,
+    total_amount: total,
+    subtotal,
+    delivery_charge: deliveryCharge,
+    discount,
+    items: safeItems,
+    delivery_address: safeDeliveryAddress,
+    taxable_amount: extractedTaxableAmount !== undefined ? Number(extractedTaxableAmount) : Math.max(0, subtotal - discount),
+    gst_rate: extractedGstRate !== undefined ? Number(extractedGstRate) : 0,
+    gst_amount: extractedGstAmount !== undefined ? Number(extractedGstAmount) : 0,
+    coupon_code: extractedCouponCode || null,
+    coupon_discount: extractedCouponDiscount !== undefined ? Number(extractedCouponDiscount) : discount,
+    item_discount: extractedItemDiscount !== undefined ? Number(extractedItemDiscount) : 0,
+    amount_paid: effectivePaid,
+    amount_due: effectiveDue,
+    payments: extractedPayments,
     tracking_id: extractedTrackingId || null,
     courier_name: extractedCourier || null,
     tracking_url: extractedUrl || null,

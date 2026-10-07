@@ -8,13 +8,19 @@ import { useSettingsStore } from '@/hooks/useSettingsStore';
 import toast from 'react-hot-toast';
 
 export default function AdminSettingsTab() {
-  const { settings, updateSettings, resetSettings } = useSettingsStore();
+  const { settings, updateSettings, updateTaxSettings, resetSettings } = useSettingsStore();
 
   const [phone, setPhone] = useState(settings.businessPhone);
   const [whatsapp, setWhatsapp] = useState(settings.businessWhatsApp);
   const [email, setEmail] = useState(settings.businessEmail);
   const [address, setAddress] = useState(settings.businessAddress);
   const [hours, setHours] = useState(settings.businessHours);
+
+  // GST & Tax Configuration state
+  const [gstEnabled, setGstEnabled] = useState(settings.tax?.gstEnabled ?? true);
+  const [gstRate, setGstRate] = useState<number>(settings.tax?.gstRate ?? 18);
+  const [gstNumber, setGstNumber] = useState(settings.tax?.gstNumber ?? '37AAAAA0000A1Z5');
+  const [hsnCode, setHsnCode] = useState(settings.tax?.hsnCode ?? '21069099');
 
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault();
@@ -28,6 +34,17 @@ export default function AdminSettingsTab() {
     toast.success('Contact info updated across entire site!');
   };
 
+  const handleSaveTax = (e: React.FormEvent) => {
+    e.preventDefault();
+    updateTaxSettings({
+      gstEnabled,
+      gstRate: Number(gstRate) || 0,
+      gstNumber: gstNumber.trim(),
+      hsnCode: hsnCode.trim(),
+    });
+    toast.success(`Tax settings updated! GST set to ${gstEnabled ? `${gstRate}%` : 'Disabled (0%)'}. Synchronized live.`);
+  };
+
   const handleReset = () => {
     resetSettings();
     setPhone('8374634989');
@@ -35,7 +52,11 @@ export default function AdminSettingsTab() {
     setEmail('info@sudhaswagruhafoods.com');
     setAddress('Plot 18, Traditional Foods Lane, Benz Circle, Vijayawada, Andhra Pradesh - 520010');
     setHours('9:00 AM - 9:00 PM (All Days)');
-    toast.success('Reset contact settings to default.');
+    setGstEnabled(true);
+    setGstRate(18);
+    setGstNumber('37AAAAA0000A1Z5');
+    setHsnCode('21069099');
+    toast.success('Reset contact & tax settings to default.');
   };
 
   return (
@@ -239,6 +260,147 @@ export default function AdminSettingsTab() {
             </div>
           </div>
         </div>
+      </div>
+
+      {/* ─── Business & GST / Tax Configuration Section (Issues #2, #5, #8) ─── */}
+      <div className="bg-slate-950/70 p-6 rounded-2xl border border-slate-800 shadow-xl space-y-5">
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 pb-4 border-b border-slate-800">
+          <div>
+            <h3 className="text-base font-bold text-white flex items-center gap-2">
+              <span className="text-emerald-400 font-bold">🏛️</span>
+              <span>Business & GST / Tax Configuration</span>
+            </h3>
+            <p className="text-xs text-slate-400 mt-0.5">
+              Authoritative tax settings for the single order calculation engine. Centralized and synchronized in real-time.
+            </p>
+          </div>
+          <span className={`px-3 py-1 rounded-full text-xs font-bold font-mono border ${
+            gstEnabled ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30' : 'bg-slate-800 text-slate-400 border-slate-700'
+          }`}>
+            GST STATUS: {gstEnabled ? `ACTIVE (${gstRate}%)` : 'DISABLED (0%)'}
+          </span>
+        </div>
+
+        <form onSubmit={handleSaveTax} className="space-y-5">
+          {/* GST Enabled Toggle */}
+          <div className="flex items-center justify-between p-4 bg-slate-900 rounded-xl border border-slate-800">
+            <div>
+              <p className="text-sm font-bold text-white">GST Calculation Enabled</p>
+              <p className="text-xs text-slate-400 mt-0.5">
+                When enabled, GST is dynamically applied to new cart & checkout calculations.
+              </p>
+            </div>
+            <label className="relative inline-flex items-center cursor-pointer">
+              <input
+                type="checkbox"
+                checked={gstEnabled}
+                onChange={(e) => setGstEnabled(e.target.checked)}
+                className="sr-only peer"
+              />
+              <div className="w-12 h-6 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[3px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-600"></div>
+            </label>
+          </div>
+
+          {/* GST Percentage Input & Presets */}
+          <div className="p-4 bg-slate-900 rounded-xl border border-slate-800 space-y-3">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <label className="text-xs font-bold uppercase tracking-wider text-slate-300">
+                GST Percentage Rate (%) *
+              </label>
+              <span className="text-[11px] text-slate-500">Supports custom decimal rates</span>
+            </div>
+
+            <div className="grid sm:grid-cols-2 gap-4 items-center">
+              <div className="relative">
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  max="100"
+                  disabled={!gstEnabled}
+                  value={gstRate}
+                  onChange={(e) => setGstRate(parseFloat(e.target.value) || 0)}
+                  placeholder="18.00"
+                  className="w-full pl-4 pr-12 py-2.5 bg-slate-950 border border-slate-700 rounded-xl text-base text-white font-mono font-bold focus:outline-none focus:border-emerald-500 disabled:opacity-50"
+                  required
+                />
+                <span className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 font-bold font-mono">
+                  %
+                </span>
+              </div>
+
+              {/* Quick Preset Buttons */}
+              <div className="flex flex-wrap gap-2">
+                {[0, 5, 12, 18, 28].map((rate) => (
+                  <button
+                    key={rate}
+                    type="button"
+                    disabled={!gstEnabled}
+                    onClick={() => setGstRate(rate)}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold font-mono transition-all cursor-pointer ${
+                      gstRate === rate
+                        ? 'bg-emerald-600 text-white shadow-md'
+                        : 'bg-slate-800 text-slate-300 hover:text-white hover:bg-slate-700 border border-slate-700 disabled:opacity-40'
+                    }`}
+                  >
+                    {rate}%
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* GSTIN & HSN Code Fields */}
+          <div className="grid sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+                GSTIN / Tax Identification Number
+              </label>
+              <input
+                type="text"
+                value={gstNumber}
+                onChange={(e) => setGstNumber(e.target.value)}
+                placeholder="e.g. 37AAAAA0000A1Z5"
+                className="w-full px-3.5 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-xs text-white font-mono focus:outline-none focus:border-emerald-500"
+              />
+              <p className="text-[11px] text-slate-500 mt-1">Printed on order tax invoices & receipts</p>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+                HSN / SAC Food Products Code
+              </label>
+              <input
+                type="text"
+                value={hsnCode}
+                onChange={(e) => setHsnCode(e.target.value)}
+                placeholder="e.g. 21069099"
+                className="w-full px-3.5 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-xs text-white font-mono focus:outline-none focus:border-emerald-500"
+              />
+              <p className="text-[11px] text-slate-500 mt-1">Classification for traditional food preparations</p>
+            </div>
+          </div>
+
+          {/* Historical Snapshot Protection Guarantee Callout */}
+          <div className="p-4 bg-blue-950/30 border border-blue-500/30 rounded-xl text-xs text-blue-200 space-y-1">
+            <p className="font-bold flex items-center gap-1.5 text-blue-300">
+              <span>🛡️ Historical Order Financial Snapshot Protection</span>
+            </p>
+            <p className="text-[11px] leading-relaxed text-blue-200/90">
+              When GST percentage is modified (e.g. from 18% to 12%), only new carts, checkout transactions, and newly created orders will use {gstRate}%. Historical completed and delivered orders permanently preserve their original GST rate, GST amount, and taxable snapshot recorded at the time of purchase.
+            </p>
+          </div>
+
+          <div className="flex justify-end pt-2">
+            <button
+              type="submit"
+              className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition-all shadow-lg shadow-emerald-600/30 cursor-pointer"
+            >
+              <Save className="w-4 h-4" />
+              <span>Save Tax & GST Configuration</span>
+            </button>
+          </div>
+        </form>
       </div>
     </div>
   );

@@ -28,7 +28,7 @@ import { useCartStore, useLanguageStore } from '@/hooks/useStore';
 import { useSettingsStore } from '@/hooks/useSettingsStore';
 import { useOrderStore } from '@/hooks/useOrderStore';
 import { translations } from '@/i18n/translations';
-import type { DbOrder } from '@/services/supabase';
+import type { DbOrder, OrderPaymentRecord } from '@/services/supabase';
 import { sendOrderConfirmationEmail } from '@/services/emailService';
 import AppImage from '@/components/common/AppImage';
 
@@ -71,7 +71,7 @@ export default function CheckoutPage() {
   const navigate = useNavigate();
   const { language } = useLanguageStore();
   const t = translations[language];
-  const { items, getSubtotal, getDeliveryCharge, getTotal, clearCart, discount, couponCode, applyCoupon } = useCartStore();
+  const { items, getFinancialSummary, clearCart, discount, couponCode, applyCoupon } = useCartStore();
   const { settings } = useSettingsStore();
   const { addOrder } = useOrderStore();
 
@@ -92,10 +92,14 @@ export default function CheckoutPage() {
   });
 
   const mobileValue = watch('mobile');
-  const subtotal = getSubtotal();
-  const delivery = getDeliveryCharge();
-  const total = getTotal();
-  const discountAmount = Math.floor((subtotal * discount) / 100);
+  const summary = getFinancialSummary();
+  const subtotal = summary.originalSubtotal;
+  const delivery = summary.shippingAmount;
+  const discountAmount = summary.couponDiscount;
+  const taxableAmount = summary.taxableAmount;
+  const gstRate = summary.gstRate;
+  const gstAmount = summary.gstAmount;
+  const total = summary.grandTotal;
 
   if (items.length === 0) {
     return (
@@ -189,7 +193,25 @@ export default function CheckoutPage() {
       paymentStatusText
     );
 
-    // Create DB Order record
+    const isPaid = paymentStatus === 'paid';
+    const amountPaid = isPaid ? total : 0;
+    const amountDue = isPaid ? 0 : total;
+    const paymentRecords: OrderPaymentRecord[] = paymentId ? [
+      {
+        id: paymentId,
+        order_id: `order-${Date.now()}`,
+        order_number: orderNumber,
+        transaction_id: paymentId,
+        amount: total,
+        status: isPaid ? 'success' : 'pending',
+        provider: paymentId.startsWith('pay_') ? 'razorpay' : 'manual',
+        payment_method: isPaid ? 'online' : 'cod',
+        paid_at: new Date().toISOString(),
+        notes: isPaid ? 'Initial payment captured at checkout' : 'Pending payment on delivery',
+      }
+    ] : [];
+
+    // Create DB Order record with complete Authoritative Financial Snapshot (Requirements 8, 10, 13)
     const newOrder: DbOrder = {
       id: `order-${Date.now()}`,
       order_number: orderNumber,
@@ -203,11 +225,23 @@ export default function CheckoutPage() {
         unit_price: it.variant.price,
         total_price: it.variant.price * it.quantity,
         sku: it.variant.sku,
+        status: 'active',
       })),
       subtotal,
       delivery_charge: delivery,
       discount: discountAmount,
       total,
+      // Authoritative Order Financial Snapshot
+      taxable_amount: taxableAmount,
+      gst_rate: gstRate,
+      gst_amount: gstAmount,
+      coupon_code: couponCode || null,
+      coupon_discount: discountAmount,
+      item_discount: 0,
+      order_discount: discountAmount,
+      amount_paid: amountPaid,
+      amount_due: amountDue,
+      payments: paymentRecords,
       payment_status: paymentStatus,
       payment_id: paymentId,
       razorpay_order_id: razorpayOrderId,
@@ -776,6 +810,12 @@ export default function CheckoutPage() {
                       {delivery === 0 ? t.cart.freeDelivery : `₹${delivery}`}
                     </span>
                   </div>
+                  {gstAmount > 0 && (
+                    <div className="flex justify-between text-sm text-gray-600">
+                      <span>GST ({gstRate}%)</span>
+                      <span>+₹{gstAmount}</span>
+                    </div>
+                  )}
                   <div className="flex justify-between font-bold text-lg border-t border-gray-100 pt-3 mt-2">
                     <span>{t.cart.total}</span>
                     <span className="text-brand-green text-xl">₹{total}</span>

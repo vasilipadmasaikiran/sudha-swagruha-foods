@@ -56,6 +56,7 @@ import AdminDatabaseTab from '@/components/admin/AdminDatabaseTab';
 import AdminEmailTab from '@/components/admin/AdminEmailTab';
 import AdminSmsTab from '@/components/admin/AdminSmsTab';
 import AdminAboutUsTab from '@/components/admin/AdminAboutUsTab';
+import { AdminSalesTab } from '@/components/admin/AdminSalesTab';
 import AppImage from '@/components/common/AppImage';
 import { useAdminAuthStore, ROLE_DEFINITIONS, type AdminCategory, type AdminRole } from '@/hooks/useAdminAuthStore';
 import { categories, type Product, type ProductVariant } from '@/data/products';
@@ -63,6 +64,7 @@ import toast from 'react-hot-toast';
 
 export type ActiveCategoryTab =
   | 'dashboard'
+  | 'sales'
   | 'orders'
   | 'products'
   | 'inventory'
@@ -302,6 +304,7 @@ export default function AdminConsolePage() {
     roleRequired?: string;
   }> = [
     { id: 'dashboard', label: 'Dashboard', icon: Sliders },
+    { id: 'sales', label: 'Sales & Financials', icon: DollarSign },
     { id: 'orders', label: 'Orders', icon: ShoppingBag, badge: orders.length },
     { id: 'products', label: 'Products', icon: Package, badge: products.length },
     {
@@ -737,6 +740,11 @@ export default function AdminConsolePage() {
                 </div>
               </div>
             )}
+
+            {/* ============================================================ */}
+            {/* CATEGORY: SALES & FINANCIAL OVERVIEW (Requirements 21-24)    */}
+            {/* ============================================================ */}
+            {activeTab === 'sales' && <AdminSalesTab />}
 
             {/* ============================================================ */}
             {/* CATEGORY 2: ORDERS MANAGEMENT                                */}

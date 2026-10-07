@@ -85,13 +85,31 @@ export interface StoreSettings {
 
   // SMS Notification Settings (Requirements 20-25)
   sms: SmsSettings;
+
+  // Business GST & Tax Configuration (Issues #2, #5, #8)
+  tax: TaxSettings;
 }
+
+export interface TaxSettings {
+  gstEnabled: boolean;
+  gstRate: number; // percentage e.g. 18.00, 12.00, 5.00
+  hsnCode?: string;
+  gstNumber?: string;
+}
+
+export const defaultTaxSettings: TaxSettings = {
+  gstEnabled: true,
+  gstRate: 18,
+  hsnCode: '21069099',
+  gstNumber: '37AAAAA0000A1Z5',
+};
 
 interface SettingsStore {
   settings: StoreSettings;
   updateSettings: (updates: Partial<StoreSettings>) => void;
   updateSmtpSettings: (updates: Partial<SmtpSettings>) => void;
   updateSmsSettings: (updates: Partial<SmsSettings>) => void;
+  updateTaxSettings: (updates: Partial<TaxSettings>) => void;
   resetSettings: () => void;
   fetchSettings: () => Promise<void>;
   subscribeToSettings: () => () => void;
@@ -143,6 +161,7 @@ export const defaultSettings: StoreSettings = {
   isTestMode: true,
   smtp: defaultSmtpSettings,
   sms: defaultSmsSettings,
+  tax: defaultTaxSettings,
 };
 
 const syncDocTitle = (settings: StoreSettings) => {
@@ -177,6 +196,11 @@ export const useSettingsStore = create<SettingsStore>()(
                 tagline: remoteVal.tagline || state.settings.tagline || defaultSettings.tagline,
                 logoUrl: remoteVal.logoUrl || state.settings.logoUrl || defaultSettings.logoUrl,
                 footerText: remoteVal.footerText || state.settings.footerText || defaultSettings.footerText,
+                tax: {
+                  ...defaultTaxSettings,
+                  ...(state.settings.tax || {}),
+                  ...(remoteVal.tax || {}),
+                },
                 smtp: {
                   ...defaultSmtpSettings,
                   ...(state.settings.smtp || {}),
@@ -224,6 +248,11 @@ export const useSettingsStore = create<SettingsStore>()(
                       tagline: remoteVal.tagline || state.settings.tagline || defaultSettings.tagline,
                       logoUrl: remoteVal.logoUrl || state.settings.logoUrl || defaultSettings.logoUrl,
                       footerText: remoteVal.footerText || state.settings.footerText || defaultSettings.footerText,
+                      tax: {
+                        ...defaultTaxSettings,
+                        ...(state.settings.tax || {}),
+                        ...(remoteVal.tax || {}),
+                      },
                       smtp: {
                         ...defaultSmtpSettings,
                         ...(state.settings.smtp || {}),
@@ -274,6 +303,28 @@ export const useSettingsStore = create<SettingsStore>()(
             .then(({ error }) => {
               if (error) console.warn('Supabase store settings update notice:', error.message);
               else console.log('Synced store settings to Supabase cloud DB');
+            });
+        }
+      },
+
+      // ─── Update Tax / GST Settings Specifically (Issues #2, #5, #8) ───
+      updateTaxSettings: (taxUpdates) => {
+        const current = get().settings;
+        const nextTax: TaxSettings = { ...(current.tax || defaultTaxSettings), ...taxUpdates };
+        const nextSettings: StoreSettings = { ...current, tax: nextTax };
+        set({ settings: nextSettings });
+
+        if (isSupabaseConfigured()) {
+          supabase
+            .from('store_settings')
+            .upsert({
+              key: 'store_contact',
+              value: nextSettings,
+              updated_at: new Date().toISOString(),
+            })
+            .then(({ error }) => {
+              if (error) console.warn('Supabase Tax settings update notice:', error.message);
+              else console.log('Synced GST Tax settings to Supabase cloud DB');
             });
         }
       },
