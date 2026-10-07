@@ -126,6 +126,51 @@ export interface OrderStatusHistoryItem {
   tracking_url?: string;
 }
 
+export type NotificationEvent =
+  | 'ORDER_CONFIRMED'
+  | 'ORDER_DISPATCHED'
+  | 'TRACKING_UPDATED'
+  | 'ORDER_ITEM_REMOVED'
+  | 'PARTIAL_REFUND_INITIATED'
+  | 'FULL_ORDER_CANCELLED'
+  | 'FULL_REFUND_INITIATED'
+  | 'REFUND_COMPLETED'
+  | 'REFUND_FAILED';
+
+export interface NotificationLogItem {
+  id: string;
+  order_id: string;
+  order_number: string;
+  customer_id?: string | null;
+  channel: 'email' | 'sms';
+  event: NotificationEvent;
+  recipient: string;
+  status: 'pending' | 'sent' | 'failed';
+  provider: string;
+  provider_message_id?: string | null;
+  error?: string | null;
+  created_at: string;
+  sent_at?: string | null;
+}
+
+export interface OrderRefundRecord {
+  id: string; // e.g. "rfnd_1791234567"
+  order_id: string;
+  order_number: string;
+  payment_id?: string | null;
+  amount: number;
+  type: 'full' | 'partial';
+  reason: string;
+  status: 'pending' | 'processing' | 'success' | 'failed' | 'cancelled';
+  provider: string; // 'razorpay' | 'manual'
+  provider_refund_id?: string | null;
+  item_id?: string | null;
+  requested_by: string;
+  requested_at: string;
+  completed_at?: string | null;
+  failure_reason?: string | null;
+}
+
 export interface DbOrder {
   id: string;
   order_number: string;
@@ -135,7 +180,7 @@ export interface DbOrder {
   delivery_charge: number;
   discount: number;
   total: number;
-  payment_status: 'pending' | 'paid' | 'failed' | 'refunded';
+  payment_status: 'pending' | 'paid' | 'failed' | 'refunded' | 'partially_refunded';
   payment_id: string | null;
   razorpay_order_id: string | null;
   order_status: 'placed' | 'confirmed' | 'preparing' | 'packed' | 'shipped' | 'delivered' | 'cancelled';
@@ -151,12 +196,18 @@ export interface DbOrder {
   city?: string;
   pincode?: string;
   state?: string;
-  // Tracking & Timeline Extensions (Requirements 2, 11, 12, 17)
+  // Tracking & Timeline Extensions
   tracking_id?: string | null;
   courier_name?: string | null;
   tracking_url?: string | null;
   dispatched_at?: string | null;
   order_status_history?: OrderStatusHistoryItem[];
+  // Cancellation & Refund Extensions
+  cancellation_reason?: string | null;
+  cancelled_at?: string | null;
+  cancelled_by?: string | null;
+  refunded_amount?: number;
+  refunds?: OrderRefundRecord[];
   created_at: string;
   updated_at: string;
 }
@@ -173,6 +224,10 @@ export function normalizeOrderTracking(rawOrder: DbOrder): DbOrder {
   let extractedCourier = order.courier_name || '';
   let extractedUrl = order.tracking_url || '';
   let extractedDispatchedAt = order.dispatched_at || '';
+  let extractedCancellationReason = order.cancellation_reason || '';
+  let extractedCancelledAt = order.cancelled_at || '';
+  let extractedRefundedAmount = order.refunded_amount || 0;
+  let extractedRefunds: OrderRefundRecord[] = Array.isArray(order.refunds) ? [...order.refunds] : [];
   let extractedHistory: OrderStatusHistoryItem[] = Array.isArray(order.order_status_history)
     ? [...order.order_status_history]
     : [];
@@ -187,6 +242,10 @@ export function normalizeOrderTracking(rawOrder: DbOrder): DbOrder {
         if (meta.courier_name && !extractedCourier) extractedCourier = meta.courier_name;
         if (meta.tracking_url && !extractedUrl) extractedUrl = meta.tracking_url;
         if (meta.dispatched_at && !extractedDispatchedAt) extractedDispatchedAt = meta.dispatched_at;
+        if (meta.cancellation_reason && !extractedCancellationReason) extractedCancellationReason = meta.cancellation_reason;
+        if (meta.cancelled_at && !extractedCancelledAt) extractedCancelledAt = meta.cancelled_at;
+        if (meta.refunded_amount && !extractedRefundedAmount) extractedRefundedAmount = meta.refunded_amount;
+        if (Array.isArray(meta.refunds) && extractedRefunds.length === 0) extractedRefunds = meta.refunds;
         if (Array.isArray(meta.history) && extractedHistory.length === 0) {
           extractedHistory = meta.history;
         }
@@ -235,6 +294,10 @@ export function normalizeOrderTracking(rawOrder: DbOrder): DbOrder {
     courier_name: extractedCourier || null,
     tracking_url: extractedUrl || null,
     dispatched_at: extractedDispatchedAt || (order.order_status === 'shipped' ? order.updated_at : null),
+    cancellation_reason: extractedCancellationReason || null,
+    cancelled_at: extractedCancelledAt || null,
+    refunded_amount: extractedRefundedAmount,
+    refunds: extractedRefunds,
     order_status_history: extractedHistory,
   };
 }
@@ -248,6 +311,14 @@ export interface OrderItem {
   unit_price: number;
   total_price: number;
   sku: string;
+  // Item Removal & Partial Cancellation Extensions
+  status?: 'active' | 'removed' | 'cancelled';
+  removal_reason?: string | null;
+  removed_by?: string | null;
+  removed_at?: string | null;
+  refundable_amount?: number;
+  refund_amount?: number;
+  refund_id?: string | null;
 }
 
 export interface DeliveryAddress {

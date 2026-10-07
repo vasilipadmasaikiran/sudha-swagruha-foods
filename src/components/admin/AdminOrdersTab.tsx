@@ -25,13 +25,22 @@ import {
   ExternalLink,
   Calendar,
   Send,
+  Ban,
+  RotateCcw,
+  DollarSign,
+  MinusCircle,
+  AlertTriangle,
+  CheckCircle2,
+  FileText,
+  CornerDownRight,
 } from 'lucide-react';
 import { useOrderStore } from '@/hooks/useOrderStore';
 import { useAdminAuthStore } from '@/hooks/useAdminAuthStore';
 import { useSettingsStore } from '@/hooks/useSettingsStore';
 import { EmailService } from '@/services/emailService';
 import { logAdminAction } from '@/services/auditLogger';
-import type { DbOrder } from '@/services/supabase';
+import { calculateOrderRefundableMetrics, roundToTwoDecimals } from '@/services/refundService';
+import type { DbOrder, OrderItem, OrderRefundRecord } from '@/services/supabase';
 import toast from 'react-hot-toast';
 
 const STATUS_CONFIG: Record<
@@ -73,12 +82,15 @@ export default function AdminOrdersTab() {
     orders,
     updateOrderDetails,
     deleteOrder,
+    cancelOrder,
+    removeOrderItem,
+    initiateOrderRefund,
     fetchOrdersFromSupabase,
     subscribeToOrders,
     isSyncing,
   } = useOrderStore();
 
-  const { currentUser } = useAdminAuthStore();
+  const { currentUser, hasPermission } = useAdminAuthStore();
   const { settings } = useSettingsStore();
 
   const [searchQuery, setSearchQuery] = useState('');
@@ -92,6 +104,27 @@ export default function AdminOrdersTab() {
   const [dispatchCourier, setDispatchCourier] = useState('Delhivery');
   const [dispatchNotes, setDispatchNotes] = useState('');
   const [isSavingDispatch, setIsSavingDispatch] = useState(false);
+
+  // Order Cancellation Modal State (Requirements 1, 2, 7)
+  const [cancelModalOrder, setCancelModalOrder] = useState<DbOrder | null>(null);
+  const [cancelReason, setCancelReason] = useState('Customer requested cancellation');
+  const [cancelCustomReason, setCancelCustomReason] = useState('');
+  const [cancelInitiateRefund, setCancelInitiateRefund] = useState(true);
+  const [isCancellingOrder, setIsCancellingOrder] = useState(false);
+
+  // Remove Order Item Modal State (Requirements 3, 4, 5)
+  const [removeItemOrder, setRemoveItemOrder] = useState<DbOrder | null>(null);
+  const [removeItemTarget, setRemoveItemTarget] = useState<OrderItem | null>(null);
+  const [removeReason, setRemoveReason] = useState('Product unavailable in kitchen/stock');
+  const [removeCustomReason, setRemoveCustomReason] = useState('');
+  const [removeInitiateRefund, setRemoveInitiateRefund] = useState(true);
+  const [isRemovingItem, setIsRemovingItem] = useState(false);
+
+  // Custom Refund Modal State (Requirements 8, 9, 10)
+  const [refundModalOrder, setRefundModalOrder] = useState<DbOrder | null>(null);
+  const [refundCustomAmount, setRefundCustomAmount] = useState<string>('');
+  const [refundReason, setRefundReason] = useState('Administrative compensation / partial refund');
+  const [isProcessingRefund, setIsProcessingRefund] = useState(false);
 
   // Auto-fetch from Supabase on mount and listen to realtime updates
   const handleRefresh = useCallback(async () => {
@@ -221,6 +254,139 @@ export default function AdminOrdersTab() {
       toast.error('Failed to save dispatch details');
     } finally {
       setIsSavingDispatch(false);
+    }
+  };
+
+  // Handle Order Cancellation Submit (Requirement 1, 2, 7)
+  const handleCancelOrderSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!cancelModalOrder) return;
+
+    const finalReason =
+      cancelReason === 'Other' ? cancelCustomReason.trim() : cancelReason.trim();
+
+    if (!finalReason) {
+      toast.error('Please enter a cancellation reason');
+      return;
+    }
+
+    setIsCancellingOrder(true);
+    try {
+      const res = await cancelOrder(
+        cancelModalOrder.id,
+        finalReason,
+        currentUser?.full_name || 'Order Processor',
+        cancelInitiateRefund
+      );
+
+      if (res.success && res.order) {
+        toast.success(`Order ${cancelModalOrder.order_number} cancelled successfully.`);
+        if (res.refund) {
+          toast.success(`Refund of ₹${res.refund.amount} initiated (${res.refund.status.toUpperCase()})`);
+        }
+        if (selectedOrder && selectedOrder.order_number === cancelModalOrder.order_number) {
+          setSelectedOrder(res.order);
+        }
+        setCancelModalOrder(null);
+        setCancelReason('Customer requested cancellation');
+        setCancelCustomReason('');
+      } else {
+        toast.error(res.error || 'Failed to cancel order');
+      }
+    } catch {
+      toast.error('Failed to cancel order');
+    } finally {
+      setIsCancellingOrder(false);
+    }
+  };
+
+  // Handle Remove Order Item Submit (Requirement 3, 4, 5)
+  const handleRemoveItemSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!removeItemOrder || !removeItemTarget) return;
+
+    const finalReason =
+      removeReason === 'Other' ? removeCustomReason.trim() : removeReason.trim();
+
+    if (!finalReason) {
+      toast.error('Please specify the reason for removing this product');
+      return;
+    }
+
+    setIsRemovingItem(true);
+    try {
+      const res = await removeOrderItem(
+        removeItemOrder.id,
+        removeItemTarget.product_id,
+        finalReason,
+        currentUser?.full_name || 'Order Processor',
+        removeInitiateRefund
+      );
+
+      if (res.success && res.order) {
+        toast.success(`Removed ${removeItemTarget.product_name_en} from order.`);
+        if (res.refund) {
+          toast.success(`Partial refund of ₹${res.refund.amount} initiated (${res.refund.status.toUpperCase()})`);
+        }
+        if (selectedOrder && selectedOrder.order_number === removeItemOrder.order_number) {
+          setSelectedOrder(res.order);
+        }
+        setRemoveItemOrder(null);
+        setRemoveItemTarget(null);
+        setRemoveReason('Product unavailable in kitchen/stock');
+        setRemoveCustomReason('');
+      } else {
+        toast.error(res.error || 'Failed to remove item');
+      }
+    } catch {
+      toast.error('Failed to remove item');
+    } finally {
+      setIsRemovingItem(false);
+    }
+  };
+
+  // Handle Custom Refund Submit (Requirement 8, 9, 10)
+  const handleCustomRefundSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!refundModalOrder) return;
+
+    const amt = parseFloat(refundCustomAmount);
+    if (isNaN(amt) || amt <= 0) {
+      toast.error('Please enter a valid refund amount');
+      return;
+    }
+
+    if (!refundReason.trim()) {
+      toast.error('Please enter a refund reason');
+      return;
+    }
+
+    setIsProcessingRefund(true);
+    try {
+      const res = await initiateOrderRefund(
+        refundModalOrder.id,
+        amt,
+        refundReason.trim(),
+        'partial',
+        null,
+        currentUser?.full_name || 'Order Processor'
+      );
+
+      if (res.success && res.order) {
+        toast.success(`Refund of ₹${amt} initiated successfully!`);
+        if (selectedOrder && selectedOrder.order_number === refundModalOrder.order_number) {
+          setSelectedOrder(res.order);
+        }
+        setRefundModalOrder(null);
+        setRefundCustomAmount('');
+        setRefundReason('Administrative compensation / partial refund');
+      } else {
+        toast.error(res.error || 'Failed to initiate refund');
+      }
+    } catch {
+      toast.error('Failed to initiate refund');
+    } finally {
+      setIsProcessingRefund(false);
     }
   };
 
@@ -380,28 +546,50 @@ export default function AdminOrdersTab() {
                       {/* Items */}
                       <td className="px-4 py-3.5 align-top max-w-xs">
                         <div className="space-y-1">
-                          {o.items.map((it, idx) => (
-                            <div key={idx} className="text-slate-300 leading-tight">
-                              <span className="font-medium text-white">{it.product_name_en}</span>{' '}
-                              <span className="text-slate-400">({it.weight})</span>{' '}
-                              <span className="text-emerald-400 font-semibold">×{it.quantity}</span>
-                            </div>
-                          ))}
+                          {o.items.map((it, idx) => {
+                            const isRemoved = it.status === 'removed';
+                            return (
+                              <div key={idx} className="text-slate-300 leading-tight">
+                                <span className={`font-medium ${isRemoved ? 'line-through text-slate-500' : 'text-white'}`}>
+                                  {it.product_name_en}
+                                </span>{' '}
+                                <span className="text-slate-400">({it.weight})</span>{' '}
+                                <span className={isRemoved ? 'line-through text-slate-500' : 'text-emerald-400 font-semibold'}>
+                                  ×{it.quantity}
+                                </span>
+                                {isRemoved && (
+                                  <span className="ml-1 px-1.5 py-0.2 rounded text-[9px] font-bold bg-red-500/20 text-red-400 border border-red-500/30">
+                                    REMOVED
+                                  </span>
+                                )}
+                              </div>
+                            );
+                          })}
                         </div>
                       </td>
 
                       {/* Total & Payment */}
                       <td className="px-4 py-3.5 align-top">
                         <div className="font-bold text-white text-sm">₹{o.total}</div>
-                        <div className="mt-1">
+                        <div className="mt-1 space-y-0.5">
                           <span
                             className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${
                               o.payment_status === 'paid'
                                 ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
-                                : 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
+                                : o.payment_status === 'partially_refunded'
+                                ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
+                                : o.payment_status === 'refunded'
+                                ? 'bg-purple-500/20 text-purple-400 border border-purple-500/30'
+                                : 'bg-slate-700/50 text-slate-300 border border-slate-600'
                             }`}
                           >
-                            {o.payment_status === 'paid' ? 'Paid Online' : 'Pending / COD'}
+                            {o.payment_status === 'partially_refunded'
+                              ? `Refunded ₹${o.refunded_amount || 0}`
+                              : o.payment_status === 'refunded'
+                              ? 'Fully Refunded'
+                              : o.payment_status === 'paid'
+                              ? 'Paid Online'
+                              : 'Pending / COD'}
                           </span>
                         </div>
                       </td>
@@ -574,7 +762,7 @@ export default function AdminOrdersTab() {
         )}
       </AnimatePresence>
 
-      {/* ─── MODAL 2: FULL ORDER DETAILS & TIMELINE (Requirement 12 & 17) ─── */}
+      {/* ─── MODAL 2: FULL ORDER DETAILS, ACTIONS & TIMELINE ─── */}
       <AnimatePresence>
         {selectedOrder && (
           <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
@@ -624,6 +812,30 @@ export default function AdminOrdersTab() {
                   ))}
                 </select>
               </div>
+
+              {/* Cancellation Notice Banner */}
+              {selectedOrder.order_status === 'cancelled' && (
+                <div className="p-4 bg-red-950/40 rounded-2xl border border-red-500/30 space-y-1">
+                  <div className="flex items-center justify-between">
+                    <p className="text-xs font-bold text-red-400 uppercase tracking-wider flex items-center gap-1.5">
+                      <AlertTriangle className="w-4 h-4" />
+                      <span>Order Cancelled</span>
+                    </p>
+                    {selectedOrder.refunded_amount && selectedOrder.refunded_amount > 0 ? (
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 font-mono">
+                        Refunded: ₹{selectedOrder.refunded_amount}
+                      </span>
+                    ) : null}
+                  </div>
+                  <p className="text-xs text-red-200">
+                    Reason: <span className="font-semibold text-white">{selectedOrder.cancellation_reason || 'Administrative cancellation'}</span>
+                  </p>
+                  <p className="text-[11px] text-slate-400">
+                    Cancelled by: {selectedOrder.cancelled_by || 'Admin'} •{' '}
+                    {selectedOrder.cancelled_at ? new Date(selectedOrder.cancelled_at).toLocaleString() : ''}
+                  </p>
+                </div>
+              )}
 
               {/* Tracking Information Box */}
               {selectedOrder.tracking_id && (
@@ -686,25 +898,157 @@ export default function AdminOrdersTab() {
                 </p>
               </div>
 
-              {/* Items Table */}
+              {/* Items Table with Item Removal capability */}
               <div className="space-y-2">
                 <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
                   Ordered Items ({selectedOrder.items.length})
                 </span>
                 <div className="bg-slate-950/60 rounded-2xl border border-slate-800 divide-y divide-slate-800 text-xs">
-                  {selectedOrder.items.map((it, idx) => (
-                    <div key={idx} className="p-3.5 flex justify-between items-center">
-                      <div>
-                        <p className="font-semibold text-white">{it.product_name_en}</p>
-                        <p className="text-[11px] text-slate-400">
-                          Weight: {it.weight} • Qty: {it.quantity} @ ₹{it.unit_price} each
-                        </p>
+                  {selectedOrder.items.map((it, idx) => {
+                    const isRemoved = it.status === 'removed';
+                    return (
+                      <div key={idx} className={`p-3.5 flex justify-between items-center ${isRemoved ? 'bg-red-950/20' : ''}`}>
+                        <div className="flex-1 pr-3">
+                          <div className="flex items-center gap-2">
+                            <p className={`font-semibold ${isRemoved ? 'line-through text-slate-400' : 'text-white'}`}>
+                              {it.product_name_en}
+                            </p>
+                            {isRemoved && (
+                              <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-red-500/20 text-red-400 border border-red-500/30">
+                                REMOVED
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-[11px] text-slate-400 mt-0.5">
+                            Weight: {it.weight} • Qty: {it.quantity} @ ₹{it.unit_price} each
+                          </p>
+                          {isRemoved && (
+                            <p className="text-[11px] text-red-300 mt-0.5">
+                              Reason: {it.removal_reason || 'Product unavailable'} {it.refund_amount ? `• Refund: ₹${it.refund_amount}` : ''}
+                            </p>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-3">
+                          <p className={`font-bold text-sm ${isRemoved ? 'line-through text-slate-500' : 'text-emerald-400'}`}>
+                            ₹{it.total_price}
+                          </p>
+                          {!isRemoved && selectedOrder.order_status !== 'cancelled' && (hasPermission('canRemoveOrderItems') || currentUser?.role === 'ROOT_ADMIN') && (
+                            <button
+                              onClick={() => {
+                                setRemoveItemOrder(selectedOrder);
+                                setRemoveItemTarget(it);
+                              }}
+                              className="px-2.5 py-1 bg-red-600/20 hover:bg-red-600/40 border border-red-500/30 text-red-400 hover:text-red-300 rounded-lg text-[11px] font-semibold transition cursor-pointer"
+                              title="Remove item from order"
+                            >
+                              Remove
+                            </button>
+                          )}
+                        </div>
                       </div>
-                      <p className="font-bold text-emerald-400 text-sm">₹{it.total_price}</p>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
+
+              {/* Financial Reconciliation & Refund Management Card */}
+              {(() => {
+                const metrics = calculateOrderRefundableMetrics(selectedOrder);
+                return (
+                  <div className="p-4 bg-slate-950/80 rounded-2xl border border-slate-800 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
+                        <DollarSign className="w-4 h-4 text-emerald-400" />
+                        <span>Financial Reconciliation & Refunds</span>
+                      </span>
+                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
+                        selectedOrder.payment_status === 'paid' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' :
+                        selectedOrder.payment_status === 'partially_refunded' ? 'bg-amber-500/10 text-amber-400 border-amber-500/20' :
+                        selectedOrder.payment_status === 'refunded' ? 'bg-purple-500/10 text-purple-400 border-purple-500/20' :
+                        'bg-slate-800 text-slate-400 border-slate-700'
+                      }`}>
+                        {selectedOrder.payment_status.toUpperCase()}
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-3 gap-2 text-center">
+                      <div className="p-2.5 bg-slate-900 rounded-xl border border-slate-800">
+                        <p className="text-[10px] text-slate-400">Total Paid</p>
+                        <p className="text-sm font-bold font-mono text-emerald-400">₹{metrics.paidAmount}</p>
+                      </div>
+                      <div className="p-2.5 bg-slate-900 rounded-xl border border-slate-800">
+                        <p className="text-[10px] text-slate-400">Refunded</p>
+                        <p className="text-sm font-bold font-mono text-amber-400">₹{metrics.alreadyRefunded}</p>
+                      </div>
+                      <div className="p-2.5 bg-slate-900 rounded-xl border border-slate-800">
+                        <p className="text-[10px] text-slate-400">Refundable</p>
+                        <p className="text-sm font-bold font-mono text-cyan-400">₹{metrics.refundableAmount}</p>
+                      </div>
+                    </div>
+
+                    {/* Action buttons */}
+                    <div className="flex flex-wrap gap-2 pt-1">
+                      {selectedOrder.order_status !== 'cancelled' && (hasPermission('canCancelOrders') || currentUser?.role === 'ROOT_ADMIN') && (
+                        <button
+                          onClick={() => setCancelModalOrder(selectedOrder)}
+                          className="flex-1 py-2 px-3 bg-red-600/20 hover:bg-red-600/30 border border-red-500/30 text-red-400 text-xs font-semibold rounded-xl flex items-center justify-center gap-1.5 cursor-pointer transition"
+                        >
+                          <Ban className="w-3.5 h-3.5" />
+                          <span>Cancel Entire Order</span>
+                        </button>
+                      )}
+
+                      {metrics.refundableAmount > 0 && (hasPermission('canInitiateRefunds') || currentUser?.role === 'ROOT_ADMIN') && (
+                        <button
+                          onClick={() => {
+                            setRefundModalOrder(selectedOrder);
+                            setRefundCustomAmount(String(metrics.refundableAmount));
+                          }}
+                          className="flex-1 py-2 px-3 bg-cyan-600/20 hover:bg-cyan-600/30 border border-cyan-500/30 text-cyan-400 text-xs font-semibold rounded-xl flex items-center justify-center gap-1.5 cursor-pointer transition"
+                        >
+                          <RotateCcw className="w-3.5 h-3.5" />
+                          <span>Initiate Refund</span>
+                        </button>
+                      )}
+                    </div>
+
+                    {/* Refund History log */}
+                    {selectedOrder.refunds && selectedOrder.refunds.length > 0 && (
+                      <div className="pt-2 border-t border-slate-800/80 space-y-2">
+                        <p className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">
+                          Refund Audit Trail ({selectedOrder.refunds.length})
+                        </p>
+                        <div className="space-y-1.5 max-h-40 overflow-y-auto">
+                          {selectedOrder.refunds.map((rf, rIdx) => (
+                            <div key={rIdx} className="p-2 bg-slate-900/80 rounded-lg border border-slate-800 text-[11px] flex justify-between items-center">
+                              <div>
+                                <span className="font-mono font-bold text-white">₹{rf.amount}</span>
+                                <span className="text-slate-400 ml-2">({rf.type})</span>
+                                <p className="text-[10px] text-slate-400">{rf.reason}</p>
+                                {rf.provider_refund_id && (
+                                  <p className="text-[9px] font-mono text-cyan-400">Ref: {rf.provider_refund_id}</p>
+                                )}
+                              </div>
+                              <div className="text-right">
+                                <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase ${
+                                  rf.status === 'success' ? 'bg-emerald-500/20 text-emerald-400' :
+                                  rf.status === 'processing' ? 'bg-amber-500/20 text-amber-400' :
+                                  'bg-red-500/20 text-red-400'
+                                }`}>
+                                  {rf.status}
+                                </span>
+                                <p className="text-[9px] text-slate-500 mt-0.5">
+                                  {new Date(rf.requested_at).toLocaleDateString()}
+                                </p>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
 
               {/* Status History (Requirement 17) */}
               {selectedOrder.order_status_history && selectedOrder.order_status_history.length > 0 && (
@@ -730,6 +1074,362 @@ export default function AdminOrdersTab() {
                   </div>
                 </div>
               )}
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* ─── MODAL 3: ORDER CANCELLATION DIALOG (Requirements 1, 2, 7) ─── */}
+      <AnimatePresence>
+        {cancelModalOrder && (
+          <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4">
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-slate-900 border border-slate-800 rounded-3xl max-w-md w-full p-6 text-slate-100 space-y-4 shadow-2xl"
+            >
+              <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+                <div className="flex items-center gap-2">
+                  <div className="w-8 h-8 rounded-xl bg-red-600/30 text-red-400 border border-red-500/40 flex items-center justify-center">
+                    <Ban className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-white text-base">Cancel Entire Order</h3>
+                    <p className="text-xs text-red-300 font-mono">
+                      {cancelModalOrder.order_number}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setCancelModalOrder(null)}
+                  className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {(() => {
+                const metrics = calculateOrderRefundableMetrics(cancelModalOrder);
+                return (
+                  <form onSubmit={handleCancelOrderSubmit} className="space-y-4">
+                    <div className="p-3 bg-red-950/30 border border-red-500/30 rounded-xl text-xs space-y-1">
+                      <p className="text-red-300 font-semibold">
+                        This action will mark Order #{cancelModalOrder.order_number} as CANCELLED.
+                      </p>
+                      <p className="text-slate-400">
+                        Customer: <span className="text-white">{cancelModalOrder.customer_name}</span> • Total Paid: <span className="text-emerald-400 font-mono font-bold">₹{metrics.paidAmount}</span>
+                      </p>
+                      {metrics.refundableAmount > 0 && (
+                        <p className="text-cyan-300">
+                          Refundable Balance: <span className="font-mono font-bold">₹{metrics.refundableAmount}</span>
+                        </p>
+                      )}
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold uppercase tracking-wider text-slate-300 mb-1.5">
+                        Cancellation Reason *
+                      </label>
+                      <select
+                        value={cancelReason}
+                        onChange={(e) => setCancelReason(e.target.value)}
+                        className="w-full px-3 py-2.5 bg-slate-800 border border-slate-700 rounded-xl text-white text-xs focus:outline-none focus:border-red-500"
+                      >
+                        <option value="Customer requested cancellation">Customer requested cancellation</option>
+                        <option value="Product unavailable">Product unavailable</option>
+                        <option value="Payment issue">Payment issue</option>
+                        <option value="Delivery issue">Delivery issue</option>
+                        <option value="Duplicate order">Duplicate order</option>
+                        <option value="Store/business cancellation">Store/business cancellation</option>
+                        <option value="Other">Other (specify below)</option>
+                      </select>
+                    </div>
+
+                    {cancelReason === 'Other' && (
+                      <div>
+                        <label className="block text-xs font-bold uppercase tracking-wider text-slate-300 mb-1.5">
+                          Enter Cancellation Reason *
+                        </label>
+                        <input
+                          type="text"
+                          required
+                          value={cancelCustomReason}
+                          onChange={(e) => setCancelCustomReason(e.target.value)}
+                          placeholder="State exact cancellation reason..."
+                          className="w-full px-3.5 py-2.5 bg-slate-800 border border-slate-700 rounded-xl text-white text-xs focus:outline-none focus:border-red-500"
+                        />
+                      </div>
+                    )}
+
+                    {metrics.refundableAmount > 0 && (
+                      <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 flex items-center justify-between">
+                        <label className="text-xs text-slate-300 flex items-center gap-2 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={cancelInitiateRefund}
+                            onChange={(e) => setCancelInitiateRefund(e.target.checked)}
+                            className="rounded border-slate-700 bg-slate-800 text-red-500 focus:ring-0"
+                          />
+                          <span>Initiate full refund of ₹{metrics.refundableAmount}</span>
+                        </label>
+                        <span className="text-[10px] text-cyan-400 font-mono">Gateway API</span>
+                      </div>
+                    )}
+
+                    <div className="flex gap-2 pt-2">
+                      <button
+                        type="button"
+                        onClick={() => setCancelModalOrder(null)}
+                        className="flex-1 py-3 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold rounded-xl transition-colors cursor-pointer"
+                      >
+                        Abort
+                      </button>
+                      <button
+                        type="submit"
+                        disabled={isCancellingOrder}
+                        className="flex-1 py-3 bg-red-600 hover:bg-red-500 text-white text-xs font-bold rounded-xl transition-colors shadow-lg shadow-red-600/30 flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60"
+                      >
+                        <Ban className="w-3.5 h-3.5" />
+                        <span>{isCancellingOrder ? 'Cancelling...' : 'Confirm Cancellation'}</span>
+                      </button>
+                    </div>
+                  </form>
+                );
+              })()}
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* ─── MODAL 4: REMOVE ORDER ITEM DIALOG (Requirements 3, 4, 5) ─── */}
+      <AnimatePresence>
+        {removeItemOrder && removeItemTarget && (
+          <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4">
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-slate-900 border border-slate-800 rounded-3xl max-w-md w-full p-6 text-slate-100 space-y-4 shadow-2xl"
+            >
+              <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+                <div className="flex items-center gap-2">
+                  <div className="w-8 h-8 rounded-xl bg-amber-600/30 text-amber-400 border border-amber-500/40 flex items-center justify-center">
+                    <MinusCircle className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-white text-base">Remove Product from Order</h3>
+                    <p className="text-xs text-amber-300 font-mono">
+                      {removeItemOrder.order_number}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => {
+                    setRemoveItemOrder(null);
+                    setRemoveItemTarget(null);
+                  }}
+                  className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <form onSubmit={handleRemoveItemSubmit} className="space-y-4">
+                <div className="p-3 bg-amber-950/30 border border-amber-500/30 rounded-xl text-xs space-y-1">
+                  <p className="text-amber-300 font-semibold">
+                    Product: {removeItemTarget.product_name_en} ({removeItemTarget.weight})
+                  </p>
+                  <p className="text-slate-400">
+                    Quantity: <span className="text-white font-bold">{removeItemTarget.quantity}</span> • Total Line Value: <span className="text-emerald-400 font-mono font-bold">₹{removeItemTarget.total_price}</span>
+                  </p>
+                  <p className="text-[11px] text-slate-400">
+                    Item will be soft-marked as removed for audit trails.
+                  </p>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold uppercase tracking-wider text-slate-300 mb-1.5">
+                    Removal Reason *
+                  </label>
+                  <select
+                    value={removeReason}
+                    onChange={(e) => setRemoveReason(e.target.value)}
+                    className="w-full px-3 py-2.5 bg-slate-800 border border-slate-700 rounded-xl text-white text-xs focus:outline-none focus:border-amber-500"
+                  >
+                    <option value="Product unavailable in kitchen/stock">Product unavailable in kitchen/stock</option>
+                    <option value="Quality check rejected before dispatch">Quality check rejected before dispatch</option>
+                    <option value="Customer requested item removal">Customer requested item removal</option>
+                    <option value="Packaging issue">Packaging issue</option>
+                    <option value="Other">Other (specify below)</option>
+                  </select>
+                </div>
+
+                {removeReason === 'Other' && (
+                  <div>
+                    <label className="block text-xs font-bold uppercase tracking-wider text-slate-300 mb-1.5">
+                      Enter Removal Reason *
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={removeCustomReason}
+                      onChange={(e) => setRemoveCustomReason(e.target.value)}
+                      placeholder="State specific reason..."
+                      className="w-full px-3.5 py-2.5 bg-slate-800 border border-slate-700 rounded-xl text-white text-xs focus:outline-none focus:border-amber-500"
+                    />
+                  </div>
+                )}
+
+                <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 flex items-center justify-between">
+                  <label className="text-xs text-slate-300 flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={removeInitiateRefund}
+                      onChange={(e) => setRemoveInitiateRefund(e.target.checked)}
+                      className="rounded border-slate-700 bg-slate-800 text-amber-500 focus:ring-0"
+                    />
+                    <span>Initiate partial refund of ₹{removeItemTarget.total_price}</span>
+                  </label>
+                  <span className="text-[10px] text-cyan-400 font-mono">Auto-Refund</span>
+                </div>
+
+                <div className="flex gap-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setRemoveItemOrder(null);
+                      setRemoveItemTarget(null);
+                    }}
+                    className="flex-1 py-3 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold rounded-xl transition-colors cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isRemovingItem}
+                    className="flex-1 py-3 bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold rounded-xl transition-colors shadow-lg shadow-amber-600/30 flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60"
+                  >
+                    <MinusCircle className="w-3.5 h-3.5" />
+                    <span>{isRemovingItem ? 'Removing...' : 'Remove & Refund'}</span>
+                  </button>
+                </div>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* ─── MODAL 5: CUSTOM REFUND DIALOG (Requirements 8, 9, 10) ─── */}
+      <AnimatePresence>
+        {refundModalOrder && (
+          <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4">
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-slate-900 border border-slate-800 rounded-3xl max-w-md w-full p-6 text-slate-100 space-y-4 shadow-2xl"
+            >
+              <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+                <div className="flex items-center gap-2">
+                  <div className="w-8 h-8 rounded-xl bg-cyan-600/30 text-cyan-400 border border-cyan-500/40 flex items-center justify-center">
+                    <RotateCcw className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-white text-base">Initiate Payment Refund</h3>
+                    <p className="text-xs text-cyan-300 font-mono">
+                      {refundModalOrder.order_number}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setRefundModalOrder(null)}
+                  className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {(() => {
+                const metrics = calculateOrderRefundableMetrics(refundModalOrder);
+                return (
+                  <form onSubmit={handleCustomRefundSubmit} className="space-y-4">
+                    <div className="p-3 bg-cyan-950/30 border border-cyan-500/30 rounded-xl text-xs space-y-1">
+                      <div className="flex justify-between">
+                        <span className="text-slate-400">Total Paid Amount:</span>
+                        <span className="font-mono font-bold text-emerald-400">₹{metrics.paidAmount}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-400">Already Refunded:</span>
+                        <span className="font-mono font-bold text-amber-400">₹{metrics.alreadyRefunded}</span>
+                      </div>
+                      <div className="flex justify-between border-t border-cyan-500/20 pt-1">
+                        <span className="text-white font-bold">Max Refundable Balance:</span>
+                        <span className="font-mono font-bold text-cyan-400">₹{metrics.refundableAmount}</span>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold uppercase tracking-wider text-slate-300 mb-1.5">
+                        Refund Amount (₹) *
+                      </label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="1"
+                        max={metrics.refundableAmount}
+                        required
+                        value={refundCustomAmount}
+                        onChange={(e) => setRefundCustomAmount(e.target.value)}
+                        placeholder={`Max ₹${metrics.refundableAmount}`}
+                        className="w-full px-4 py-3 bg-slate-800 border border-slate-700 rounded-xl text-white font-mono text-sm focus:outline-none focus:border-cyan-500"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold uppercase tracking-wider text-slate-300 mb-1.5">
+                        Refund Reason / Audit Note *
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        value={refundReason}
+                        onChange={(e) => setRefundReason(e.target.value)}
+                        placeholder="State reason for customer and accounting records..."
+                        className="w-full px-3.5 py-2.5 bg-slate-800 border border-slate-700 rounded-xl text-white text-xs focus:outline-none focus:border-cyan-500"
+                      />
+                    </div>
+
+                    <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 text-[11px] text-slate-400 space-y-1">
+                      <p className="flex items-center gap-1.5 text-cyan-400 font-semibold">
+                        <AlertCircle className="w-3.5 h-3.5" />
+                        <span>Security Confirmation</span>
+                      </p>
+                      <p>
+                        This will issue a refund through the active payment gateway directly to the customer&apos;s source account and dispatch an email/SMS notification.
+                      </p>
+                    </div>
+
+                    <div className="flex gap-2 pt-2">
+                      <button
+                        type="button"
+                        onClick={() => setRefundModalOrder(null)}
+                        className="flex-1 py-3 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold rounded-xl transition-colors cursor-pointer"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="submit"
+                        disabled={isProcessingRefund}
+                        className="flex-1 py-3 bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-bold rounded-xl transition-colors shadow-lg shadow-cyan-600/30 flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60"
+                      >
+                        <RotateCcw className="w-3.5 h-3.5" />
+                        <span>{isProcessingRefund ? 'Processing...' : 'Confirm Refund'}</span>
+                      </button>
+                    </div>
+                  </form>
+                );
+              })()}
             </motion.div>
           </div>
         )}

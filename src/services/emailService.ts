@@ -224,6 +224,206 @@ export function generateStatusUpdateHtml(
 }
 
 /**
+ * Generates branded HTML email for item removal and partial refund
+ */
+export function generateItemRemovedHtml(
+  order: DbOrder,
+  item: { product_name_en: string; quantity: number; weight: string; total_price: number },
+  refundAmount: number,
+  reason: string,
+  settings: { businessName?: string; businessPhone?: string; businessAddress?: string }
+): string {
+  const brand = settings.businessName || 'Sudha Swagruha Foods';
+  const origin = typeof window !== 'undefined' ? window.location.origin : 'https://sudhaswagruhafoods.com';
+  const trackingUrl = `${origin}/track-order?order=${encodeURIComponent(order.order_number)}`;
+
+  return `
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Update to Your Order - ${brand}</title></head>
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #f8fafc; padding: 24px 0; color: #1e293b;">
+  <div style="max-width: 600px; margin: 0 auto; background: #ffffff; border-radius: 16px; overflow: hidden; border: 1px solid #e2e8f0;">
+    <div style="background: linear-gradient(135deg, #b45309 0%, #d97706 100%); padding: 28px; text-align: center; color: #fff;">
+      <h2 style="margin: 0;">🌿 ${brand}</h2>
+      <p style="margin: 6px 0 0 0; opacity: 0.95; font-size: 14px;">Update Regarding Order #${order.order_number}</p>
+    </div>
+    <div style="padding: 24px;">
+      <p style="font-size: 15px;">Namaskaram <strong>${order.customer_name}</strong>,</p>
+      <p style="font-size: 14px; line-height: 1.6; color: #475569;">
+        We are writing to inform you of an update regarding your order <strong>#${order.order_number}</strong>.
+        Due to kitchen preparation availability, the following item has been removed from your consignment:
+      </p>
+
+      <div style="background: #fffbeb; border: 1px solid #fde68a; border-radius: 12px; padding: 16px; margin: 16px 0;">
+        <table style="width: 100%; font-size: 13px;">
+          <tr>
+            <td style="color: #92400e;"><strong>Removed Item:</strong></td>
+            <td style="text-align: right; font-weight: bold; color: #78350f;">${item.product_name_en} (${item.weight}) x ${item.quantity}</td>
+          </tr>
+          <tr>
+            <td style="color: #92400e; padding-top: 6px;"><strong>Reason:</strong></td>
+            <td style="text-align: right; color: #78350f; padding-top: 6px;">${reason}</td>
+          </tr>
+          <tr>
+            <td style="color: #92400e; padding-top: 6px;"><strong>Refund Amount:</strong></td>
+            <td style="text-align: right; font-weight: bold; color: #047857; padding-top: 6px; font-size: 15px;">₹${refundAmount}</td>
+          </tr>
+          <tr>
+            <td style="color: #92400e; padding-top: 6px;"><strong>Refund Status:</strong></td>
+            <td style="text-align: right; font-weight: bold; color: #0284c7; padding-top: 6px; text-transform: uppercase;">Processing</td>
+          </tr>
+        </table>
+      </div>
+
+      <p style="font-size: 13px; color: #475569; line-height: 1.5;">
+        The remaining items in your order are being prepared with care and will be dispatched on schedule.
+        You can inspect your live order timeline and refund status directly:
+      </p>
+
+      <div style="text-align: center; margin: 24px 0;">
+        <a href="${trackingUrl}" style="background: #047857; color: #fff; padding: 12px 28px; text-decoration: none; border-radius: 10px; font-weight: bold; font-size: 14px; display: inline-block;">
+          Track Order & Refund
+        </a>
+      </div>
+
+      <p style="font-size: 12px; color: #94a3b8; text-align: center;">
+        Have questions? Reply to this email or chat with our team on WhatsApp.
+      </p>
+    </div>
+  </div>
+</body>
+</html>
+  `;
+}
+
+/**
+ * Generates branded HTML email for full order cancellation
+ */
+export function generateOrderCancelledHtml(
+  order: DbOrder,
+  reason: string,
+  refundAmount: number,
+  settings: { businessName?: string; businessPhone?: string; businessAddress?: string }
+): string {
+  const brand = settings.businessName || 'Sudha Swagruha Foods';
+  const origin = typeof window !== 'undefined' ? window.location.origin : 'https://sudhaswagruhafoods.com';
+  const trackingUrl = `${origin}/track-order?order=${encodeURIComponent(order.order_number)}`;
+
+  return `
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Order Cancellation - ${brand}</title></head>
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #f8fafc; padding: 24px 0; color: #1e293b;">
+  <div style="max-width: 600px; margin: 0 auto; background: #ffffff; border-radius: 16px; overflow: hidden; border: 1px solid #e2e8f0;">
+    <div style="background: linear-gradient(135deg, #991b1b 0%, #dc2626 100%); padding: 28px; text-align: center; color: #fff;">
+      <h2 style="margin: 0;">🌿 ${brand}</h2>
+      <p style="margin: 6px 0 0 0; opacity: 0.95; font-size: 14px;">Order #${order.order_number} Cancelled</p>
+    </div>
+    <div style="padding: 24px;">
+      <p style="font-size: 15px;">Namaskaram <strong>${order.customer_name}</strong>,</p>
+      <p style="font-size: 14px; line-height: 1.6; color: #475569;">
+        Your order <strong>#${order.order_number}</strong> has been cancelled.
+      </p>
+
+      <div style="background: #fef2f2; border: 1px solid #fecaca; border-radius: 12px; padding: 16px; margin: 16px 0;">
+        <table style="width: 100%; font-size: 13px;">
+          <tr>
+            <td style="color: #991b1b;"><strong>Cancellation Reason:</strong></td>
+            <td style="text-align: right; font-weight: bold; color: #7f1d1d;">${reason}</td>
+          </tr>
+          <tr>
+            <td style="color: #991b1b; padding-top: 6px;"><strong>Original Order Total:</strong></td>
+            <td style="text-align: right; color: #7f1d1d; padding-top: 6px;">₹${order.total}</td>
+          </tr>
+          <tr>
+            <td style="color: #991b1b; padding-top: 6px;"><strong>Refund Amount:</strong></td>
+            <td style="text-align: right; font-weight: bold; color: #047857; padding-top: 6px; font-size: 15px;">₹${refundAmount}</td>
+          </tr>
+          <tr>
+            <td style="color: #991b1b; padding-top: 6px;"><strong>Refund Status:</strong></td>
+            <td style="text-align: right; font-weight: bold; color: #0284c7; padding-top: 6px; text-transform: uppercase;">
+              ${refundAmount > 0 ? 'Processing / Initiated' : 'Not Applicable (COD/Unpaid)'}
+            </td>
+          </tr>
+        </table>
+      </div>
+
+      <div style="text-align: center; margin: 24px 0;">
+        <a href="${trackingUrl}" style="background: #047857; color: #fff; padding: 12px 28px; text-decoration: none; border-radius: 10px; font-weight: bold; font-size: 14px; display: inline-block;">
+          View Cancellation Details
+        </a>
+      </div>
+    </div>
+  </div>
+</body>
+</html>
+  `;
+}
+
+/**
+ * Generates branded HTML email for refund status updates
+ */
+export function generateRefundUpdateHtml(
+  order: DbOrder,
+  refund: { amount: number; reason: string; status: string; id: string; provider_refund_id?: string | null },
+  settings: { businessName?: string }
+): string {
+  const brand = settings.businessName || 'Sudha Swagruha Foods';
+  const origin = typeof window !== 'undefined' ? window.location.origin : 'https://sudhaswagruhafoods.com';
+  const trackingUrl = `${origin}/track-order?order=${encodeURIComponent(order.order_number)}`;
+
+  return `
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Refund Update - ${brand}</title></head>
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #f8fafc; padding: 24px 0; color: #1e293b;">
+  <div style="max-width: 600px; margin: 0 auto; background: #ffffff; border-radius: 16px; overflow: hidden; border: 1px solid #e2e8f0;">
+    <div style="background: #047857; padding: 28px; text-align: center; color: #fff;">
+      <h2 style="margin: 0;">🌿 ${brand}</h2>
+      <p style="margin: 6px 0 0 0; opacity: 0.95; font-size: 14px;">Refund Update for Order #${order.order_number}</p>
+    </div>
+    <div style="padding: 24px;">
+      <p style="font-size: 15px;">Namaskaram <strong>${order.customer_name}</strong>,</p>
+      <p style="font-size: 14px; color: #475569;">
+        A refund update has been processed for your order <strong>#${order.order_number}</strong>.
+      </p>
+
+      <div style="background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 12px; padding: 16px; margin: 16px 0;">
+        <table style="width: 100%; font-size: 13px;">
+          <tr>
+            <td style="color: #166534;"><strong>Refund Reference ID:</strong></td>
+            <td style="text-align: right; font-family: monospace; font-weight: bold; color: #14532d;">${refund.provider_refund_id || refund.id}</td>
+          </tr>
+          <tr>
+            <td style="color: #166534; padding-top: 6px;"><strong>Refund Amount:</strong></td>
+            <td style="text-align: right; font-weight: bold; color: #047857; padding-top: 6px; font-size: 15px;">₹${refund.amount}</td>
+          </tr>
+          <tr>
+            <td style="color: #166534; padding-top: 6px;"><strong>Status:</strong></td>
+            <td style="text-align: right; font-weight: bold; color: ${refund.status === 'success' ? '#047857' : '#0284c7'}; padding-top: 6px; text-transform: uppercase;">
+              ${refund.status}
+            </td>
+          </tr>
+          <tr>
+            <td style="color: #166534; padding-top: 6px;"><strong>Reason:</strong></td>
+            <td style="text-align: right; color: #14532d; padding-top: 6px;">${refund.reason}</td>
+          </tr>
+        </table>
+      </div>
+
+      <div style="text-align: center; margin: 24px 0;">
+        <a href="${trackingUrl}" style="background: #047857; color: #fff; padding: 12px 28px; text-decoration: none; border-radius: 10px; font-weight: bold; font-size: 14px; display: inline-block;">
+          Track Live Status
+        </a>
+      </div>
+    </div>
+  </div>
+</body>
+</html>
+  `;
+}
+
+/**
  * Enterprise EmailService implementation
  */
 export const EmailService = {
@@ -333,6 +533,99 @@ export const EmailService = {
       smtp: settings.smtp,
       fromName: settings.businessName,
       fromEmail: settings.smtp.senderEmail || 'info@sudhaswagruhafoods.com',
+    });
+  },
+
+  /**
+   * Send Order Item Removed & Partial Refund Email (Requirement 17)
+   */
+  async sendOrderItemRemoved(
+    order: DbOrder,
+    removedItem: { product_name_en: string; quantity: number; weight: string; total_price: number },
+    refundAmount: number,
+    reason: string,
+    settings: StoreSettings
+  ): Promise<EmailSendResult> {
+    const smtp = settings.smtp;
+    if (!smtp?.enabled) return { success: true, message: 'Email intimation is disabled' };
+
+    const recipient = order.customer_email?.trim();
+    if (!recipient || !isValidEmail(recipient)) return { success: true, message: 'No recipient email' };
+
+    const subject = `Update to Your Order #${order.order_number} - ${settings.businessName}`;
+    const html = generateItemRemovedHtml(order, removedItem, refundAmount, reason, settings);
+    const text = `Update for order #${order.order_number}: ${removedItem.product_name_en} removed (${reason}). Refund of Rs. ${refundAmount} initiated.`;
+
+    return this.dispatchEmail({
+      to: recipient,
+      subject,
+      html,
+      text,
+      smtp,
+      fromName: smtp.senderName || settings.businessName,
+      fromEmail: smtp.senderEmail || 'info@sudhaswagruhafoods.com',
+    });
+  },
+
+  /**
+   * Send Full Order Cancellation Email (Requirement 18)
+   */
+  async sendOrderCancellation(
+    order: DbOrder,
+    reason: string,
+    refundAmount: number,
+    settings: StoreSettings
+  ): Promise<EmailSendResult> {
+    const smtp = settings.smtp;
+    if (!smtp?.enabled) return { success: true, message: 'Email intimation is disabled' };
+
+    const recipient = order.customer_email?.trim();
+    if (!recipient || !isValidEmail(recipient)) return { success: true, message: 'No recipient email' };
+
+    const subject = `Your Order #${order.order_number} Has Been Cancelled - ${settings.businessName}`;
+    const html = generateOrderCancelledHtml(order, reason, refundAmount, settings);
+    const text = `Order #${order.order_number} has been cancelled. Reason: ${reason}. Refund: Rs. ${refundAmount}.`;
+
+    return this.dispatchEmail({
+      to: recipient,
+      subject,
+      html,
+      text,
+      smtp,
+      fromName: smtp.senderName || settings.businessName,
+      fromEmail: smtp.senderEmail || 'info@sudhaswagruhafoods.com',
+    });
+  },
+
+  /**
+   * Send Refund Update Email (Requirement 19)
+   */
+  async sendRefundUpdate(
+    order: DbOrder,
+    refund: { amount: number; reason: string; status: string; id: string; provider_refund_id?: string | null },
+    settings: StoreSettings
+  ): Promise<EmailSendResult> {
+    const smtp = settings.smtp;
+    if (!smtp?.enabled) return { success: true, message: 'Email intimation is disabled' };
+
+    const recipient = order.customer_email?.trim();
+    if (!recipient || !isValidEmail(recipient)) return { success: true, message: 'No recipient email' };
+
+    const subject =
+      refund.status === 'success'
+        ? `Refund Completed for Order #${order.order_number} - ${settings.businessName}`
+        : `Refund Update for Order #${order.order_number} - ${settings.businessName}`;
+    const html = generateRefundUpdateHtml(order, refund, settings);
+    const text = `Refund for order #${order.order_number}: Rs. ${refund.amount} (Status: ${refund.status}). Ref: ${refund.provider_refund_id || refund.id}`;
+
+    return this.dispatchEmail({
+      to: recipient,
+      subject,
+      html,
+      text,
+      smtp,
+      fromName: smtp.senderName || settings.businessName,
+      fromEmail: smtp.senderEmail || 'info@sudhaswagruhafoods.com',
     });
   },
 

@@ -6,6 +6,42 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { supabase, isSupabaseConfigured } from '@/services/supabase';
 
+export interface NotificationEventToggles {
+  orderConfirmed: boolean;
+  orderDispatched: boolean;
+  trackingUpdated: boolean;
+  productRemoved: boolean;
+  partialRefundInitiated: boolean;
+  fullOrderCancelled: boolean;
+  fullRefundInitiated: boolean;
+  refundCompleted: boolean;
+  refundFailed: boolean;
+}
+
+export const defaultNotificationEvents: NotificationEventToggles = {
+  orderConfirmed: true,
+  orderDispatched: true,
+  trackingUpdated: true,
+  productRemoved: true,
+  partialRefundInitiated: true,
+  fullOrderCancelled: true,
+  fullRefundInitiated: true,
+  refundCompleted: true,
+  refundFailed: false,
+};
+
+export interface SmsSettings {
+  enabled: boolean;
+  provider: 'fast2sms' | 'twilio' | 'msg91' | 'webhook';
+  apiUrl?: string;
+  apiKey: string;
+  apiSecret?: string;
+  senderId: string;
+  accountSid?: string;
+  testMobileNumber?: string;
+  events: NotificationEventToggles;
+}
+
 export interface SmtpSettings {
   enabled: boolean;
   provider: 'smtp' | 'resend' | 'gmail' | 'webhook';
@@ -20,6 +56,7 @@ export interface SmtpSettings {
   notifyAdminOnNewOrder: boolean;
   resendApiKey?: string;
   webhookUrl?: string;
+  events?: NotificationEventToggles;
 }
 
 export interface StoreSettings {
@@ -45,16 +82,32 @@ export interface StoreSettings {
 
   // SMTP & Email Notification Settings
   smtp: SmtpSettings;
+
+  // SMS Notification Settings (Requirements 20-25)
+  sms: SmsSettings;
 }
 
 interface SettingsStore {
   settings: StoreSettings;
   updateSettings: (updates: Partial<StoreSettings>) => void;
   updateSmtpSettings: (updates: Partial<SmtpSettings>) => void;
+  updateSmsSettings: (updates: Partial<SmsSettings>) => void;
   resetSettings: () => void;
   fetchSettings: () => Promise<void>;
   subscribeToSettings: () => () => void;
 }
+
+export const defaultSmsSettings: SmsSettings = {
+  enabled: false,
+  provider: 'fast2sms',
+  apiUrl: '',
+  apiKey: '',
+  apiSecret: '',
+  senderId: 'SWAGRU',
+  accountSid: '',
+  testMobileNumber: '8374634989',
+  events: { ...defaultNotificationEvents },
+};
 
 export const defaultSmtpSettings: SmtpSettings = {
   enabled: true,
@@ -70,6 +123,7 @@ export const defaultSmtpSettings: SmtpSettings = {
   notifyAdminOnNewOrder: true,
   resendApiKey: '',
   webhookUrl: '',
+  events: { ...defaultNotificationEvents },
 };
 
 export const defaultSettings: StoreSettings = {
@@ -88,6 +142,7 @@ export const defaultSettings: StoreSettings = {
   razorpayKeySecret: '',
   isTestMode: true,
   smtp: defaultSmtpSettings,
+  sms: defaultSmsSettings,
 };
 
 const syncDocTitle = (settings: StoreSettings) => {
@@ -127,6 +182,16 @@ export const useSettingsStore = create<SettingsStore>()(
                   ...(state.settings.smtp || {}),
                   ...(remoteVal.smtp || {}),
                 },
+                sms: {
+                  ...defaultSmsSettings,
+                  ...(state.settings.sms || {}),
+                  ...(remoteVal.sms || {}),
+                  events: {
+                    ...defaultNotificationEvents,
+                    ...(state.settings.sms?.events || {}),
+                    ...(remoteVal.sms?.events || {}),
+                  },
+                },
               };
               syncDocTitle(merged);
               return { settings: merged };
@@ -163,6 +228,16 @@ export const useSettingsStore = create<SettingsStore>()(
                         ...defaultSmtpSettings,
                         ...(state.settings.smtp || {}),
                         ...(remoteVal.smtp || {}),
+                      },
+                      sms: {
+                        ...defaultSmsSettings,
+                        ...(state.settings.sms || {}),
+                        ...(remoteVal.sms || {}),
+                        events: {
+                          ...defaultNotificationEvents,
+                          ...(state.settings.sms?.events || {}),
+                          ...(remoteVal.sms?.events || {}),
+                        },
                       },
                     };
                     syncDocTitle(merged);
@@ -221,6 +296,35 @@ export const useSettingsStore = create<SettingsStore>()(
             .then(({ error }) => {
               if (error) console.warn('Supabase SMTP settings update notice:', error.message);
               else console.log('Synced SMTP settings to Supabase cloud DB');
+            });
+        }
+      },
+
+      // ─── Update SMS Settings Specifically (Requirements 20-25) ─────
+      updateSmsSettings: (smsUpdates) => {
+        const current = get().settings;
+        const nextSms: SmsSettings = {
+          ...(current.sms || defaultSmsSettings),
+          ...smsUpdates,
+          events: {
+            ...(current.sms?.events || defaultNotificationEvents),
+            ...(smsUpdates.events || {}),
+          },
+        };
+        const nextSettings: StoreSettings = { ...current, sms: nextSms };
+        set({ settings: nextSettings });
+
+        if (isSupabaseConfigured()) {
+          supabase
+            .from('store_settings')
+            .upsert({
+              key: 'store_contact',
+              value: nextSettings,
+              updated_at: new Date().toISOString(),
+            })
+            .then(({ error }) => {
+              if (error) console.warn('Supabase SMS settings update notice:', error.message);
+              else console.log('Synced SMS settings to Supabase cloud DB');
             });
         }
       },

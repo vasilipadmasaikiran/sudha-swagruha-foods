@@ -52,6 +52,7 @@ import AdminSettingsTab from '@/components/admin/AdminSettingsTab';
 import AdminPaymentsTab from '@/components/admin/AdminPaymentsTab';
 import AdminDatabaseTab from '@/components/admin/AdminDatabaseTab';
 import AdminEmailTab from '@/components/admin/AdminEmailTab';
+import AdminSmsTab from '@/components/admin/AdminSmsTab';
 import AdminAboutUsTab from '@/components/admin/AdminAboutUsTab';
 import AppImage from '@/components/common/AppImage';
 import { useAdminAuthStore, ROLE_DEFINITIONS, type AdminCategory, type AdminRole } from '@/hooks/useAdminAuthStore';
@@ -71,6 +72,7 @@ export type SettingsSubTab =
   | 'business'
   | 'about-us'
   | 'email'
+  | 'sms'
   | 'contact'
   | 'payments'
   | 'database'
@@ -972,6 +974,17 @@ export default function AdminConsolePage() {
                   </button>
 
                   <button
+                    onClick={() => setSettingsSubTab('sms')}
+                    className={`px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                      settingsSubTab === 'sms'
+                        ? 'bg-purple-600 text-white shadow-md'
+                        : 'text-slate-400 hover:text-white hover:bg-slate-800'
+                    }`}
+                  >
+                    💬 SMS Gateway Config
+                  </button>
+
+                  <button
                     onClick={() => setSettingsSubTab('contact')}
                     className={`px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
                       settingsSubTab === 'contact'
@@ -1031,6 +1044,7 @@ export default function AdminConsolePage() {
                 {settingsSubTab === 'business' && <AdminBusinessSettingsTab />}
                 {settingsSubTab === 'about-us' && <AdminAboutUsTab />}
                 {settingsSubTab === 'email' && <AdminEmailTab />}
+                {settingsSubTab === 'sms' && <AdminSmsTab />}
                 {settingsSubTab === 'contact' && <AdminSettingsTab />}
                 {settingsSubTab === 'payments' && <AdminPaymentsTab />}
                 {settingsSubTab === 'database' && <AdminDatabaseTab />}

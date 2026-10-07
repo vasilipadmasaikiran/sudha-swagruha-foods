@@ -21,9 +21,15 @@ import {
   Copy,
   Check,
   AlertCircle,
+  AlertTriangle,
   Radio,
   MapPin,
   Calendar,
+  RotateCcw,
+  Ban,
+  MinusCircle,
+  DollarSign,
+  ShieldCheck,
 } from 'lucide-react';
 import { useLanguageStore } from '@/hooks/useStore';
 import { useOrderStore } from '@/hooks/useOrderStore';
@@ -370,17 +376,52 @@ export default function TrackOrderPage() {
                           : activeOrder.order_status === 'shipped'
                           ? 'bg-purple-600 text-white shadow-purple-600/20 shadow-md'
                           : activeOrder.order_status === 'cancelled'
-                          ? 'bg-red-500 text-white'
+                          ? 'bg-red-500 text-white shadow-red-500/20 shadow-md'
                           : 'bg-amber-500 text-white shadow-amber-500/20 shadow-md'
                       }`}
                     >
                       Status: {activeOrder.order_status.toUpperCase()}
                     </span>
                     <p className="text-xs font-bold text-gray-700 mt-1.5">
-                      Total: ₹{activeOrder.total} ({activeOrder.payment_status === 'paid' ? 'Paid' : 'Pending / COD'})
+                      Total: ₹{activeOrder.total} ({activeOrder.payment_status === 'paid' ? 'Paid' : activeOrder.payment_status === 'partially_refunded' ? 'Partially Refunded' : activeOrder.payment_status === 'refunded' ? 'Refunded' : 'Pending / COD'})
                     </p>
                   </div>
                 </div>
+
+                {/* ─── ORDER CANCELLATION BANNER ─── */}
+                {activeOrder.order_status === 'cancelled' && (
+                  <motion.div
+                    initial={{ opacity: 0, scale: 0.98 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    className="my-6 p-5 bg-red-50 border-2 border-red-300 rounded-2xl space-y-2 text-red-950"
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <div className="w-8 h-8 rounded-xl bg-red-600 text-white flex items-center justify-center">
+                          <Ban className="w-4 h-4" />
+                        </div>
+                        <h4 className="font-extrabold text-sm uppercase tracking-wider text-red-900">
+                          This Order Has Been Cancelled
+                        </h4>
+                      </div>
+                      {activeOrder.refunded_amount && activeOrder.refunded_amount > 0 ? (
+                        <span className="px-3 py-1 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300 text-xs font-bold font-mono">
+                          Refund Processed: ₹{activeOrder.refunded_amount}
+                        </span>
+                      ) : null}
+                    </div>
+                    {activeOrder.cancellation_reason && (
+                      <p className="text-xs text-red-800 bg-white/70 p-2.5 rounded-xl border border-red-200">
+                        <strong>Reason:</strong> {activeOrder.cancellation_reason}
+                      </p>
+                    )}
+                    {activeOrder.cancelled_at && (
+                      <p className="text-[11px] text-red-600">
+                        Cancelled on: {new Date(activeOrder.cancelled_at).toLocaleString()}
+                      </p>
+                    )}
+                  </motion.div>
+                )}
 
                 {/* ─── REQUIREMENT 11: DISPATCH & TRACKING ID HIGHLIGHT BOX ─── */}
                 {(activeOrder.order_status === 'shipped' || activeOrder.tracking_id) && (
@@ -472,7 +513,7 @@ export default function TrackOrderPage() {
                 </div>
               </div>
 
-              {/* ─── REQUIREMENT 12 & 17: REALTIME TIMELINE & STATUS HISTORY ─── */}
+              {/* ─── REALTIME TIMELINE & STATUS HISTORY ─── */}
               <div className="bg-white rounded-3xl shadow-card p-6 md:p-8 border border-gray-100">
                 <div className="flex items-center justify-between mb-6 pb-2 border-b border-gray-100">
                   <div>
@@ -505,9 +546,9 @@ export default function TrackOrderPage() {
                             className={`w-11 h-11 rounded-2xl flex items-center justify-center text-lg flex-shrink-0 transition-all duration-300 ${
                               isCompleted
                                 ? isCurrent
-                                  ? 'bg-brand-green text-white shadow-green-glow scale-110 ring-4 ring-brand-green/20'
-                                  : 'bg-emerald-100 text-emerald-800'
-                                : 'bg-gray-100 text-gray-400 border border-gray-200'
+                                ? 'bg-brand-green text-white shadow-green-glow scale-110 ring-4 ring-brand-green/20'
+                                : 'bg-emerald-100 text-emerald-800'
+                              : 'bg-gray-100 text-gray-400 border border-gray-200'
                             }`}
                           >
                             {isCurrent ? (
@@ -588,31 +629,96 @@ export default function TrackOrderPage() {
                 </div>
               </div>
 
-              {/* Items Card */}
+              {/* Items Card with Removed Item Visual Indicators */}
               <div className="bg-white rounded-3xl shadow-card p-6 md:p-8 border border-gray-100">
                 <h3 className="font-bold text-gray-900 mb-4 text-base">Items in this Consignment</h3>
                 <div className="space-y-3">
-                  {activeOrder.items.map((item, i) => (
-                    <div
-                      key={i}
-                      className="flex justify-between items-center py-3 border-b border-gray-100 last:border-0"
-                    >
-                      <div>
-                        <p className="font-bold text-gray-800 text-sm">
-                          {language === 'te' ? item.product_name_te : item.product_name_en}
-                        </p>
-                        <p className="text-xs text-gray-500 font-medium mt-0.5">
-                          Net Weight: {item.weight} • Qty: {item.quantity} (₹{item.unit_price} each)
+                  {activeOrder.items.map((item, i) => {
+                    const isRemoved = item.status === 'removed';
+                    return (
+                      <div
+                        key={i}
+                        className={`flex justify-between items-center py-3 border-b border-gray-100 last:border-0 ${
+                          isRemoved ? 'bg-red-50/60 p-3 rounded-2xl border border-red-200/60' : ''
+                        }`}
+                      >
+                        <div className="flex-1 pr-3">
+                          <div className="flex items-center gap-2">
+                            <p className={`font-bold text-sm ${isRemoved ? 'line-through text-gray-500' : 'text-gray-800'}`}>
+                              {language === 'te' ? item.product_name_te : item.product_name_en}
+                            </p>
+                            {isRemoved && (
+                              <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-red-100 text-red-800 border border-red-300">
+                                REMOVED
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-xs text-gray-500 font-medium mt-0.5">
+                            Net Weight: {item.weight} • Qty: {item.quantity} (₹{item.unit_price} each)
+                          </p>
+                          {isRemoved && (
+                            <p className="text-xs text-red-700 mt-1">
+                              <strong>Reason:</strong> {item.removal_reason || 'Product unavailable'} {item.refund_amount ? `• (Refund: ₹${item.refund_amount})` : ''}
+                            </p>
+                          )}
+                        </div>
+                        <p className={`font-bold text-base ${isRemoved ? 'line-through text-gray-400' : 'text-brand-green'}`}>
+                          ₹{item.total_price}
                         </p>
                       </div>
-                      <p className="font-bold text-brand-green text-base">₹{item.total_price}</p>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
 
-                <div className="mt-4 pt-4 border-t border-gray-100 flex justify-between items-center text-sm">
-                  <span className="text-gray-500">Order Grand Total</span>
-                  <span className="text-xl font-extrabold text-brand-green">₹{activeOrder.total}</span>
+                {/* Financial Reconciliation Summary Breakdown */}
+                <div className="mt-6 pt-4 border-t border-gray-100 space-y-2 text-xs">
+                  <div className="flex justify-between items-center text-gray-600">
+                    <span>Original Order Total</span>
+                    <span className="font-semibold text-gray-900 font-mono text-sm">₹{activeOrder.total}</span>
+                  </div>
+
+                  {activeOrder.refunded_amount && activeOrder.refunded_amount > 0 ? (
+                    <>
+                      <div className="flex justify-between items-center text-amber-800 bg-amber-50 p-2.5 rounded-xl border border-amber-200">
+                        <span className="flex items-center gap-1.5 font-bold">
+                          <RotateCcw className="w-3.5 h-3.5 text-amber-600" />
+                          <span>Refund Initiated to Customer Account</span>
+                        </span>
+                        <span className="font-bold font-mono text-sm text-amber-900">-₹{activeOrder.refunded_amount}</span>
+                      </div>
+                      <div className="flex justify-between items-center text-gray-900 font-bold text-sm pt-1">
+                        <span>Remaining Net Order Value</span>
+                        <span className="font-mono text-brand-green text-lg">
+                          ₹{Math.max(0, activeOrder.total - (activeOrder.refunded_amount || 0))}
+                        </span>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="flex justify-between items-center text-sm pt-1">
+                      <span className="text-gray-500 font-medium">Order Grand Total</span>
+                      <span className="text-xl font-extrabold text-brand-green">₹{activeOrder.total}</span>
+                    </div>
+                  )}
+
+                  {/* Payment & Refund Status Indicator */}
+                  <div className="pt-2 flex justify-between items-center">
+                    <span className="text-gray-400">Payment Status</span>
+                    <span className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold uppercase ${
+                      activeOrder.payment_status === 'paid'
+                        ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
+                        : activeOrder.payment_status === 'partially_refunded'
+                        ? 'bg-amber-100 text-amber-800 border border-amber-200'
+                        : activeOrder.payment_status === 'refunded'
+                        ? 'bg-purple-100 text-purple-800 border border-purple-200'
+                        : 'bg-gray-100 text-gray-700'
+                    }`}>
+                      {activeOrder.payment_status === 'partially_refunded'
+                        ? 'Partially Refunded'
+                        : activeOrder.payment_status === 'refunded'
+                        ? 'Fully Refunded'
+                        : activeOrder.payment_status.toUpperCase()}
+                    </span>
+                  </div>
                 </div>
               </div>
 

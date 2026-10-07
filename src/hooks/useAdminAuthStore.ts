@@ -41,7 +41,12 @@ export interface RolePermissions {
   canManageRoles: boolean;
   canConfigureSettings: boolean;
   canConfigureEmail: boolean;
+  canConfigureSms: boolean;
   canProcessOrders: boolean;
+  canCancelOrders: boolean;
+  canRemoveOrderItems: boolean;
+  canInitiateRefunds: boolean;
+  canViewRefunds: boolean;
   canManageInventory: boolean;
   canManageProducts: boolean;
   canViewReports: boolean;
@@ -57,7 +62,12 @@ export const ROLE_DEFINITIONS: Record<AdminRole, RolePermissions> = {
     canManageRoles: true,
     canConfigureSettings: true,
     canConfigureEmail: true,
+    canConfigureSms: true,
     canProcessOrders: true,
+    canCancelOrders: true,
+    canRemoveOrderItems: true,
+    canInitiateRefunds: true,
+    canViewRefunds: true,
     canManageInventory: true,
     canManageProducts: true,
     canViewReports: true,
@@ -71,7 +81,12 @@ export const ROLE_DEFINITIONS: Record<AdminRole, RolePermissions> = {
     canManageRoles: false,
     canConfigureSettings: false,
     canConfigureEmail: false,
+    canConfigureSms: false,
     canProcessOrders: false,
+    canCancelOrders: false,
+    canRemoveOrderItems: false,
+    canInitiateRefunds: false,
+    canViewRefunds: false,
     canManageInventory: true,
     canManageProducts: false,
     canViewReports: false,
@@ -79,13 +94,18 @@ export const ROLE_DEFINITIONS: Record<AdminRole, RolePermissions> = {
   },
   ORDER_PROCESSOR: {
     name: 'Order Processor',
-    description: 'Restricted solely to customer order fulfillment, status updates, and courier tracking details.',
+    description: 'Restricted to customer order fulfillment, item removals, cancellations, refunds, and courier tracking.',
     allowedCategories: ['orders'],
     canManageUsers: false,
     canManageRoles: false,
     canConfigureSettings: false,
     canConfigureEmail: false,
+    canConfigureSms: false,
     canProcessOrders: true,
+    canCancelOrders: true,
+    canRemoveOrderItems: true,
+    canInitiateRefunds: true,
+    canViewRefunds: true,
     canManageInventory: false,
     canManageProducts: false,
     canViewReports: false,
