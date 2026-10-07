@@ -30,6 +30,7 @@ export type AdminCategory =
   | 'inventory'
   | 'customers'
   | 'users'
+  | 'promotions'
   | 'website'
   | 'settings';
 
@@ -51,13 +52,17 @@ export interface RolePermissions {
   canManageProducts: boolean;
   canViewReports: boolean;
   canManageAboutUs: boolean;
+  canViewPromotions: boolean;
+  canCreatePromotions: boolean;
+  canSendPromotions: boolean;
+  canManagePromotionTemplates: boolean;
 }
 
 export const ROLE_DEFINITIONS: Record<AdminRole, RolePermissions> = {
   ROOT_ADMIN: {
     name: 'Root / Super Admin',
     description: 'Full unrestricted access to all administration modules, user roles, orders, settings, website content, and business configurations.',
-    allowedCategories: ['dashboard', 'orders', 'products', 'inventory', 'customers', 'users', 'website', 'settings'],
+    allowedCategories: ['dashboard', 'orders', 'products', 'inventory', 'customers', 'users', 'promotions', 'website', 'settings'],
     canManageUsers: true,
     canManageRoles: true,
     canConfigureSettings: true,
@@ -72,6 +77,10 @@ export const ROLE_DEFINITIONS: Record<AdminRole, RolePermissions> = {
     canManageProducts: true,
     canViewReports: true,
     canManageAboutUs: true,
+    canViewPromotions: true,
+    canCreatePromotions: true,
+    canSendPromotions: true,
+    canManagePromotionTemplates: true,
   },
   STORE_KEEPER: {
     name: 'Store Keeper',
@@ -91,6 +100,10 @@ export const ROLE_DEFINITIONS: Record<AdminRole, RolePermissions> = {
     canManageProducts: false,
     canViewReports: false,
     canManageAboutUs: false,
+    canViewPromotions: false,
+    canCreatePromotions: false,
+    canSendPromotions: false,
+    canManagePromotionTemplates: false,
   },
   ORDER_PROCESSOR: {
     name: 'Order Processor',
@@ -110,6 +123,10 @@ export const ROLE_DEFINITIONS: Record<AdminRole, RolePermissions> = {
     canManageProducts: false,
     canViewReports: false,
     canManageAboutUs: false,
+    canViewPromotions: false,
+    canCreatePromotions: false,
+    canSendPromotions: false,
+    canManagePromotionTemplates: false,
   },
 };
 

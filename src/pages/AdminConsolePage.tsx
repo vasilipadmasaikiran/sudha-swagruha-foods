@@ -37,6 +37,7 @@ import {
   User,
   Users,
   BookOpen,
+  Megaphone,
 } from 'lucide-react';
 import { useProductStore, type DiscountAnnouncement, type CouponItem } from '@/hooks/useProductStore';
 import { useAuthStore } from '@/hooks/useStore';
@@ -47,6 +48,7 @@ import AdminLoginForm from '@/components/admin/AdminLoginForm';
 import AdminOrdersTab from '@/components/admin/AdminOrdersTab';
 import AdminInventoryTab from '@/components/admin/AdminInventoryTab';
 import AdminUsersTab from '@/components/admin/AdminUsersTab';
+import AdminPromotionsTab from '@/components/admin/AdminPromotionsTab';
 import AdminBusinessSettingsTab from '@/components/admin/AdminBusinessSettingsTab';
 import AdminSettingsTab from '@/components/admin/AdminSettingsTab';
 import AdminPaymentsTab from '@/components/admin/AdminPaymentsTab';
@@ -65,6 +67,7 @@ export type ActiveCategoryTab =
   | 'products'
   | 'inventory'
   | 'customers'
+  | 'promotions'
   | 'users'
   | 'settings';
 
@@ -304,6 +307,7 @@ export default function AdminConsolePage() {
       badge: stats.lowStock + stats.outOfStock ? `${stats.lowStock + stats.outOfStock} Alerts` : undefined,
     },
     { id: 'customers', label: 'Customers', icon: User, badge: customersList.length },
+    { id: 'promotions', label: 'Promotions & Offers', icon: Megaphone },
     { id: 'users', label: 'Users & Roles', icon: Users, badge: users.length, roleRequired: 'ROOT_ADMIN' },
     { id: 'settings', label: 'Settings', icon: Store, roleRequired: 'ROOT_ADMIN' },
   ];
@@ -929,12 +933,17 @@ export default function AdminConsolePage() {
             )}
 
             {/* ============================================================ */}
-            {/* CATEGORY 6: USERS & RBAC MANAGEMENT                          */}
+            {/* CATEGORY 6: PROMOTIONS & CUSTOMER COMMUNICATION              */}
+            {/* ============================================================ */}
+            {activeTab === 'promotions' && <AdminPromotionsTab />}
+
+            {/* ============================================================ */}
+            {/* CATEGORY 7: USERS & RBAC MANAGEMENT                          */}
             {/* ============================================================ */}
             {activeTab === 'users' && <AdminUsersTab />}
 
             {/* ============================================================ */}
-            {/* CATEGORY 7: SETTINGS (ROOT ADMIN ONLY)                       */}
+            {/* CATEGORY 8: SETTINGS (ROOT ADMIN ONLY)                       */}
             {/* ============================================================ */}
             {activeTab === 'settings' && (
               <div className="space-y-6">

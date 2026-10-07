@@ -815,8 +815,155 @@ export const EmailService = {
       message: 'Email configuration is incomplete. Please enter your SMTP Host, Username, and Password or Resend API key.',
     };
   },
+
+  /**
+   * Generates responsive promotional marketing HTML email
+   */
+  generatePromotionalEmailHtml(params: {
+    customerName: string;
+    campaignTitle: string;
+    campaignMessage: string;
+    bannerUrl?: string;
+    voucherCode?: string;
+    discountText?: string;
+    ctaText?: string;
+    ctaLink?: string;
+    validUntil?: string;
+    settings: {
+      businessName?: string;
+      businessPhone?: string;
+      businessWhatsApp?: string;
+      businessAddress?: string;
+    };
+  }): string {
+    const brand = params.settings.businessName || 'Sudha Swagruha Foods';
+    const phone = params.settings.businessWhatsApp || params.settings.businessPhone || '8374634989';
+    const address = params.settings.businessAddress || 'Benz Circle, Vijayawada, Andhra Pradesh';
+    const origin = typeof window !== 'undefined' ? window.location.origin : 'https://vasilipadmasaikiran.github.io/sudha-swagruha-foods';
+    const ctaUrl = params.ctaLink || origin;
+    const ctaText = params.ctaText || 'Shop Now & Save';
+
+    return `
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>${params.campaignTitle} - ${brand}</title>
+</head>
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f8fafc; margin: 0; padding: 24px 0; color: #1e293b;">
+  <div style="max-width: 620px; margin: 0 auto; background: #ffffff; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 16px rgba(0,0,0,0.06); border: 1px solid #e2e8f0;">
+    
+    <!-- Header Banner -->
+    <div style="background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); padding: 28px 24px; text-align: center; border-bottom: 3px solid #10b981;">
+      <h1 style="color: #ffffff; margin: 0 0 6px 0; font-size: 24px; font-weight: 800; letter-spacing: -0.5px;">${brand}</h1>
+      <p style="color: #94a3b8; margin: 0; font-size: 13px;">Authentic Traditional Sweets & Spicy Delicacies</p>
+    </div>
+
+    <!-- Optional Promotional Banner Image -->
+    ${params.bannerUrl ? `
+    <div style="width: 100%; max-height: 280px; overflow: hidden;">
+      <img src="${params.bannerUrl}" alt="${params.campaignTitle}" style="width: 100%; height: auto; display: block; object-fit: cover;" />
+    </div>
+    ` : ''}
+
+    <!-- Content Body -->
+    <div style="padding: 32px 28px;">
+      <p style="font-size: 15px; margin: 0 0 16px 0;">Namaskaram <strong style="color: #047857;">${params.customerName}</strong>! 🙏</p>
+      
+      <h2 style="font-size: 22px; font-weight: 800; color: #0f172a; margin: 0 0 16px 0; line-height: 1.3;">
+        ${params.campaignTitle}
+      </h2>
+
+      <div style="font-size: 15px; line-height: 1.6; color: #334155; margin-bottom: 24px; white-space: pre-line;">
+        ${params.campaignMessage}
+      </div>
+
+      <!-- Voucher Promo Card (if present) -->
+      ${params.voucherCode ? `
+      <div style="background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%); border: 2px dashed #16a34a; border-radius: 14px; padding: 20px; text-align: center; margin: 24px 0;">
+        <span style="font-size: 11px; font-weight: 800; color: #15803d; text-transform: uppercase; letter-spacing: 1px;">Special Promo Voucher</span>
+        <div style="font-family: monospace; font-size: 26px; font-weight: 800; color: #166534; margin: 8px 0; letter-spacing: 2px;">
+          ${params.voucherCode}
+        </div>
+        ${params.discountText ? `<p style="font-size: 14px; font-weight: 700; color: #15803d; margin: 0 0 4px 0;">Get ${params.discountText}</p>` : ''}
+        ${params.validUntil ? `<p style="font-size: 11px; color: #166534; margin: 0;">Valid until: ${params.validUntil}</p>` : ''}
+      </div>
+      ` : ''}
+
+      <!-- CTA Button -->
+      <div style="text-align: center; margin: 32px 0 20px 0;">
+        <a href="${ctaUrl}" style="display: inline-block; background-color: #047857; color: #ffffff; text-decoration: none; padding: 14px 32px; border-radius: 12px; font-weight: 700; font-size: 15px; box-shadow: 0 4px 12px rgba(4,120,87,0.3);">
+          ${ctaText} →
+        </a>
+      </div>
+    </div>
+
+    <!-- Footer -->
+    <div style="background-color: #f1f5f9; padding: 20px 24px; text-align: center; border-top: 1px solid #e2e8f0; font-size: 12px; color: #64748b; line-height: 1.5;">
+      <p style="margin: 0 0 6px 0;">${brand} • Traditional Homestyle Andhra Sweets, Pickles & Savories</p>
+      <p style="margin: 0 0 8px 0;">${address} • WhatsApp Support: +91 ${phone}</p>
+      <p style="margin: 12px 0 0 0; font-size: 11px; color: #94a3b8; border-top: 1px solid #e2e8f0; pt-2;">
+        You are receiving this communication as a registered patron of ${brand}.
+      </p>
+    </div>
+
+  </div>
+</body>
+</html>
+    `;
+  },
+
+  /**
+   * Dispatches a promotional marketing email to a customer
+   */
+  async sendPromotionalEmail(params: {
+    to: string;
+    customerName: string;
+    subject: string;
+    campaignTitle: string;
+    campaignMessage: string;
+    bannerUrl?: string;
+    voucherCode?: string;
+    discountText?: string;
+    ctaText?: string;
+    ctaLink?: string;
+    validUntil?: string;
+    settings: StoreSettings;
+  }): Promise<EmailSendResult> {
+    const html = this.generatePromotionalEmailHtml({
+      customerName: params.customerName,
+      campaignTitle: params.campaignTitle,
+      campaignMessage: params.campaignMessage,
+      bannerUrl: params.bannerUrl,
+      voucherCode: params.voucherCode,
+      discountText: params.discountText,
+      ctaText: params.ctaText,
+      ctaLink: params.ctaLink,
+      validUntil: params.validUntil,
+      settings: params.settings,
+    });
+
+    const plainText = `Namaskaram ${params.customerName}!\n\n${params.campaignTitle}\n\n${params.campaignMessage}\n\n${
+      params.voucherCode ? `Use Voucher Code: ${params.voucherCode}\n` : ''
+    }Shop Now: ${params.ctaLink || 'https://vasilipadmasaikiran.github.io/sudha-swagruha-foods'}`;
+
+    const fromName = params.settings.smtp?.senderName || params.settings.businessName || 'Sudha Swagruha Foods';
+    const fromEmail = params.settings.smtp?.senderEmail || 'info@sudhaswagruhafoods.com';
+
+    return this.dispatchEmail({
+      to: params.to,
+      subject: params.subject,
+      html,
+      text: plainText,
+      smtp: params.settings.smtp,
+      fromName,
+      fromEmail,
+    });
+  },
 };
 
 // Backwards compatibility wrappers
 export const sendOrderConfirmationEmail = EmailService.sendOrderConfirmation.bind(EmailService);
 export const sendTestEmail = EmailService.sendTestEmail.bind(EmailService);
+
+

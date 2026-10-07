@@ -250,6 +250,67 @@ export const SmsService = {
   },
 
   /**
+   * Dispatches promotional SMS to a registered customer
+   * Verifies global SMS enabled status and formats mobile number
+   */
+  async sendPromotionalSms(params: {
+    mobileNumber: string;
+    customerName: string;
+    message: string;
+    settings: StoreSettings;
+    campaignId?: string;
+    campaignName?: string;
+    customerKey?: string;
+  }): Promise<SmsSendResult> {
+    const sms = params.settings.sms;
+
+    // Check global toggle
+    if (!sms?.enabled) {
+      return {
+        success: false,
+        message: 'Promotional SMS sending is currently disabled globally by Root Admin.',
+        provider: sms?.provider || 'disabled',
+        technicalError: 'SMS_GLOBALLY_DISABLED',
+      };
+    }
+
+    const { isValid, normalized } = sanitizeMobileNumber(params.mobileNumber);
+    if (!isValid || !normalized) {
+      return {
+        success: false,
+        message: 'Invalid customer phone number format.',
+        provider: sms?.provider || 'unknown',
+        technicalError: 'INVALID_PHONE_NUMBER',
+      };
+    }
+
+    // Replace variables in SMS
+    const businessName = params.settings.businessName || 'Sudha Swagruha Foods';
+    const finalMsg = interpolateSmsTemplate(params.message, {
+      customerName: params.customerName,
+      businessName,
+    });
+
+    const result = await this.dispatchProviderSms(normalized, finalMsg, sms);
+
+    // Non-blocking notification log
+    await this.logNotification({
+      order_id: params.campaignId || 'promo-campaign',
+      order_number: params.campaignName || 'PROMO-CAMPAIGN',
+      channel: 'sms',
+      event: 'ORDER_CONFIRMED',
+      recipient: normalized,
+      status: result.success ? 'sent' : 'failed',
+      provider: result.provider,
+      provider_message_id: result.providerMessageId,
+      error: result.success ? null : result.technicalError || result.message,
+      sent_at: result.success ? new Date().toISOString() : null,
+    });
+
+    return result;
+  },
+
+  /**
    * Internal SMS provider execution pipeline
    */
   async dispatchProviderSms(
