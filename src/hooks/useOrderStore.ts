@@ -38,14 +38,32 @@ interface OrderStore {
     orderId: string,
     reason: string,
     cancelledBy?: string,
-    initiateRefund?: boolean
+    initiateRefund?: boolean,
+    customRefundAmount?: number
   ) => Promise<{ success: boolean; order?: DbOrder; refund?: OrderRefundRecord; error?: string }>;
   removeOrderItem: (
     orderId: string,
     productId: string,
     reason: string,
     removedBy?: string,
-    initiateRefund?: boolean
+    initiateRefund?: boolean,
+    options?: {
+      cancelledQuantity?: number;
+      customRefundAmount?: number;
+      customizationNotes?: string;
+    }
+  ) => Promise<{ success: boolean; order?: DbOrder; refund?: OrderRefundRecord; error?: string }>;
+  cancelOrderItem: (
+    orderId: string,
+    productId: string,
+    options: {
+      reason: string;
+      cancelledQuantity?: number;
+      customRefundAmount?: number;
+      customizationNotes?: string;
+      cancelledBy?: string;
+      initiateRefund?: boolean;
+    }
   ) => Promise<{ success: boolean; order?: DbOrder; refund?: OrderRefundRecord; error?: string }>;
   initiateOrderRefund: (
     orderId: string,
@@ -426,7 +444,7 @@ export const useOrderStore = create<OrderStore>()(
       },
 
       // ─── Cancel Order (Requirements 1, 2, 7, 8, 9, 10, 18) ────────
-      cancelOrder: async (orderId, reason, cancelledBy = 'Order Processor', initiateRefund = true) => {
+      cancelOrder: async (orderId, reason, cancelledBy = 'Order Processor', initiateRefund = true, customRefundAmount?: number) => {
         const order = get().orders.find((o) => o.id === orderId || o.order_number === orderId);
         if (!order) {
           return { success: false, error: 'Order not found' };
@@ -444,13 +462,17 @@ export const useOrderStore = create<OrderStore>()(
         let newRefundedAmount = order.refunded_amount || 0;
         let newPaymentStatus = order.payment_status;
 
-        // Process full refund if order is paid and requested
-        if (initiateRefund && metrics.isRefundable) {
+        const targetRefundAmount = customRefundAmount !== undefined && !isNaN(customRefundAmount) && customRefundAmount > 0
+          ? Math.min(roundToTwoDecimals(customRefundAmount), metrics.remainingRefundableAmount)
+          : metrics.remainingRefundableAmount;
+
+        // Process refund if order is paid and requested
+        if (initiateRefund && metrics.isRefundable && targetRefundAmount > 0) {
           const refundResult = await RefundService.processRefund({
             order,
-            amount: metrics.remainingRefundableAmount,
+            amount: targetRefundAmount,
             reason: `Order Cancellation: ${reason}`,
-            type: 'full',
+            type: targetRefundAmount >= metrics.remainingRefundableAmount ? 'full' : 'partial',
             requestedBy: cancelledBy,
             settings,
           });
@@ -458,7 +480,7 @@ export const useOrderStore = create<OrderStore>()(
           refundRecord = refundResult.refundRecord;
           if (refundResult.success) {
             newRefundedAmount = roundToTwoDecimals(newRefundedAmount + refundRecord.amount);
-            newPaymentStatus = 'refunded';
+            newPaymentStatus = newRefundedAmount >= order.total ? 'refunded' : 'partially_refunded';
           }
         }
 
@@ -541,15 +563,15 @@ export const useOrderStore = create<OrderStore>()(
         return { success: true, order: updatedOrder, refund: refundRecord };
       },
 
-      // ─── Remove Order Item (Requirements 3, 4, 5, 6, 8, 9, 17) ─────
-      removeOrderItem: async (orderId, productId, reason, removedBy = 'Order Processor', initiateRefund = true) => {
+      // ─── Remove / Cancel Order Item with Customization & Partial Qty ───
+      removeOrderItem: async (orderId, productId, reason, removedBy = 'Order Processor', initiateRefund = true, options) => {
         const order = get().orders.find((o) => o.id === orderId || o.order_number === orderId);
         if (!order) {
           return { success: false, error: 'Order not found' };
         }
 
         const itemIndex = order.items.findIndex(
-          (it) => (it.product_id === productId || it.sku === productId) && it.status !== 'removed'
+          (it) => (it.product_id === productId || it.sku === productId) && it.status !== 'removed' && it.status !== 'cancelled'
         );
         if (itemIndex === -1) {
           return { success: false, error: 'Item not found in order or already removed' };
@@ -560,9 +582,22 @@ export const useOrderStore = create<OrderStore>()(
         const settings = useSettingsStore.getState().settings;
         const metrics = calculateOrderRefundableMetrics(order);
 
+        // Check if partial quantity cancellation
+        const requestedCancelQty = options?.cancelledQuantity && options.cancelledQuantity > 0 && options.cancelledQuantity <= targetItem.quantity
+          ? options.cancelledQuantity
+          : targetItem.quantity;
+        const isPartialQty = requestedCancelQty < targetItem.quantity;
+
+        // Proportional item value
+        const unitPrice = Number(targetItem.unit_price || (targetItem.total_price / targetItem.quantity));
+        const cancelledLineValue = roundToTwoDecimals(unitPrice * requestedCancelQty);
+
         // Calculate item refundable amount
-        const itemPrice = Number(targetItem.total_price || 0);
-        const itemRefundAmount = Math.min(itemPrice, metrics.remainingRefundableAmount);
+        const customAmt = options?.customRefundAmount !== undefined ? Number(options.customRefundAmount) : undefined;
+        const maxRefundableForThis = customAmt !== undefined && !isNaN(customAmt)
+          ? customAmt
+          : cancelledLineValue;
+        const itemRefundAmount = Math.min(roundToTwoDecimals(maxRefundableForThis), metrics.remainingRefundableAmount);
 
         let refundRecord: OrderRefundRecord | undefined;
         let newRefundedAmount = order.refunded_amount || 0;
@@ -572,7 +607,7 @@ export const useOrderStore = create<OrderStore>()(
           const refundResult = await RefundService.processRefund({
             order,
             amount: itemRefundAmount,
-            reason: `Item Removed (${targetItem.product_name_en}): ${reason}`,
+            reason: `Item Cancelled (${targetItem.product_name_en} x${requestedCancelQty}): ${reason}${options?.customizationNotes ? ` [${options.customizationNotes}]` : ''}`,
             type: 'partial',
             itemId: targetItem.product_id,
             requestedBy: removedBy,
@@ -586,30 +621,63 @@ export const useOrderStore = create<OrderStore>()(
           }
         }
 
-        // Never physically delete! Soft mark as removed with audit metadata
-        const updatedItems: OrderItem[] = order.items.map((it, idx) => {
-          if (idx === itemIndex) {
-            return {
-              ...it,
-              status: 'removed',
-              removal_reason: reason,
-              removed_by: removedBy,
-              removed_at: now,
-              refundable_amount: itemPrice,
-              refund_amount: refundRecord?.amount || 0,
-              refund_id: refundRecord?.id,
-            };
-          }
-          return it;
-        });
+        // Update items array
+        let updatedItems: OrderItem[];
+        if (isPartialQty) {
+          const remainingQty = targetItem.quantity - requestedCancelQty;
+          const remainingTotalPrice = roundToTwoDecimals(unitPrice * remainingQty);
+          const activeItem: OrderItem = {
+            ...targetItem,
+            quantity: remainingQty,
+            total_price: remainingTotalPrice,
+          };
+          const cancelledItem: OrderItem = {
+            ...targetItem,
+            quantity: requestedCancelQty,
+            total_price: cancelledLineValue,
+            status: 'cancelled',
+            cancelled_quantity: requestedCancelQty,
+            removal_reason: reason,
+            removed_by: removedBy,
+            removed_at: now,
+            customization: options?.customizationNotes || targetItem.customization,
+            refundable_amount: cancelledLineValue,
+            refund_amount: refundRecord?.amount || 0,
+            refund_id: refundRecord?.id,
+          };
+          updatedItems = [
+            ...order.items.slice(0, itemIndex),
+            activeItem,
+            cancelledItem,
+            ...order.items.slice(itemIndex + 1),
+          ];
+        } else {
+          updatedItems = order.items.map((it, idx) => {
+            if (idx === itemIndex) {
+              return {
+                ...it,
+                status: 'cancelled',
+                cancelled_quantity: targetItem.quantity,
+                removal_reason: reason,
+                removed_by: removedBy,
+                removed_at: now,
+                customization: options?.customizationNotes || it.customization,
+                refundable_amount: cancelledLineValue,
+                refund_amount: refundRecord?.amount || 0,
+                refund_id: refundRecord?.id,
+              };
+            }
+            return it;
+          });
+        }
 
-        // Check if all items are removed -> auto cancel
+        // Check if all items are removed/cancelled -> auto cancel order
         const hasActiveItems = updatedItems.some((it) => it.status !== 'removed' && it.status !== 'cancelled');
         const nextOrderStatus = hasActiveItems ? order.order_status : 'cancelled';
 
-        const historyNotes = `Item Removed: ${targetItem.product_name_en} (Qty: ${targetItem.quantity}). Reason: ${reason}${
-          refundRecord ? ` | Partial Refund: ₹${refundRecord.amount} (${refundRecord.status.toUpperCase()})` : ''
-        }`;
+        const historyNotes = `Item Cancelled: ${targetItem.product_name_en} (Qty: ${requestedCancelQty}). Reason: ${reason}${
+          options?.customizationNotes ? ` [Customisation: ${options.customizationNotes}]` : ''
+        }${refundRecord ? ` | Partial Refund: ₹${refundRecord.amount} (${refundRecord.status.toUpperCase()})` : ''}`;
 
         const updatedHistory: OrderStatusHistoryItem[] = [
           ...(order.order_status_history || []),
@@ -667,22 +735,44 @@ export const useOrderStore = create<OrderStore>()(
         }
 
         // Audit Log
-        await logAdminAction(removedBy, 'ORDER_PROCESSOR', 'REMOVE_ORDER_ITEM', 'ORDER', order.order_number, {
+        await logAdminAction(removedBy, 'ORDER_PROCESSOR', 'CANCEL_ORDER_ITEM', 'ORDER', order.order_number, {
           item: targetItem.product_name_en,
+          cancelledQuantity: requestedCancelQty,
           reason,
+          customization: options?.customizationNotes,
           refundAmount: refundRecord?.amount || 0,
         });
 
         // Trigger notifications non-blockingly
         NotificationService.notifyItemRemoved({
           order: updatedOrder,
-          item: targetItem,
+          item: {
+            ...targetItem,
+            quantity: requestedCancelQty,
+            total_price: cancelledLineValue,
+          },
           refundAmount: refundRecord?.amount || 0,
-          reason,
+          reason: `${reason}${options?.customizationNotes ? ` (${options.customizationNotes})` : ''}`,
           settings,
         }).catch((e) => console.warn('Remove item notification error:', e));
 
         return { success: true, order: updatedOrder, refund: refundRecord };
+      },
+
+      // Alias cancelOrderItem for explicit naming
+      cancelOrderItem: async (orderId, productId, options) => {
+        return get().removeOrderItem(
+          orderId,
+          productId,
+          options.reason,
+          options.cancelledBy || 'Order Processor',
+          options.initiateRefund ?? true,
+          {
+            cancelledQuantity: options.cancelledQuantity,
+            customRefundAmount: options.customRefundAmount,
+            customizationNotes: options.customizationNotes,
+          }
+        );
       },
 
       // ─── Initiate Order Refund (Requirements 8, 9, 10, 11) ──────────

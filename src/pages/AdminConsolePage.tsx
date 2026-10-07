@@ -200,6 +200,8 @@ export default function AdminConsolePage() {
 
     const dispatchedOrders = orders.filter((o) => o.order_status === 'shipped').length;
     const deliveredOrders = orders.filter((o) => o.order_status === 'delivered').length;
+    const cancelledOrders = orders.filter((o) => o.order_status === 'cancelled').length;
+    const totalRefunded = orders.reduce((sum, o) => sum + Number(o.refunded_amount || 0), 0);
 
     return {
       total,
@@ -211,6 +213,8 @@ export default function AdminConsolePage() {
       pendingOrders,
       dispatchedOrders,
       deliveredOrders,
+      cancelledOrders,
+      totalRefunded,
     };
   }, [products, orders]);
 
@@ -631,32 +635,44 @@ export default function AdminConsolePage() {
                 </div>
 
                 {/* KPI Stat Cards */}
-                <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-                  <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
-                    <p className="text-xs text-slate-400 font-medium">Pending Processing</p>
-                    <p className="text-2xl font-black text-amber-400 mt-1">{stats.pendingOrders}</p>
-                    <p className="text-[11px] text-slate-500 mt-0.5">Orders awaiting kitchen prep / packing</p>
+                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+                  <div className="bg-slate-900 border border-slate-800 rounded-xl p-3.5">
+                    <p className="text-[11px] text-slate-400 font-medium">Pending Kitchen</p>
+                    <p className="text-xl font-black text-amber-400 mt-1">{stats.pendingOrders}</p>
+                    <p className="text-[10px] text-slate-500 mt-0.5">Awaiting prep / pack</p>
                   </div>
 
-                  <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
-                    <p className="text-xs text-slate-400 font-medium">Dispatched / In Transit</p>
-                    <p className="text-2xl font-black text-purple-400 mt-1">{stats.dispatchedOrders}</p>
-                    <p className="text-[11px] text-slate-500 mt-0.5">Assigned Tracking ID & Courier</p>
+                  <div className="bg-slate-900 border border-slate-800 rounded-xl p-3.5">
+                    <p className="text-[11px] text-slate-400 font-medium">In Transit</p>
+                    <p className="text-xl font-black text-purple-400 mt-1">{stats.dispatchedOrders}</p>
+                    <p className="text-[10px] text-slate-500 mt-0.5">Assigned Tracking ID</p>
                   </div>
 
-                  <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
-                    <p className="text-xs text-slate-400 font-medium">Delivered Orders</p>
-                    <p className="text-2xl font-black text-emerald-400 mt-1">{stats.deliveredOrders}</p>
-                    <p className="text-[11px] text-slate-500 mt-0.5">Successfully received by customer</p>
+                  <div className="bg-slate-900 border border-slate-800 rounded-xl p-3.5">
+                    <p className="text-[11px] text-slate-400 font-medium">Delivered Orders</p>
+                    <p className="text-xl font-black text-emerald-400 mt-1">{stats.deliveredOrders}</p>
+                    <p className="text-[10px] text-slate-500 mt-0.5">Completed</p>
                   </div>
 
-                  <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
-                    <p className="text-xs text-slate-400 font-medium">Inventory Stock Alerts</p>
-                    <p className="text-2xl font-black text-red-400 mt-1">
+                  <div className="bg-red-950/20 border border-red-500/30 rounded-xl p-3.5">
+                    <p className="text-[11px] text-red-300 font-medium">Cancelled Orders</p>
+                    <p className="text-xl font-black text-red-400 mt-1">{stats.cancelledOrders}</p>
+                    <p className="text-[10px] text-slate-500 mt-0.5">Voided orders</p>
+                  </div>
+
+                  <div className="bg-cyan-950/20 border border-cyan-500/30 rounded-xl p-3.5">
+                    <p className="text-[11px] text-cyan-300 font-medium">Refunds Issued</p>
+                    <p className="text-xl font-black text-cyan-400 mt-1">₹{stats.totalRefunded.toLocaleString('en-IN')}</p>
+                    <p className="text-[10px] text-slate-500 mt-0.5">Processed to patrons</p>
+                  </div>
+
+                  <div className="bg-slate-900 border border-slate-800 rounded-xl p-3.5">
+                    <p className="text-[11px] text-slate-400 font-medium">Stock Alerts</p>
+                    <p className="text-xl font-black text-orange-400 mt-1">
                       {stats.lowStock + stats.outOfStock}
                     </p>
-                    <p className="text-[11px] text-slate-500 mt-0.5">
-                      {stats.outOfStock} out of stock, {stats.lowStock} low stock
+                    <p className="text-[10px] text-slate-500 mt-0.5">
+                      {stats.outOfStock} out, {stats.lowStock} low
                     </p>
                   </div>
                 </div>

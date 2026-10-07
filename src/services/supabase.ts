@@ -319,6 +319,8 @@ export interface OrderItem {
   refundable_amount?: number;
   refund_amount?: number;
   refund_id?: string | null;
+  customization?: string | null;
+  cancelled_quantity?: number;
 }
 
 export interface DeliveryAddress {
