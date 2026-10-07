@@ -77,7 +77,7 @@ export default function AdminEmailTab() {
         port: 465,
         secure: true,
         username: 'resend',
-        senderEmail: prev.senderEmail || 'orders@sudhaswagruha.com',
+        senderEmail: prev.senderEmail || 'info@sudhaswagruhafoods.com',
       }));
       toast.success('Applied Resend API preset');
     } else if (preset === 'gmail') {
@@ -87,7 +87,7 @@ export default function AdminEmailTab() {
         host: 'smtp.gmail.com',
         port: 587,
         secure: false,
-        senderEmail: prev.username || prev.senderEmail || 'info@sudhaswagruha.com',
+        senderEmail: prev.username || prev.senderEmail || 'info@sudhaswagruhafoods.com',
       }));
       toast.success('Applied Gmail SMTP preset (Use Google App Password)');
     } else if (preset === 'sendgrid') {
@@ -98,7 +98,7 @@ export default function AdminEmailTab() {
         port: 587,
         secure: false,
         username: 'apikey',
-        senderEmail: prev.senderEmail || 'orders@sudhaswagruha.com',
+        senderEmail: prev.senderEmail || 'info@sudhaswagruhafoods.com',
       }));
       toast.success('Applied SendGrid SMTP preset');
     }
@@ -274,7 +274,7 @@ export default function AdminEmailTab() {
                     type="email"
                     value={form.senderEmail}
                     onChange={(e) => setForm({ ...form, senderEmail: e.target.value })}
-                    placeholder="orders@sudhaswagruha.com"
+                    placeholder="info@sudhaswagruhafoods.com"
                     className="w-full px-3.5 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-xs font-mono text-white focus:outline-none focus:border-indigo-500"
                     required
                   />
@@ -330,7 +330,7 @@ export default function AdminEmailTab() {
                     type="text"
                     value={form.username}
                     onChange={(e) => setForm({ ...form, username: e.target.value })}
-                    placeholder="info@sudhaswagruha.com"
+                    placeholder="info@sudhaswagruhafoods.com"
                     className="w-full px-3.5 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-xs font-mono text-white focus:outline-none focus:border-indigo-500"
                   />
                 </div>
@@ -537,7 +537,7 @@ export default function AdminEmailTab() {
               <div className="flex-1 overflow-y-auto p-4 bg-slate-100">
                 <div
                   dangerouslySetInnerHTML={{
-                    __html: generateOrderConfirmationHtml(mockOrder, form),
+                    __html: generateOrderConfirmationHtml(mockOrder, { smtp: form }),
                   }}
                 />
               </div>

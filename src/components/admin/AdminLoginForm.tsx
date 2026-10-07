@@ -1,12 +1,15 @@
 // ============================================================
-// Admin Login Form Component
+// Enterprise Admin Login Form with Multi-Role Authentication
+// Requirements 7, 8, 9, 13
+// Supports Root Admin, Store Keeper, Order Processor
 // ============================================================
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { Sliders, Lock, Mail, ArrowRight } from 'lucide-react';
+import { Sliders, Lock, Mail, ArrowRight, ShieldCheck, UserCheck, Package, ShoppingBag } from 'lucide-react';
 import { supabase } from '@/services/supabase';
 import { useAuthStore } from '@/hooks/useStore';
+import { useAdminAuthStore, type AdminRole } from '@/hooks/useAdminAuthStore';
 import toast from 'react-hot-toast';
 
 export default function AdminLoginForm({ onLogin }: { onLogin?: () => void }) {
@@ -14,36 +17,46 @@ export default function AdminLoginForm({ onLogin }: { onLogin?: () => void }) {
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const { setAdmin } = useAuthStore();
+  const { login: rbacLogin } = useAdminAuthStore();
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
+
     try {
-      const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-      if (error) throw error;
-      setAdmin(true, data.user?.email || email);
-      toast.success('Welcome back, Admin!');
-      if (onLogin) onLogin();
-    } catch {
-      // Demo credentials check
-      if (
-        (email.trim().toLowerCase() === 'admin@sudhaswagruha.com' && password === 'admin123') ||
-        (email.trim().toLowerCase() === 'admin@sudhafoods.com' && password === 'admin123')
-      ) {
-        setAdmin(true, email);
-        toast.success('Welcome back, Admin! (Demo Mode)');
+      // 1. Try RBAC authenticated login
+      const rbacResult = await rbacLogin(email.trim(), password);
+      if (rbacResult.success) {
+        setAdmin(true, email.trim());
+        toast.success(`Welcome to Admin Console! Authenticated via RBAC.`);
         if (onLogin) onLogin();
-      } else {
-        toast.error('Invalid credentials. Check email and password.');
+        return;
       }
+
+      // 2. Fallback to Supabase Auth if credentials match Supabase user
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email: email.trim(),
+        password,
+      });
+
+      if (!error && data.user) {
+        setAdmin(true, data.user?.email || email.trim());
+        toast.success('Welcome back, Admin!');
+        if (onLogin) onLogin();
+        return;
+      }
+
+      toast.error(rbacResult.error || 'Invalid email or password.');
+    } catch (err: any) {
+      toast.error(err.message || 'Authentication error. Please check credentials.');
     } finally {
       setLoading(false);
     }
   };
 
-  const handleFillDemo = () => {
-    setEmail('admin@sudhaswagruha.com');
-    setPassword('admin123');
+  const handleFillRole = (targetEmail: string, pass: string) => {
+    setEmail(targetEmail);
+    setPassword(pass);
   };
 
   return (
@@ -57,16 +70,16 @@ export default function AdminLoginForm({ onLogin }: { onLogin?: () => void }) {
           <div className="w-16 h-16 bg-gradient-to-br from-emerald-500 to-green-700 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-lg shadow-emerald-500/20">
             <Sliders className="w-8 h-8 text-white" />
           </div>
-          <h1 className="text-2xl font-bold text-white tracking-tight">Admin Console</h1>
+          <h1 className="text-2xl font-bold text-white tracking-tight">Enterprise Admin Console</h1>
           <p className="text-xs text-slate-400 mt-1">
-            Sudha Swagruha Foods • Order Processing & Store Management
+            Role-Based Access Control • Order Processing & Inventory
           </p>
         </div>
 
         <form onSubmit={handleLogin} className="space-y-4">
           <div>
             <label className="block text-xs font-semibold text-slate-300 mb-1.5 uppercase tracking-wider">
-              Admin Email
+              Account Email
             </label>
             <div className="relative">
               <Mail className="w-4 h-4 text-slate-500 absolute left-3.5 top-1/2 -translate-y-1/2" />
@@ -98,15 +111,39 @@ export default function AdminLoginForm({ onLogin }: { onLogin?: () => void }) {
             </div>
           </div>
 
-          <div className="bg-slate-800/80 border border-slate-700/60 rounded-xl p-3 flex items-center justify-between text-xs">
-            <span className="text-slate-400">Demo Login:</span>
-            <button
-              type="button"
-              onClick={handleFillDemo}
-              className="text-emerald-400 hover:text-emerald-300 font-semibold underline cursor-pointer"
-            >
-              Fill Demo Credentials
-            </button>
+          {/* Quick RBAC Role Selectors */}
+          <div className="bg-slate-800/80 border border-slate-700/60 rounded-xl p-3 text-xs space-y-2">
+            <span className="text-slate-400 block font-semibold uppercase text-[10px] tracking-wider">
+              Quick Role Switch (Demo Credentials):
+            </span>
+            <div className="grid grid-cols-3 gap-1.5">
+              <button
+                type="button"
+                onClick={() => handleFillRole('admin@sudhaswagruha.com', 'admin123')}
+                className="p-1.5 rounded-lg bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-[11px] font-bold flex flex-col items-center justify-center gap-1 transition-colors cursor-pointer"
+              >
+                <ShieldCheck className="w-3.5 h-3.5" />
+                <span>Root Admin</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handleFillRole('store@sudhaswagruha.com', 'store123')}
+                className="p-1.5 rounded-lg bg-blue-500/10 hover:bg-blue-500/20 text-blue-300 border border-blue-500/30 text-[11px] font-bold flex flex-col items-center justify-center gap-1 transition-colors cursor-pointer"
+              >
+                <Package className="w-3.5 h-3.5" />
+                <span>Store Keeper</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handleFillRole('orders@sudhaswagruha.com', 'orders123')}
+                className="p-1.5 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 text-[11px] font-bold flex flex-col items-center justify-center gap-1 transition-colors cursor-pointer"
+              >
+                <ShoppingBag className="w-3.5 h-3.5" />
+                <span>Order Proc.</span>
+              </button>
+            </div>
           </div>
 
           <button

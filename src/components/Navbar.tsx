@@ -6,10 +6,12 @@ import { Link, useLocation } from 'react-router-dom';
 import { ShoppingCart, Menu, X, Search, Globe, ChevronDown } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useCartStore, useLanguageStore, useUIStore } from '@/hooks/useStore';
+import { useSettingsStore } from '@/hooks/useSettingsStore';
 import { translations } from '@/i18n/translations';
 import AnnouncementBar from '@/components/AnnouncementBar';
+import AppImage from '@/components/common/AppImage';
 
-const logoPath = import.meta.env.BASE_URL + 'logo/logo.png';
+const defaultLogo = (import.meta.env.BASE_URL || '/') + 'logo/logo.jpg';
 
 export default function Navbar() {
   const [scrolled, setScrolled] = useState(false);
@@ -17,6 +19,7 @@ export default function Navbar() {
   const { items, openCart, getItemCount } = useCartStore();
   const { language, toggle } = useLanguageStore();
   const { mobileMenuOpen, toggleMobileMenu, closeMobileMenu } = useUIStore();
+  const { settings } = useSettingsStore();
   const location = useLocation();
   const t = translations[language];
   const itemCount = getItemCount();
@@ -58,19 +61,17 @@ export default function Navbar() {
         <AnnouncementBar />
         <div className="max-w-7xl mx-auto px-4 sm:px-6">
           <div className="flex items-center justify-between h-16 md:h-18">
-            {/* Logo */}
+            {/* Logo & Dynamic Brand Name */}
             <Link to="/" className="flex items-center gap-2 group flex-shrink-0">
-              <img
-                src={logoPath}
-                alt="Sudha Swagruha Foods"
+              <AppImage
+                src={settings.logoUrl || defaultLogo}
+                alt={settings.businessName}
                 className="h-10 w-10 md:h-12 md:w-12 object-contain group-hover:scale-105 transition-transform"
-                onError={(e) => {
-                  (e.target as HTMLImageElement).style.display = 'none';
-                }}
+                containerClassName="h-10 w-10 md:h-12 md:w-12 rounded-xl bg-transparent"
               />
               <div className="hidden sm:block">
                 <p className="font-bold text-brand-green text-base leading-tight font-display">
-                  Sudha Swagruha Foods
+                  {settings.businessName}
                 </p>
                 <p
                   className="text-xs text-brand-brown font-telugu"

@@ -18,6 +18,10 @@ import {
   ShoppingBag,
   Tag,
   X,
+  MapPin,
+  User,
+  Phone,
+  Mail,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useCartStore, useLanguageStore } from '@/hooks/useStore';
@@ -26,6 +30,7 @@ import { useOrderStore } from '@/hooks/useOrderStore';
 import { translations } from '@/i18n/translations';
 import type { DbOrder } from '@/services/supabase';
 import { sendOrderConfirmationEmail } from '@/services/emailService';
+import AppImage from '@/components/common/AppImage';
 
 // Razorpay type declaration
 declare global {
@@ -132,9 +137,9 @@ export default function CheckoutPage() {
       )
       .join('\n');
 
-    // Message for Business Owner (8374634989)
+    // Message for Business Owner
     const ownerMsg =
-      `🌿 *NEW ORDER RECEIVED - SUDHA SWAGRUHA FOODS* 🌿\n\n` +
+      `🌿 *NEW ORDER RECEIVED - ${settings.businessName.toUpperCase()}* 🌿\n\n` +
       `📋 *Order ID:* ${orderNumber}\n` +
       `👤 *Customer:* ${data.name}\n` +
       `📱 *Mobile:* ${data.mobile}\n` +
@@ -152,8 +157,8 @@ export default function CheckoutPage() {
 
     // Message for Customer
     const customerMsg =
-      `🌿 *SUDHA SWAGRUHA FOODS - ORDER CONFIRMATION* 🌿\n\n` +
-      `నమస్కారం ${data.name}! 🙏 Thank you for your order with Sudha Swagruha Foods.\n\n` +
+      `🌿 *${settings.businessName.toUpperCase()} - ORDER CONFIRMATION* 🌿\n\n` +
+      `నమస్కారం ${data.name}! 🙏 Thank you for your order with ${settings.businessName}.\n\n` +
       `📋 *Order ID:* *${orderNumber}*\n\n` +
       `📦 *Items in your order:*\n${itemsFormatted}\n\n` +
       `💰 *Total Amount:* ₹${total}\n` +
@@ -230,7 +235,7 @@ export default function CheckoutPage() {
 
     // Send email communication / intimation to customer
     if (newOrder.customer_email && settings.smtp?.enabled) {
-      sendOrderConfirmationEmail(newOrder, settings.smtp).catch((err) =>
+      sendOrderConfirmationEmail(newOrder, settings).catch((err) =>
         console.warn('Customer order confirmation email notice:', err)
       );
     }
@@ -396,64 +401,86 @@ export default function CheckoutPage() {
             {/* ─── Left: Form ─── */}
             <div className="lg:col-span-2 space-y-6">
               {/* Personal Info */}
-              <div className="bg-white rounded-2xl shadow-card p-6">
+              <div className="bg-white rounded-3xl shadow-card p-6 md:p-8 border border-gray-100">
                 <h2 className="font-bold text-lg text-gray-900 mb-5 flex items-center gap-2">
                   <span className="w-7 h-7 bg-brand-green text-white rounded-full flex items-center justify-center text-xs font-bold">
                     1
                   </span>
-                  {t.checkout.personalInfo}
+                  <span>Contact & Recipient Information</span>
                 </h2>
-                <div className="grid sm:grid-cols-2 gap-4">
+                <div className="grid sm:grid-cols-2 gap-5">
                   <div>
-                    <label className={labelClass}>{t.checkout.name} *</label>
+                    <label className={labelClass}>
+                      <span>Full Name</span>
+                      <span className="text-red-500 font-bold ml-1">*</span>
+                    </label>
                     <input
                       {...register('name')}
                       className={inputClass}
-                      placeholder="e.g. Ramesh Reddy"
+                      placeholder="Enter your full name"
+                      autoComplete="name"
                     />
                     {errors.name && <p className={errorClass}>{errors.name.message}</p>}
                   </div>
                   <div>
-                    <label className={labelClass}>{t.checkout.mobile} *</label>
+                    <label className={labelClass}>
+                      <span>Mobile Number</span>
+                      <span className="text-red-500 font-bold ml-1">*</span>
+                    </label>
                     <input
                       {...register('mobile')}
                       className={inputClass}
-                      placeholder="8374634989"
+                      placeholder="Enter your 10-digit mobile number"
                       type="tel"
+                      inputMode="numeric"
+                      pattern="[0-9]*"
                       maxLength={10}
+                      autoComplete="tel"
                     />
                     {errors.mobile && <p className={errorClass}>{errors.mobile.message}</p>}
                   </div>
                   <div>
-                    <label className={labelClass}>{t.checkout.whatsapp}</label>
+                    <div className="flex justify-between items-center mb-1.5">
+                      <label className="text-sm font-semibold text-gray-700">
+                        <span>WhatsApp Number</span>
+                        <span className="text-xs text-gray-400 font-normal ml-1.5">(For updates)</span>
+                      </label>
+                    </div>
                     <div className="flex flex-col gap-2">
-                      <label className="flex items-center gap-2 text-sm text-gray-600 cursor-pointer">
+                      <label className="flex items-center gap-2 text-xs text-gray-600 cursor-pointer select-none">
                         <input
                           type="checkbox"
                           checked={sameAsPhone}
                           onChange={(e) => setSameAsPhone(e.target.checked)}
                           className="rounded text-brand-green focus:ring-brand-green"
                         />
-                        {t.checkout.whatsappSame}
+                        <span>Same as Mobile Number</span>
                       </label>
                       {!sameAsPhone && (
                         <input
                           {...register('whatsapp')}
                           className={inputClass}
-                          placeholder="WhatsApp number"
+                          placeholder="Enter your 10-digit WhatsApp number"
                           type="tel"
+                          inputMode="numeric"
+                          pattern="[0-9]*"
                           maxLength={10}
                         />
                       )}
                     </div>
                   </div>
                   <div>
-                    <label className={labelClass}>{t.checkout.email}</label>
+                    <label className={labelClass}>
+                      <span>Email Address</span>
+                      <span className="text-xs text-gray-400 font-normal ml-1.5">(For receipt & tracking)</span>
+                    </label>
                     <input
                       {...register('email')}
                       className={inputClass}
-                      placeholder="ramesh@example.com"
+                      placeholder="Enter your email address"
                       type="email"
+                      inputMode="email"
+                      autoComplete="email"
                     />
                     {errors.email && <p className={errorClass}>{errors.email.message}</p>}
                   </div>
@@ -461,75 +488,103 @@ export default function CheckoutPage() {
               </div>
 
               {/* Delivery Address */}
-              <div className="bg-white rounded-2xl shadow-card p-6">
+              <div className="bg-white rounded-3xl shadow-card p-6 md:p-8 border border-gray-100">
                 <h2 className="font-bold text-lg text-gray-900 mb-5 flex items-center gap-2">
                   <span className="w-7 h-7 bg-brand-green text-white rounded-full flex items-center justify-center text-xs font-bold">
                     2
                   </span>
-                  {t.checkout.deliveryAddress}
+                  <span>Delivery Address</span>
                 </h2>
-                <div className="grid sm:grid-cols-2 gap-4">
+                <div className="grid sm:grid-cols-2 gap-5">
                   <div>
-                    <label className={labelClass}>{t.checkout.houseNo} *</label>
+                    <label className={labelClass}>
+                      <span>House / Flat / Door Number</span>
+                      <span className="text-red-500 font-bold ml-1">*</span>
+                    </label>
                     <input
                       {...register('house_no')}
                       className={inputClass}
-                      placeholder="Flat 3B, Sai Towers"
+                      placeholder="e.g. Flat 3B, Door No. 12-4-5, Sai Enclave"
                     />
                     {errors.house_no && <p className={errorClass}>{errors.house_no.message}</p>}
                   </div>
                   <div>
-                    <label className={labelClass}>{t.checkout.street} *</label>
+                    <label className={labelClass}>
+                      <span>Street / Road Name</span>
+                      <span className="text-red-500 font-bold ml-1">*</span>
+                    </label>
                     <input
                       {...register('street')}
                       className={inputClass}
-                      placeholder="MG Road / Main Bazaar"
+                      placeholder="e.g. MG Road, Temple Street, Main Bazaar"
+                      autoComplete="address-line1"
                     />
                     {errors.street && <p className={errorClass}>{errors.street.message}</p>}
                   </div>
                   <div>
-                    <label className={labelClass}>{t.checkout.area} *</label>
+                    <label className={labelClass}>
+                      <span>Area / Locality / Landmark</span>
+                      <span className="text-red-500 font-bold ml-1">*</span>
+                    </label>
                     <input
                       {...register('area')}
                       className={inputClass}
-                      placeholder="Benz Circle / Brodipet"
+                      placeholder="e.g. Benz Circle, Brodipet, Near Rythu Bazar"
+                      autoComplete="address-line2"
                     />
                     {errors.area && <p className={errorClass}>{errors.area.message}</p>}
                   </div>
                   <div>
-                    <label className={labelClass}>{t.checkout.city} *</label>
+                    <label className={labelClass}>
+                      <span>City / Town / Village</span>
+                      <span className="text-red-500 font-bold ml-1">*</span>
+                    </label>
                     <input
                       {...register('city')}
                       className={inputClass}
-                      placeholder="Vijayawada / Hyderabad"
+                      placeholder="Enter your city or town"
+                      autoComplete="address-level2"
                     />
                     {errors.city && <p className={errorClass}>{errors.city.message}</p>}
                   </div>
                   <div>
-                    <label className={labelClass}>{t.checkout.district} *</label>
+                    <label className={labelClass}>
+                      <span>District</span>
+                      <span className="text-red-500 font-bold ml-1">*</span>
+                    </label>
                     <input
                       {...register('district')}
                       className={inputClass}
-                      placeholder="Krishna / Guntur"
+                      placeholder="Enter your district"
                     />
                     {errors.district && <p className={errorClass}>{errors.district.message}</p>}
                   </div>
                   <div>
-                    <label className={labelClass}>{t.checkout.state} *</label>
+                    <label className={labelClass}>
+                      <span>State</span>
+                      <span className="text-red-500 font-bold ml-1">*</span>
+                    </label>
                     <input
                       {...register('state')}
                       className={inputClass}
-                      placeholder="Andhra Pradesh"
+                      placeholder="Enter state (e.g. Andhra Pradesh, Telangana)"
+                      autoComplete="address-level1"
                     />
                     {errors.state && <p className={errorClass}>{errors.state.message}</p>}
                   </div>
-                  <div>
-                    <label className={labelClass}>{t.checkout.pincode} *</label>
+                  <div className="sm:col-span-2">
+                    <label className={labelClass}>
+                      <span>6-Digit Postal PIN Code</span>
+                      <span className="text-red-500 font-bold ml-1">*</span>
+                    </label>
                     <input
                       {...register('pincode')}
                       className={inputClass}
-                      placeholder="520010"
+                      placeholder="Enter 6-digit PIN code (e.g. 520010)"
                       maxLength={6}
+                      inputMode="numeric"
+                      pattern="[0-9]*"
+                      autoComplete="postal-code"
                     />
                     {errors.pincode && <p className={errorClass}>{errors.pincode.message}</p>}
                   </div>
@@ -568,12 +623,12 @@ export default function CheckoutPage() {
 
             {/* ─── Right: Order Summary ─── */}
             <div className="lg:col-span-1">
-              <div className="bg-white rounded-2xl shadow-card p-6 sticky top-24 border border-gray-100">
+              <div className="bg-white rounded-3xl shadow-card p-6 sticky top-24 border border-gray-100">
                 <h2 className="font-bold text-lg text-gray-900 mb-5 flex items-center gap-2">
                   <span className="w-7 h-7 bg-brand-green text-white rounded-full flex items-center justify-center text-xs font-bold">
                     3
                   </span>
-                  {t.checkout.orderSummary}
+                  <span>Order Summary</span>
                 </h2>
 
                 <div className="space-y-3 mb-5 max-h-60 overflow-y-auto pr-1">
@@ -582,10 +637,11 @@ export default function CheckoutPage() {
                       key={`${item.product.id}-${item.variant.weight}`}
                       className="flex gap-3 items-center py-2 border-b border-gray-50 last:border-0"
                     >
-                      <img
+                      <AppImage
                         src={item.product.images[0]}
                         alt={item.product.name_en}
-                        className="w-12 h-12 object-cover rounded-lg flex-shrink-0"
+                        className="w-12 h-12 object-cover rounded-xl flex-shrink-0"
+                        containerClassName="w-12 h-12 rounded-xl flex-shrink-0"
                       />
                       <div className="flex-1 min-w-0">
                         <p className="text-sm font-semibold text-gray-800 truncate">

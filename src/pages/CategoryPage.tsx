@@ -9,6 +9,7 @@ import { useProductStore } from '@/hooks/useProductStore';
 import { translations } from '@/i18n/translations';
 import { getCategoryBySlug } from '@/data/products';
 import ProductCard from '@/components/ProductCard';
+import AppImage from '@/components/common/AppImage';
 
 export default function CategoryPage() {
   const { slug } = useParams<{ slug: string }>();
@@ -36,10 +37,11 @@ export default function CategoryPage() {
     <div className="page-enter min-h-screen bg-brand-cream">
       {/* Hero */}
       <div className="relative h-48 overflow-hidden">
-        <img
+        <AppImage
           src={category.image}
           alt={category.name_en}
           className="w-full h-full object-cover"
+          containerClassName="w-full h-full"
         />
         <div className="absolute inset-0 bg-gradient-to-t from-black/70 to-black/20" />
         <div className="absolute inset-0 flex flex-col justify-end px-6 py-6">

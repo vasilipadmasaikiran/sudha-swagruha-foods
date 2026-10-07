@@ -32,7 +32,7 @@ export default function AdminSettingsTab() {
     resetSettings();
     setPhone('8374634989');
     setWhatsapp('8374634989');
-    setEmail('info@sudhaswagruha.com');
+    setEmail('info@sudhaswagruhafoods.com');
     setAddress('Plot 18, Traditional Foods Lane, Benz Circle, Vijayawada, Andhra Pradesh - 520010');
     setHours('9:00 AM - 9:00 PM (All Days)');
     toast.success('Reset contact settings to default.');
@@ -122,7 +122,7 @@ export default function AdminSettingsTab() {
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                placeholder="info@sudhaswagruha.com"
+                placeholder="info@sudhaswagruhafoods.com"
                 className="w-full px-3.5 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-sm text-white focus:outline-none focus:border-emerald-500"
                 required
               />

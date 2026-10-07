@@ -1,11 +1,21 @@
 // ============================================================
 // Order Store with Zustand & LocalStorage Persistence
 // + Supabase two-way sync (fetch + insert + update + realtime)
+// Supports Tracking ID, Carrier details, and Order Status History (Req 2, 11, 12, 17)
 // ============================================================
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { DbOrder } from '@/services/supabase';
-import { supabase, isSupabaseConfigured } from '@/services/supabase';
+import type { DbOrder, OrderStatusHistoryItem } from '@/services/supabase';
+import { supabase, isSupabaseConfigured, normalizeOrderTracking } from '@/services/supabase';
+
+export interface OrderUpdatePayload {
+  order_status?: DbOrder['order_status'];
+  tracking_id?: string;
+  courier_name?: string;
+  tracking_url?: string;
+  notes?: string;
+  updated_by?: string;
+}
 
 interface OrderStore {
   orders: DbOrder[];
@@ -16,6 +26,10 @@ interface OrderStore {
     status: DbOrder['order_status'],
     notes?: string
   ) => Promise<void>;
+  updateOrderDetails: (
+    orderId: string,
+    payload: OrderUpdatePayload
+  ) => Promise<DbOrder>;
   deleteOrder: (orderId: string) => Promise<void>;
   getOrderByNumber: (orderNumber: string) => DbOrder | undefined;
   resetOrders: () => void;
@@ -62,6 +76,10 @@ const initialOrders: DbOrder[] = [
     payment_id: null,
     razorpay_order_id: null,
     order_status: 'preparing',
+    tracking_id: null,
+    courier_name: null,
+    tracking_url: null,
+    dispatched_at: null,
     delivery_address: {
       house_no: 'Plot 42, Green Meadows',
       street: 'Madhapur Main Road',
@@ -72,6 +90,23 @@ const initialOrders: DbOrder[] = [
       pincode: '500081',
     },
     notes: 'Please pack securely with extra bubble wrap',
+    order_status_history: [
+      {
+        status: 'placed',
+        timestamp: new Date(Date.now() - 3600000 * 24).toISOString(),
+        notes: 'Order placed by customer',
+      },
+      {
+        status: 'confirmed',
+        timestamp: new Date(Date.now() - 3600000 * 20).toISOString(),
+        updated_by: 'Order Processor',
+      },
+      {
+        status: 'preparing',
+        timestamp: new Date(Date.now() - 3600000 * 12).toISOString(),
+        updated_by: 'Kitchen Head',
+      },
+    ],
     created_at: new Date(Date.now() - 3600000 * 24).toISOString(),
     updated_at: new Date(Date.now() - 3600000 * 12).toISOString(),
   },
@@ -102,7 +137,11 @@ const initialOrders: DbOrder[] = [
     payment_status: 'pending',
     payment_id: null,
     razorpay_order_id: null,
-    order_status: 'placed',
+    order_status: 'shipped',
+    tracking_id: 'DELH98726351',
+    courier_name: 'Delhivery',
+    tracking_url: 'https://www.delhivery.com/track/package/DELH98726351',
+    dispatched_at: new Date(Date.now() - 3600000 * 1).toISOString(),
     delivery_address: {
       house_no: 'D.No 12-4-5',
       street: 'Brodipet 4th line',
@@ -113,8 +152,25 @@ const initialOrders: DbOrder[] = [
       pincode: '522002',
     },
     notes: 'Call before delivery',
-    created_at: new Date(Date.now() - 3600000 * 2).toISOString(),
-    updated_at: new Date(Date.now() - 3600000 * 2).toISOString(),
+    order_status_history: [
+      {
+        status: 'placed',
+        timestamp: new Date(Date.now() - 3600000 * 6).toISOString(),
+      },
+      {
+        status: 'confirmed',
+        timestamp: new Date(Date.now() - 3600000 * 4).toISOString(),
+      },
+      {
+        status: 'shipped',
+        timestamp: new Date(Date.now() - 3600000 * 1).toISOString(),
+        tracking_id: 'DELH98726351',
+        courier_name: 'Delhivery',
+        notes: 'Handed over to Delhivery logistics',
+      },
+    ],
+    created_at: new Date(Date.now() - 3600000 * 6).toISOString(),
+    updated_at: new Date(Date.now() - 3600000 * 1).toISOString(),
   },
 ];
 
@@ -124,7 +180,7 @@ export const useOrderStore = create<OrderStore>()(
       orders: initialOrders,
       isSyncing: false,
 
-      // ─── Fetch all orders from Supabase (for Admin page) ──────────
+      // ─── Fetch all orders from Supabase (for Admin & Customer Store) ───
       fetchOrdersFromSupabase: async () => {
         if (!isSupabaseConfigured()) {
           return { success: false, count: 0, error: 'Database not configured' };
@@ -137,23 +193,22 @@ export const useOrderStore = create<OrderStore>()(
             .order('created_at', { ascending: false });
           if (error) throw error;
           if (data) {
-            if (data.length > 0) {
-              // Supabase orders take priority; keep any local-only (non-demo) orders
-              const supabaseOrderNumbers = new Set((data as DbOrder[]).map((o) => o.order_number));
+            const normalizedData = (data as DbOrder[]).map(normalizeOrderTracking);
+            if (normalizedData.length > 0) {
+              const supabaseOrderNumbers = new Set(normalizedData.map((o) => o.order_number));
               const localOnly = get().orders.filter(
                 (o) =>
                   !supabaseOrderNumbers.has(o.order_number) &&
-                  !o.id.startsWith('order-10') // exclude demo seed orders
+                  !o.id.startsWith('order-10')
               );
-              set({ orders: [...(data as DbOrder[]), ...localOnly] });
+              set({ orders: [...normalizedData, ...localOnly] });
             } else {
-              // Table is empty in DB; keep non-demo local orders
               const nonDemo = get().orders.filter((o) => !o.id.startsWith('order-10'));
               if (nonDemo.length > 0) {
                 set({ orders: nonDemo });
               }
             }
-            return { success: true, count: data.length };
+            return { success: true, count: normalizedData.length };
           }
           return { success: true, count: 0 };
         } catch (err) {
@@ -167,35 +222,33 @@ export const useOrderStore = create<OrderStore>()(
 
       // ─── Add new order ─────────────────────────────────────────────
       addOrder: async (newOrder: DbOrder) => {
-        // Immediately add to local state for instant UX
+        const normalized = normalizeOrderTracking(newOrder);
         set((state) => ({
-          orders: [newOrder, ...state.orders.filter((o) => o.order_number !== newOrder.order_number)],
+          orders: [normalized, ...state.orders.filter((o) => o.order_number !== normalized.order_number)],
         }));
 
-        // Sync to Supabase cloud database
         if (isSupabaseConfigured()) {
           try {
-            // Clean payload for Postgres schema
-            const orderPayload = {
-              order_number: newOrder.order_number,
-              customer_id: newOrder.customer_id || null,
-              items: newOrder.items,
-              subtotal: Number(newOrder.subtotal),
-              delivery_charge: Number(newOrder.delivery_charge || 0),
-              discount: Number(newOrder.discount || 0),
-              total: Number(newOrder.total),
-              payment_status: newOrder.payment_status,
-              payment_id: newOrder.payment_id || null,
-              razorpay_order_id: newOrder.razorpay_order_id || null,
-              order_status: newOrder.order_status,
-              delivery_address: newOrder.delivery_address,
-              customer_name: newOrder.customer_name,
-              customer_mobile: newOrder.customer_mobile,
-              customer_whatsapp: newOrder.customer_whatsapp,
-              customer_email: newOrder.customer_email || null,
-              notes: newOrder.notes || null,
-              created_at: newOrder.created_at || new Date().toISOString(),
-              updated_at: newOrder.updated_at || new Date().toISOString(),
+            const orderPayload: Record<string, unknown> = {
+              order_number: normalized.order_number,
+              customer_id: normalized.customer_id || null,
+              items: normalized.items,
+              subtotal: Number(normalized.subtotal),
+              delivery_charge: Number(normalized.delivery_charge || 0),
+              discount: Number(normalized.discount || 0),
+              total: Number(normalized.total),
+              payment_status: normalized.payment_status,
+              payment_id: normalized.payment_id || null,
+              razorpay_order_id: normalized.razorpay_order_id || null,
+              order_status: normalized.order_status,
+              delivery_address: normalized.delivery_address,
+              customer_name: normalized.customer_name,
+              customer_mobile: normalized.customer_mobile,
+              customer_whatsapp: normalized.customer_whatsapp,
+              customer_email: normalized.customer_email || null,
+              notes: normalized.notes || null,
+              created_at: normalized.created_at || new Date().toISOString(),
+              updated_at: normalized.updated_at || new Date().toISOString(),
             };
 
             const { data, error } = await supabase
@@ -209,71 +262,142 @@ export const useOrderStore = create<OrderStore>()(
               throw error;
             }
 
-            // Replace local order with the DB-returned record (has real UUID)
             if (data) {
+              const saved = normalizeOrderTracking(data as DbOrder);
               set((state) => ({
                 orders: state.orders.map((o) =>
-                  o.order_number === newOrder.order_number ? (data as DbOrder) : o
+                  o.order_number === normalized.order_number ? saved : o
                 ),
               }));
-              console.log('Order successfully inserted into Supabase DB:', newOrder.order_number);
+              console.log('Order successfully inserted into Supabase DB:', normalized.order_number);
             }
           } catch (err) {
             console.error('Supabase order insert failed (order saved locally):', err);
           }
-        } else {
-          console.warn('Supabase is not configured; order saved to local storage only.');
         }
       },
 
-      // ─── Update order status ───────────────────────────────────────
+      // ─── Basic status update (wraps comprehensive updateOrderDetails) ──
       updateOrderStatus: async (
         orderId: string,
         status: DbOrder['order_status'],
         notes?: string
       ) => {
+        await get().updateOrderDetails(orderId, { order_status: status, notes });
+      },
+
+      // ─── Comprehensive Order Update with Tracking & History (Req 2, 11, 17) ───
+      updateOrderDetails: async (
+        orderId: string,
+        payload: OrderUpdatePayload
+      ): Promise<DbOrder> => {
         const now = new Date().toISOString();
-        // Update local state first
+        const existing = get().orders.find(
+          (o) => o.id === orderId || o.order_number === orderId
+        );
+
+        if (!existing) {
+          throw new Error('Order not found in store');
+        }
+
+        const newStatus = payload.order_status || existing.order_status;
+        const newTrackingId = payload.tracking_id !== undefined ? payload.tracking_id : (existing.tracking_id || null);
+        const newCourier = payload.courier_name !== undefined ? payload.courier_name : (existing.courier_name || null);
+        const newTrackingUrl = payload.tracking_url !== undefined ? payload.tracking_url : (existing.tracking_url || null);
+        const newNotes = payload.notes !== undefined ? payload.notes : (existing.notes || '');
+
+        // Generate updated status history
+        const existingHistory = Array.isArray(existing.order_status_history) ? [...existing.order_status_history] : [];
+        const statusChanged = payload.order_status && payload.order_status !== existing.order_status;
+        const trackingChanged = payload.tracking_id && payload.tracking_id !== existing.tracking_id;
+
+        if (statusChanged || trackingChanged || existingHistory.length === 0) {
+          existingHistory.push({
+            status: newStatus,
+            timestamp: now,
+            updated_by: payload.updated_by || 'Admin',
+            notes: payload.notes || undefined,
+            tracking_id: newTrackingId || undefined,
+            courier_name: newCourier || undefined,
+            tracking_url: newTrackingUrl || undefined,
+          });
+        }
+
+        // Encode metadata seamlessly into notes so that tracking and history are 100% saved in Supabase
+        // even before or after the dedicated columns are created in PostgreSQL
+        const cleanUserNotes = (newNotes || '').replace(/\[SSF_TRACKING:[\s\S]*?\]/g, '').trim();
+        const trackingMetadata = {
+          tracking_id: newTrackingId,
+          courier_name: newCourier,
+          tracking_url: newTrackingUrl,
+          dispatched_at: newStatus === 'shipped' ? (existing.dispatched_at || now) : existing.dispatched_at,
+          history: existingHistory,
+        };
+        const encodedNotes = `${cleanUserNotes ? cleanUserNotes + ' ' : ''}[SSF_TRACKING:${JSON.stringify(trackingMetadata)}]`;
+
+        const updatedOrder: DbOrder = normalizeOrderTracking({
+          ...existing,
+          order_status: newStatus,
+          tracking_id: newTrackingId,
+          courier_name: newCourier,
+          tracking_url: newTrackingUrl,
+          dispatched_at: trackingMetadata.dispatched_at || null,
+          notes: cleanUserNotes,
+          order_status_history: existingHistory,
+          updated_at: now,
+        });
+
+        // 1. Immediately update Zustand local state for instant snappy UI
         set((state) => ({
           orders: state.orders.map((o) =>
-            o.id === orderId || o.order_number === orderId
-              ? {
-                  ...o,
-                  order_status: status,
-                  updated_at: now,
-                  ...(notes !== undefined ? { notes } : {}),
-                }
-              : o
+            o.id === orderId || o.order_number === existing.order_number ? updatedOrder : o
           ),
         }));
 
-        // Sync to Supabase
+        // 2. Synchronize to Supabase Cloud Database (AUTHORITATIVE TRUTH)
         if (isSupabaseConfigured()) {
           try {
-            const order = get().orders.find(
-              (o) => o.id === orderId || o.order_number === orderId
-            );
-            if (order) {
-              const updatePayload: Record<string, unknown> = {
-                order_status: status,
+            // First attempt: Try updating with dedicated columns
+            const fullPayload: Record<string, unknown> = {
+              order_status: newStatus,
+              notes: encodedNotes,
+              updated_at: now,
+              tracking_id: newTrackingId,
+              courier_name: newCourier,
+              tracking_url: newTrackingUrl,
+            };
+
+            const { error: fullError } = await supabase
+              .from('orders')
+              .update(fullPayload)
+              .eq('order_number', existing.order_number);
+
+            if (fullError) {
+              // If column does not exist yet (pre-migration), fallback safely to standard columns + encoded notes
+              console.warn('Dedicated tracking columns not yet in DB schema cache; updating via standard schema fallback:', fullError.message);
+              const fallbackPayload: Record<string, unknown> = {
+                order_status: newStatus,
+                notes: encodedNotes,
                 updated_at: now,
               };
-              if (notes !== undefined) updatePayload.notes = notes;
-
-              const { error } = await supabase
+              const { error: fallbackError } = await supabase
                 .from('orders')
-                .update(updatePayload)
-                .eq('order_number', order.order_number);
-              if (error) {
-                console.error('Supabase status update error:', error);
-                throw error;
+                .update(fallbackPayload)
+                .eq('order_number', existing.order_number);
+
+              if (fallbackError) {
+                console.error('Supabase fallback status update error:', fallbackError);
+                throw fallbackError;
               }
             }
-          } catch (err) {
-            console.error('Supabase status update failed (updated locally):', err);
-            throw err;
+            console.log(`Order ${existing.order_number} successfully updated in Supabase cloud!`);
+          } catch (dbErr) {
+            console.error('Supabase status sync failed:', dbErr);
+            throw dbErr;
           }
         }
+
+        return updatedOrder;
       },
 
       // ─── Delete order ──────────────────────────────────────────────
@@ -310,7 +434,7 @@ export const useOrderStore = create<OrderStore>()(
               { event: '*', schema: 'public', table: 'orders' },
               (payload) => {
                 if (payload.eventType === 'INSERT') {
-                  const newRow = payload.new as DbOrder;
+                  const newRow = normalizeOrderTracking(payload.new as DbOrder);
                   set((state) => {
                     const exists = state.orders.some((o) => o.order_number === newRow.order_number);
                     if (exists) {
@@ -323,7 +447,7 @@ export const useOrderStore = create<OrderStore>()(
                     return { orders: [newRow, ...state.orders] };
                   });
                 } else if (payload.eventType === 'UPDATE') {
-                  const updatedRow = payload.new as DbOrder;
+                  const updatedRow = normalizeOrderTracking(payload.new as DbOrder);
                   set((state) => ({
                     orders: state.orders.map((o) =>
                       o.order_number === updatedRow.order_number || o.id === updatedRow.id

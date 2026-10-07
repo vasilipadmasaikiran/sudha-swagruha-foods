@@ -23,6 +23,13 @@ export interface SmtpSettings {
 }
 
 export interface StoreSettings {
+  // Business Branding & Identity (Requirement 14 & 15)
+  businessName: string;
+  websiteTitle: string;
+  tagline: string;
+  logoUrl: string;
+  footerText: string;
+
   // Contact & Business Info
   businessPhone: string;
   businessWhatsApp: string;
@@ -55,10 +62,10 @@ export const defaultSmtpSettings: SmtpSettings = {
   host: 'smtp.gmail.com',
   port: 587,
   secure: false,
-  username: 'info@sudhaswagruha.com',
+  username: 'info@sudhaswagruhafoods.com',
   password: '',
   senderName: 'Sudha Swagruha Foods',
-  senderEmail: 'orders@sudhaswagruha.com',
+  senderEmail: 'info@sudhaswagruhafoods.com',
   adminNotificationEmail: 'vasilisaikiran@gmail.com',
   notifyAdminOnNewOrder: true,
   resendApiKey: '',
@@ -66,9 +73,14 @@ export const defaultSmtpSettings: SmtpSettings = {
 };
 
 export const defaultSettings: StoreSettings = {
+  businessName: 'Sudha Swagruha Foods',
+  websiteTitle: 'Sudha Swagruha Foods • Authentic Andhra Delicacies',
+  tagline: 'Authentic Andhra Homemade Pickles, Podis & Traditional Sweets',
+  logoUrl: (import.meta.env.BASE_URL || '/') + 'logo/logo.jpg',
+  footerText: 'Authentic Traditional Delicacies prepared with Amma Chethi Prema.',
   businessPhone: '8374634989',
   businessWhatsApp: '8374634989',
-  businessEmail: 'info@sudhaswagruha.com',
+  businessEmail: 'info@sudhaswagruhafoods.com',
   businessAddress: 'Plot 18, Traditional Foods Lane, Benz Circle, Vijayawada, Andhra Pradesh - 520010',
   businessHours: '9:00 AM - 9:00 PM (All Days)',
   paymentGatewayEnabled: false,
@@ -76,6 +88,12 @@ export const defaultSettings: StoreSettings = {
   razorpayKeySecret: '',
   isTestMode: true,
   smtp: defaultSmtpSettings,
+};
+
+const syncDocTitle = (settings: StoreSettings) => {
+  if (typeof document !== 'undefined') {
+    document.title = settings.websiteTitle || settings.businessName || 'Sudha Swagruha Foods';
+  }
 };
 
 export const useSettingsStore = create<SettingsStore>()(
@@ -94,17 +112,25 @@ export const useSettingsStore = create<SettingsStore>()(
             .maybeSingle();
 
           if (!error && data?.value) {
-            set((state) => ({
-              settings: {
+            const remoteVal = data.value as Partial<StoreSettings>;
+            set((state) => {
+              const merged: StoreSettings = {
                 ...state.settings,
-                ...(data.value as Partial<StoreSettings>),
+                ...remoteVal,
+                businessName: remoteVal.businessName || state.settings.businessName || defaultSettings.businessName,
+                websiteTitle: remoteVal.websiteTitle || state.settings.websiteTitle || defaultSettings.websiteTitle,
+                tagline: remoteVal.tagline || state.settings.tagline || defaultSettings.tagline,
+                logoUrl: remoteVal.logoUrl || state.settings.logoUrl || defaultSettings.logoUrl,
+                footerText: remoteVal.footerText || state.settings.footerText || defaultSettings.footerText,
                 smtp: {
                   ...defaultSmtpSettings,
                   ...(state.settings.smtp || {}),
-                  ...((data.value as Partial<StoreSettings>)?.smtp || {}),
+                  ...(remoteVal.smtp || {}),
                 },
-              },
-            }));
+              };
+              syncDocTitle(merged);
+              return { settings: merged };
+            });
           }
         } catch (err) {
           console.warn('Store settings sync notice:', err);
@@ -123,17 +149,25 @@ export const useSettingsStore = create<SettingsStore>()(
               (payload) => {
                 const newRow = payload.new as any;
                 if (newRow?.key === 'store_contact' && newRow.value) {
-                  set((state) => ({
-                    settings: {
+                  const remoteVal = newRow.value as Partial<StoreSettings>;
+                  set((state) => {
+                    const merged: StoreSettings = {
                       ...state.settings,
-                      ...(newRow.value as Partial<StoreSettings>),
+                      ...remoteVal,
+                      businessName: remoteVal.businessName || state.settings.businessName || defaultSettings.businessName,
+                      websiteTitle: remoteVal.websiteTitle || state.settings.websiteTitle || defaultSettings.websiteTitle,
+                      tagline: remoteVal.tagline || state.settings.tagline || defaultSettings.tagline,
+                      logoUrl: remoteVal.logoUrl || state.settings.logoUrl || defaultSettings.logoUrl,
+                      footerText: remoteVal.footerText || state.settings.footerText || defaultSettings.footerText,
                       smtp: {
                         ...defaultSmtpSettings,
                         ...(state.settings.smtp || {}),
-                        ...((newRow.value as Partial<StoreSettings>)?.smtp || {}),
+                        ...(remoteVal.smtp || {}),
                       },
-                    },
-                  }));
+                    };
+                    syncDocTitle(merged);
+                    return { settings: merged };
+                  });
                 }
               }
             )
@@ -150,8 +184,9 @@ export const useSettingsStore = create<SettingsStore>()(
 
       // ─── Update Settings (Local + Cloud Sync) ─────────────────────
       updateSettings: (updates) => {
-        const next = { ...get().settings, ...updates };
+        const next: StoreSettings = { ...get().settings, ...updates };
         set({ settings: next });
+        syncDocTitle(next);
 
         if (isSupabaseConfigured()) {
           supabase
@@ -171,7 +206,7 @@ export const useSettingsStore = create<SettingsStore>()(
       // ─── Update SMTP Settings Specifically ────────────────────────
       updateSmtpSettings: (smtpUpdates) => {
         const current = get().settings;
-        const nextSmtp = { ...(current.smtp || defaultSmtpSettings), ...smtpUpdates };
+        const nextSmtp: SmtpSettings = { ...(current.smtp || defaultSmtpSettings), ...smtpUpdates };
         const nextSettings: StoreSettings = { ...current, smtp: nextSmtp };
         set({ settings: nextSettings });
 
@@ -192,6 +227,7 @@ export const useSettingsStore = create<SettingsStore>()(
 
       resetSettings: () => {
         set({ settings: defaultSettings });
+        syncDocTitle(defaultSettings);
         if (isSupabaseConfigured()) {
           supabase
             .from('store_settings')

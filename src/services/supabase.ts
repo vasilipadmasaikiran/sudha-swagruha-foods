@@ -116,6 +116,16 @@ export interface DbProduct {
   updated_at: string;
 }
 
+export interface OrderStatusHistoryItem {
+  status: DbOrder['order_status'];
+  timestamp: string;
+  updated_by?: string;
+  notes?: string;
+  tracking_id?: string;
+  courier_name?: string;
+  tracking_url?: string;
+}
+
 export interface DbOrder {
   id: string;
   order_number: string;
@@ -135,8 +145,98 @@ export interface DbOrder {
   customer_whatsapp: string;
   customer_email: string | null;
   notes: string | null;
+  // Compatibility & denormalized access
+  total_amount?: number;
+  customer_phone?: string;
+  city?: string;
+  pincode?: string;
+  state?: string;
+  // Tracking & Timeline Extensions (Requirements 2, 11, 12, 17)
+  tracking_id?: string | null;
+  courier_name?: string | null;
+  tracking_url?: string | null;
+  dispatched_at?: string | null;
+  order_status_history?: OrderStatusHistoryItem[];
   created_at: string;
   updated_at: string;
+}
+
+/**
+ * Extracts tracking details and history, handling both dedicated DB columns
+ * and encoded notes fallback for seamless backward compatibility.
+ */
+export function normalizeOrderTracking(rawOrder: DbOrder): DbOrder {
+  if (!rawOrder) return rawOrder;
+  const order = { ...rawOrder };
+
+  let extractedTrackingId = order.tracking_id || '';
+  let extractedCourier = order.courier_name || '';
+  let extractedUrl = order.tracking_url || '';
+  let extractedDispatchedAt = order.dispatched_at || '';
+  let extractedHistory: OrderStatusHistoryItem[] = Array.isArray(order.order_status_history)
+    ? [...order.order_status_history]
+    : [];
+
+  // Check for metadata encoded in notes: [SSF_TRACKING:{...}]
+  if (order.notes && order.notes.includes('[SSF_TRACKING:')) {
+    try {
+      const match = order.notes.match(/\[SSF_TRACKING:([\s\S]*?)\]/);
+      if (match && match[1]) {
+        const meta = JSON.parse(match[1]);
+        if (meta.tracking_id && !extractedTrackingId) extractedTrackingId = meta.tracking_id;
+        if (meta.courier_name && !extractedCourier) extractedCourier = meta.courier_name;
+        if (meta.tracking_url && !extractedUrl) extractedUrl = meta.tracking_url;
+        if (meta.dispatched_at && !extractedDispatchedAt) extractedDispatchedAt = meta.dispatched_at;
+        if (Array.isArray(meta.history) && extractedHistory.length === 0) {
+          extractedHistory = meta.history;
+        }
+      }
+    } catch (e) {
+      console.warn('Could not parse encoded tracking from notes', e);
+    }
+  }
+
+  // Ensure initial placed status is at least in history if history is empty
+  if (extractedHistory.length === 0) {
+    extractedHistory = [
+      {
+        status: 'placed',
+        timestamp: order.created_at || new Date().toISOString(),
+        notes: 'Order placed by customer',
+      },
+    ];
+    if (order.order_status !== 'placed') {
+      extractedHistory.push({
+        status: order.order_status,
+        timestamp: order.updated_at || new Date().toISOString(),
+        tracking_id: extractedTrackingId || undefined,
+        courier_name: extractedCourier || undefined,
+      });
+    }
+  }
+
+  // Auto-generate standard tracking URL if courier is specified
+  if (extractedTrackingId && !extractedUrl) {
+    const trk = extractedTrackingId.trim();
+    if (extractedCourier.toLowerCase().includes('delhivery')) {
+      extractedUrl = `https://www.delhivery.com/track/package/${trk}`;
+    } else if (extractedCourier.toLowerCase().includes('dtdc')) {
+      extractedUrl = `https://www.dtdc.in/tracking.asp?strCnno=${trk}`;
+    } else if (extractedCourier.toLowerCase().includes('bluedart')) {
+      extractedUrl = `https://www.bluedart.com/tracking?numbers=${trk}`;
+    } else if (extractedCourier.toLowerCase().includes('indiapost') || extractedCourier.toLowerCase().includes('speed post')) {
+      extractedUrl = `https://www.indiapost.gov.in/_layouts/15/dpt.cept.tracking/trackconsignment.aspx`;
+    }
+  }
+
+  return {
+    ...order,
+    tracking_id: extractedTrackingId || null,
+    courier_name: extractedCourier || null,
+    tracking_url: extractedUrl || null,
+    dispatched_at: extractedDispatchedAt || (order.order_status === 'shipped' ? order.updated_at : null),
+    order_status_history: extractedHistory,
+  };
 }
 
 export interface OrderItem {
@@ -207,12 +307,54 @@ export const productService = {
 };
 
 // ─── Order Service ────────────────────────────────────────────
+// REQUIREMENT 2: Supabase database is ONE authoritative source of truth.
 export const orderService = {
-  async getByOrderNumberAndMobile(orderNumber: string, mobile?: string) {
+  async getByOrderNumberAndMobile(orderNumber: string, mobile?: string): Promise<DbOrder> {
     const cleanNum = orderNumber.trim().toUpperCase();
     const cleanMob = mobile?.trim();
 
-    // 1. Check local storage order store first (instant response for customer placed orders)
+    // 1. PRIMARY SOURCE OF TRUTH: Query Supabase cloud database directly
+    if (isSupabaseConfigured()) {
+      try {
+        let query = supabase.from('orders').select('*').ilike('order_number', cleanNum);
+        if (cleanMob && cleanMob.length > 0) {
+          query = query.eq('customer_mobile', cleanMob);
+        }
+        const { data, error } = await query.maybeSingle();
+        if (!error && data) {
+          const normalized = normalizeOrderTracking(data as DbOrder);
+
+          // Update local storage store so local cache reflects the latest cloud truth
+          try {
+            if (typeof window !== 'undefined') {
+              const stored = localStorage.getItem('ssf-orders');
+              if (stored) {
+                const parsed = JSON.parse(stored);
+                if (Array.isArray(parsed?.state?.orders)) {
+                  const existingIdx = parsed.state.orders.findIndex(
+                    (o: DbOrder) => o.order_number.trim().toUpperCase() === cleanNum
+                  );
+                  if (existingIdx >= 0) {
+                    parsed.state.orders[existingIdx] = normalized;
+                  } else {
+                    parsed.state.orders.unshift(normalized);
+                  }
+                  localStorage.setItem('ssf-orders', JSON.stringify(parsed));
+                }
+              }
+            }
+          } catch (storageErr) {
+            console.warn('Local cache sync notice:', storageErr);
+          }
+
+          return normalized;
+        }
+      } catch (dbErr) {
+        console.warn('Supabase order lookup failed, trying local fallback:', dbErr);
+      }
+    }
+
+    // 2. FALLBACK ONLY: Check local storage order store if database unreachable
     try {
       if (typeof window !== 'undefined') {
         const stored = localStorage.getItem('ssf-orders');
@@ -224,7 +366,7 @@ export const orderService = {
               (o) => o.order_number.trim().toUpperCase() === cleanNum
             );
             if (match) {
-              return match;
+              return normalizeOrderTracking(match);
             }
           }
         }
@@ -233,16 +375,7 @@ export const orderService = {
       console.warn('Local order storage lookup error:', e);
     }
 
-    // 2. Query Supabase
-    let query = supabase.from('orders').select('*').eq('order_number', cleanNum);
-    if (cleanMob && cleanMob.length > 0) {
-      query = query.eq('customer_mobile', cleanMob);
-    }
-    const { data, error } = await query.maybeSingle();
-    if (error || !data) {
-      throw new Error('Order not found');
-    }
-    return data as DbOrder;
+    throw new Error('Order not found');
   },
 
   async getByCustomer(customerId: string) {

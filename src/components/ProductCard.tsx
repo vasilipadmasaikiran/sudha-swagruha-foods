@@ -9,6 +9,7 @@ import toast from 'react-hot-toast';
 import { useCartStore, useLanguageStore } from '@/hooks/useStore';
 import { translations } from '@/i18n/translations';
 import type { Product } from '@/data/products';
+import AppImage from '@/components/common/AppImage';
 
 interface ProductCardProps {
   product: Product;
@@ -56,12 +57,12 @@ export default function ProductCard({ product, index = 0 }: ProductCardProps) {
     >
       <Link to={`/products/${product.slug}`} className="block">
         {/* Image */}
-        <div className="relative overflow-hidden bg-brand-light-green">
-          <img
-            src={product.images[0]}
+        <div className="relative overflow-hidden bg-brand-light-green h-52">
+          <AppImage
+            src={product.images?.[0]}
             alt={product.name_en}
             className="w-full h-52 object-cover transition-transform duration-500 hover:scale-105"
-            loading="lazy"
+            containerClassName="w-full h-52"
           />
           {/* Badges */}
           <div className="absolute top-3 left-3 flex gap-2">

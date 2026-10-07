@@ -1,14 +1,15 @@
 // ============================================================
-// Order Tracking Page
+// Order Tracking Page - Realtime Synchronization & Timeline History
+// Implements Requirements 2, 3, 11, 12, 17
 // ============================================================
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
-import { motion } from 'framer-motion';
+import { motion, AnimatePresence } from 'framer-motion';
 import {
   Search,
   Package,
-  CheckCircle,
+  CheckCircle2,
   Truck,
   Home,
   ChefHat,
@@ -16,13 +17,21 @@ import {
   RefreshCw,
   Phone,
   Clock,
+  ExternalLink,
+  Copy,
+  Check,
+  AlertCircle,
+  Radio,
+  MapPin,
+  Calendar,
 } from 'lucide-react';
 import { useLanguageStore } from '@/hooks/useStore';
 import { useOrderStore } from '@/hooks/useOrderStore';
 import { useSettingsStore } from '@/hooks/useSettingsStore';
 import { translations } from '@/i18n/translations';
-import { orderService } from '@/services/supabase';
+import { orderService, supabase, isSupabaseConfigured, normalizeOrderTracking } from '@/services/supabase';
 import type { DbOrder } from '@/services/supabase';
+import toast from 'react-hot-toast';
 
 interface TrackForm {
   orderNumber: string;
@@ -31,10 +40,10 @@ interface TrackForm {
 
 const ORDER_STATUSES = [
   { key: 'placed', icon: CartIcon, label: 'Order Placed', labelTe: 'ఆర్డర్ చేయబడింది', emoji: '🛒' },
-  { key: 'confirmed', icon: CheckCircle, label: 'Confirmed', labelTe: 'నిర్ధారించబడింది', emoji: '✅' },
-  { key: 'preparing', icon: ChefHat, label: 'Preparing', labelTe: 'తయారు చేస్తోంది', emoji: '👩‍🍳' },
-  { key: 'packed', icon: Package, label: 'Packed', labelTe: 'ప్యాక్ చేయబడింది', emoji: '📦' },
-  { key: 'shipped', icon: Truck, label: 'Shipped', labelTe: 'పంపబడింది', emoji: '🚚' },
+  { key: 'confirmed', icon: CheckCircle2, label: 'Order Confirmed', labelTe: 'నిర్ధారించబడింది', emoji: '✅' },
+  { key: 'preparing', icon: ChefHat, label: 'Preparing Delicacies', labelTe: 'తయారు చేస్తోంది', emoji: '👩‍🍳' },
+  { key: 'packed', icon: Package, label: 'Packed & Inspected', labelTe: 'ప్యాక్ చేయబడింది', emoji: '📦' },
+  { key: 'shipped', icon: Truck, label: 'Dispatched / In Transit', labelTe: 'పంపబడింది / రవాణాలో ఉంది', emoji: '🚚' },
   { key: 'delivered', icon: Home, label: 'Delivered', labelTe: 'డెలివరీ అయింది', emoji: '🏠' },
 ] as const;
 
@@ -45,6 +54,7 @@ const STATUS_INDEX: Record<string, number> = {
   packed: 3,
   shipped: 4,
   delivered: 5,
+  cancelled: -1,
 };
 
 export default function TrackOrderPage() {
@@ -54,120 +64,190 @@ export default function TrackOrderPage() {
   const { settings } = useSettingsStore();
   const t = translations[language];
 
-  const [trackedOrderNumber, setTrackedOrderNumber] = useState<string>('');
+  const [activeOrder, setActiveOrder] = useState<DbOrder | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [copiedTracking, setCopiedTracking] = useState(false);
+  const [lastRefreshedAt, setLastRefreshedAt] = useState<Date>(new Date());
+  const [isLiveConnected, setIsLiveConnected] = useState<boolean>(true);
 
   const { register, handleSubmit, setValue } = useForm<TrackForm>();
+  const activeOrderNumberRef = useRef<string>('');
 
-  // Check URL query param e.g. /track-order?order=SSF-20261005-1234
+  // Fetch live order directly from authoritative Supabase cloud database
+  const fetchAuthoritativeOrder = useCallback(async (orderNumber: string, mobile?: string, silent = false) => {
+    const cleanNum = orderNumber.trim().toUpperCase();
+    if (!cleanNum) return;
+
+    if (!silent) setLoading(true);
+    setError('');
+
+    try {
+      const order = await orderService.getByOrderNumberAndMobile(cleanNum, mobile);
+      setActiveOrder(order);
+      activeOrderNumberRef.current = order.order_number;
+      setLastRefreshedAt(new Date());
+    } catch {
+      if (!silent) {
+        setError(t.tracking.notFound);
+        setActiveOrder(null);
+      }
+    } finally {
+      if (!silent) setLoading(false);
+    }
+  }, [t.tracking.notFound]);
+
+  // Read URL query parameter e.g. /track-order?order=SSF-20261005-1234
   useEffect(() => {
     const orderFromQuery = searchParams.get('order');
     if (orderFromQuery) {
-      setValue('orderNumber', orderFromQuery);
-      handleTrackOrder(orderFromQuery);
+      const clean = orderFromQuery.trim().toUpperCase();
+      setValue('orderNumber', clean);
+      fetchAuthoritativeOrder(clean);
     }
-  }, [searchParams, setValue]);
+  }, [searchParams, setValue, fetchAuthoritativeOrder]);
 
-  const handleTrackOrder = async (orderNumber: string, mobile?: string) => {
-    if (!orderNumber.trim()) return;
-    setLoading(true);
-    setError('');
+  // ─── Realtime Synchronization (Requirement 3) ──────────────────────
+  // Listens directly for Postgres UPDATE on this specific order record
+  useEffect(() => {
+    if (!activeOrder?.order_number || !isSupabaseConfigured()) return;
 
-    const cleanNum = orderNumber.trim().toUpperCase();
-    const cleanMob = mobile?.trim();
+    const currentOrderNum = activeOrder.order_number;
+    const channelName = `realtime_order_${currentOrderNum.replace(/[^a-zA-Z0-9]/g, '_')}`;
 
     try {
-      // 1. First look in live zustand orders
-      const local = orders.find(
-        (o) => o.order_number.trim().toUpperCase() === cleanNum
-      );
-      if (local) {
-        setTrackedOrderNumber(local.order_number);
-        setLoading(false);
-        return;
-      }
+      const channel = supabase
+        .channel(channelName)
+        .on(
+          'postgres_changes',
+          {
+            event: 'UPDATE',
+            schema: 'public',
+            table: 'orders',
+            filter: `order_number=eq.${currentOrderNum}`,
+          },
+          (payload) => {
+            if (payload.new) {
+              const updated = normalizeOrderTracking(payload.new as DbOrder);
+              setActiveOrder(updated);
+              setLastRefreshedAt(new Date());
+              toast.success(`Order update received! Status: ${updated.order_status.toUpperCase()}`, {
+                icon: '🔔',
+                duration: 5000,
+              });
+            }
+          }
+        )
+        .subscribe((status) => {
+          setIsLiveConnected(status === 'SUBSCRIBED');
+        });
 
-      // 2. Query service
-      const result = await orderService.getByOrderNumberAndMobile(cleanNum, cleanMob);
-      if (result) {
-        setTrackedOrderNumber(result.order_number);
-      } else {
-        setError(t.tracking.notFound);
-      }
-    } catch {
-      setError(t.tracking.notFound);
-    } finally {
-      setLoading(false);
+      return () => {
+        supabase.removeChannel(channel);
+      };
+    } catch (err) {
+      console.warn('Realtime channel subscription error:', err);
+      setIsLiveConnected(false);
     }
-  };
+  }, [activeOrder?.order_number]);
+
+  // ─── Safe Fallback Polling Mechanism (Requirement 3) ───────────────
+  // Automatically polls every 8 seconds if an order is currently tracked
+  useEffect(() => {
+    if (!activeOrder?.order_number) return;
+
+    const interval = setInterval(() => {
+      if (activeOrderNumberRef.current) {
+        fetchAuthoritativeOrder(activeOrderNumberRef.current, undefined, true);
+      }
+    }, 8000);
+
+    return () => clearInterval(interval);
+  }, [activeOrder?.order_number, fetchAuthoritativeOrder]);
 
   const onTrack = (data: TrackForm) => {
-    handleTrackOrder(data.orderNumber, data.mobile);
+    fetchAuthoritativeOrder(data.orderNumber, data.mobile);
   };
 
-  // Find live order from zustand store so changes in Admin console update automatically!
-  const currentOrder = orders.find(
-    (o) => o.order_number.trim().toUpperCase() === trackedOrderNumber.trim().toUpperCase()
-  );
+  const handleCopyTracking = (id: string) => {
+    navigator.clipboard.writeText(id);
+    setCopiedTracking(true);
+    toast.success('Tracking ID copied to clipboard!');
+    setTimeout(() => setCopiedTracking(false), 2000);
+  };
 
-  const currentStatusIdx = currentOrder
-    ? STATUS_INDEX[currentOrder.order_status] ?? 0
+  const currentStatusIdx = activeOrder
+    ? STATUS_INDEX[activeOrder.order_status] ?? 0
     : -1;
 
   return (
     <div className="page-enter min-h-screen bg-brand-cream">
-      <div className="bg-brand-green py-12 px-4">
-        <div className="max-w-2xl mx-auto text-center">
+      {/* Header Banner */}
+      <div className="bg-brand-green py-10 px-4">
+        <div className="max-w-3xl mx-auto text-center">
+          <motion.div
+            initial={{ opacity: 0, scale: 0.9 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="inline-flex items-center gap-2 bg-white/10 text-white/90 px-3.5 py-1 rounded-full text-xs font-semibold mb-3 border border-white/20"
+          >
+            <Radio className="w-3.5 h-3.5 text-emerald-300 animate-pulse" />
+            <span>Live Order Tracking System</span>
+          </motion.div>
           <motion.h1
-            initial={{ opacity: 0, y: 20 }}
+            initial={{ opacity: 0, y: 15 }}
             animate={{ opacity: 1, y: 0 }}
             className="font-display text-3xl md:text-4xl font-bold text-white mb-2"
           >
             {t.tracking.title}
           </motion.h1>
-          <p className="text-green-200">
-            Enter your order ID to track the real-time status of your homemade delicacies
+          <p className="text-green-100 text-sm max-w-lg mx-auto">
+            Live updates directly synchronized with our kitchen & logistics.
           </p>
         </div>
       </div>
 
-      <div className="max-w-2xl mx-auto px-4 sm:px-6 py-10">
-        {/* Search Form */}
+      <div className="max-w-3xl mx-auto px-4 sm:px-6 py-8">
+        {/* Search Form Card */}
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
-          className="bg-white rounded-2xl shadow-card p-6 mb-8 border border-gray-100"
+          className="bg-white rounded-3xl shadow-card p-6 md:p-8 mb-8 border border-gray-100"
         >
           <form onSubmit={handleSubmit(onTrack)} className="space-y-4">
             <div>
-              <label className="block text-sm font-semibold text-gray-700 mb-1.5">
+              <label className="block text-xs font-bold uppercase tracking-wider text-gray-700 mb-1.5">
                 {t.tracking.orderNumber} *
               </label>
-              <input
-                {...register('orderNumber', { required: true })}
-                className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:outline-none focus:border-brand-green uppercase font-mono tracking-wider transition-all"
-                placeholder="e.g. SSF-20261005-00101"
-              />
+              <div className="relative">
+                <input
+                  {...register('orderNumber', { required: true })}
+                  className="w-full pl-4 pr-10 py-3.5 border border-gray-200 rounded-2xl focus:outline-none focus:border-brand-green focus:ring-2 focus:ring-brand-green/20 uppercase font-mono tracking-wider text-sm transition-all text-gray-900 font-semibold"
+                  placeholder="e.g. SSF-20261006-6578"
+                />
+                <Search className="w-5 h-5 text-gray-400 absolute right-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+              </div>
             </div>
+
             <div>
-              <label className="block text-sm font-semibold text-gray-700 mb-1.5 flex justify-between">
-                <span>{t.tracking.mobileNumber}</span>
-                <span className="text-xs text-gray-400 font-normal">(Optional)</span>
-              </label>
+              <div className="flex justify-between items-center mb-1.5">
+                <label className="block text-xs font-bold uppercase tracking-wider text-gray-700">
+                  {t.tracking.mobileNumber}
+                </label>
+                <span className="text-[11px] text-gray-400">(Optional for direct lookup)</span>
+              </div>
               <input
                 {...register('mobile')}
-                className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:outline-none focus:border-brand-green transition-all"
+                className="w-full px-4 py-3 border border-gray-200 rounded-2xl focus:outline-none focus:border-brand-green text-sm transition-all text-gray-800"
                 placeholder="10-digit mobile number"
                 type="tel"
                 maxLength={10}
               />
             </div>
 
-            {/* Quick Chips for Existing Orders */}
+            {/* Quick Sample Order Pills */}
             {orders.length > 0 && (
-              <div className="pt-1">
-                <p className="text-xs text-gray-400 mb-2 font-medium">Recent Sample Orders:</p>
+              <div className="pt-2">
+                <p className="text-[11px] text-gray-400 mb-2 font-medium">Quick Select Sample Orders:</p>
                 <div className="flex flex-wrap gap-2">
                   {orders.slice(0, 3).map((o) => (
                     <button
@@ -176,11 +256,12 @@ export default function TrackOrderPage() {
                       onClick={() => {
                         setValue('orderNumber', o.order_number);
                         if (o.customer_mobile) setValue('mobile', o.customer_mobile);
-                        handleTrackOrder(o.order_number, o.customer_mobile);
+                        fetchAuthoritativeOrder(o.order_number, o.customer_mobile);
                       }}
-                      className="text-xs bg-brand-light-green text-brand-green border border-brand-green/30 px-2.5 py-1 rounded-lg font-mono hover:bg-brand-green hover:text-white transition-colors"
+                      className="text-xs bg-brand-light-green/80 text-brand-green border border-brand-green/30 px-3 py-1.5 rounded-xl font-mono hover:bg-brand-green hover:text-white transition-all cursor-pointer flex items-center gap-1.5"
                     >
-                      {o.order_number} ({o.order_status})
+                      <span>{o.order_number}</span>
+                      <span className="text-[10px] uppercase font-bold opacity-75">({o.order_status})</span>
                     </button>
                   ))}
                 </div>
@@ -190,14 +271,14 @@ export default function TrackOrderPage() {
             <button
               type="submit"
               disabled={loading}
-              className="w-full bg-brand-green text-white py-3.5 rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-brand-green-dark transition-colors shadow-green-glow disabled:opacity-60 cursor-pointer"
+              className="w-full bg-brand-green text-white py-4 rounded-2xl font-bold text-sm flex items-center justify-center gap-2 hover:bg-brand-green-dark transition-all shadow-green-glow disabled:opacity-60 cursor-pointer"
             >
               {loading ? (
                 <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
               ) : (
                 <Search className="w-5 h-5" />
               )}
-              {t.tracking.track}
+              <span>{loading ? 'Fetching Live Status...' : t.tracking.track}</span>
             </button>
           </form>
 
@@ -205,215 +286,360 @@ export default function TrackOrderPage() {
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
-              className="mt-4 p-3 bg-red-50 border border-red-200 rounded-xl text-brand-red text-sm text-center"
+              className="mt-4 p-4 bg-red-50 border border-red-200 rounded-2xl text-brand-red text-sm flex items-start gap-3"
             >
-              <p className="font-semibold">{error}</p>
-              <p className="text-xs text-gray-600 mt-1">
-                Please verify your Order Number or contact WhatsApp support at{' '}
-                <a
-                  href={`https://wa.me/91${settings.businessWhatsApp}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="font-bold underline text-brand-green"
-                >
-                  +91 {settings.businessWhatsApp}
-                </a>
-              </p>
+              <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5 text-red-500" />
+              <div>
+                <p className="font-semibold">{error}</p>
+                <p className="text-xs text-gray-600 mt-0.5">
+                  Need help? Contact WhatsApp support at{' '}
+                  <a
+                    href={`https://wa.me/91${settings.businessWhatsApp}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="font-bold underline text-brand-green"
+                  >
+                    +91 {settings.businessWhatsApp}
+                  </a>
+                </p>
+              </div>
             </motion.div>
           )}
         </motion.div>
 
-        {/* Live Order Status Display */}
-        {currentOrder && (
-          <motion.div
-            initial={{ opacity: 0, y: 30 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.4 }}
-            className="space-y-6"
-          >
-            {/* Order Info Card */}
-            <div className="bg-white rounded-2xl shadow-card p-6 border border-gray-100">
-              <div className="flex flex-wrap justify-between items-start gap-3 mb-4">
-                <div>
-                  <p className="text-xs text-gray-500 uppercase tracking-wider font-semibold">
-                    Order Number
-                  </p>
-                  <p className="font-bold text-brand-green text-2xl font-mono">
-                    {currentOrder.order_number}
-                  </p>
-                  <p className="text-xs text-gray-400 mt-1 flex items-center gap-1">
-                    <Clock className="w-3.5 h-3.5" />
-                    Placed on {new Date(currentOrder.created_at).toLocaleString()}
-                  </p>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span
-                    className={`px-3 py-1 rounded-full text-xs font-bold uppercase ${
-                      currentOrder.order_status === 'delivered'
-                        ? 'bg-green-100 text-green-700'
-                        : currentOrder.order_status === 'cancelled'
-                        ? 'bg-red-100 text-red-700'
-                        : 'bg-amber-100 text-amber-800'
-                    }`}
+        {/* ─── AUTHORITATIVE LIVE ORDER DETAILS (Requirements 2, 3, 11, 12) ─── */}
+        <AnimatePresence>
+          {activeOrder && (
+            <motion.div
+              initial={{ opacity: 0, y: 30 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 30 }}
+              transition={{ duration: 0.4 }}
+              className="space-y-6"
+            >
+              {/* Order Header & Status Card */}
+              <div className="bg-white rounded-3xl shadow-card p-6 md:p-8 border border-gray-100 relative overflow-hidden">
+                {/* Live Pulse Indicator Badge */}
+                <div className="flex flex-wrap items-center justify-between gap-3 mb-6 pb-4 border-b border-gray-100">
+                  <div className="flex items-center gap-2">
+                    <span
+                      className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold ${
+                        isLiveConnected
+                          ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                          : 'bg-amber-100 text-amber-800 border border-amber-300'
+                      }`}
+                    >
+                      <span className={`w-2 h-2 rounded-full ${isLiveConnected ? 'bg-emerald-500 animate-ping' : 'bg-amber-500'}`} />
+                      <span>{isLiveConnected ? 'Live Synchronized' : 'Polling Sync'}</span>
+                    </span>
+                    <span className="text-[11px] text-gray-400">
+                      Updated {lastRefreshedAt.toLocaleTimeString()}
+                    </span>
+                  </div>
+
+                  <button
+                    onClick={() => fetchAuthoritativeOrder(activeOrder.order_number, undefined)}
+                    disabled={loading}
+                    className="inline-flex items-center gap-1.5 text-xs text-brand-green font-semibold hover:text-brand-green-dark cursor-pointer bg-brand-light-green/60 px-3 py-1 rounded-xl"
                   >
-                    Status: {currentOrder.order_status.toUpperCase()}
-                  </span>
+                    <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
+                    <span>Refresh Now</span>
+                  </button>
                 </div>
-              </div>
 
-              <div className="grid sm:grid-cols-2 gap-4 text-sm pt-4 border-t border-gray-100">
-                <div>
-                  <p className="text-gray-500 text-xs">Customer Name</p>
-                  <p className="font-semibold text-gray-800">{currentOrder.customer_name}</p>
-                </div>
-                <div>
-                  <p className="text-gray-500 text-xs">Total Amount</p>
-                  <p className="font-bold text-brand-green text-lg">₹{currentOrder.total}</p>
-                </div>
-                <div>
-                  <p className="text-gray-500 text-xs">Delivery To</p>
-                  <p className="font-medium text-gray-700">
-                    {currentOrder.delivery_address.city}, {currentOrder.delivery_address.state}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-gray-500 text-xs">PIN Code</p>
-                  <p className="font-medium text-gray-700">{currentOrder.delivery_address.pincode}</p>
-                </div>
-              </div>
+                {/* Order ID & Status Header */}
+                <div className="flex flex-wrap justify-between items-start gap-4 mb-6">
+                  <div>
+                    <p className="text-xs uppercase font-bold text-gray-400 tracking-wider">
+                      Authoritative Order ID
+                    </p>
+                    <p className="font-mono text-2xl md:text-3xl font-extrabold text-brand-green tracking-tight">
+                      {activeOrder.order_number}
+                    </p>
+                    <p className="text-xs text-gray-500 mt-1 flex items-center gap-1.5">
+                      <Clock className="w-3.5 h-3.5 text-gray-400" />
+                      <span>Placed on {new Date(activeOrder.created_at).toLocaleString()}</span>
+                    </p>
+                  </div>
 
-              {currentOrder.notes && (
-                <div className="mt-3 p-3 bg-yellow-50 rounded-xl text-xs text-yellow-800 border border-yellow-200">
-                  <span className="font-semibold">Order Notes:</span> {currentOrder.notes}
+                  <div className="text-right">
+                    <span
+                      className={`inline-block px-4 py-1.5 rounded-2xl text-xs font-black uppercase tracking-wider ${
+                        activeOrder.order_status === 'delivered'
+                          ? 'bg-emerald-500 text-white shadow-emerald-500/20 shadow-md'
+                          : activeOrder.order_status === 'shipped'
+                          ? 'bg-purple-600 text-white shadow-purple-600/20 shadow-md'
+                          : activeOrder.order_status === 'cancelled'
+                          ? 'bg-red-500 text-white'
+                          : 'bg-amber-500 text-white shadow-amber-500/20 shadow-md'
+                      }`}
+                    >
+                      Status: {activeOrder.order_status.toUpperCase()}
+                    </span>
+                    <p className="text-xs font-bold text-gray-700 mt-1.5">
+                      Total: ₹{activeOrder.total} ({activeOrder.payment_status === 'paid' ? 'Paid' : 'Pending / COD'})
+                    </p>
+                  </div>
                 </div>
-              )}
-            </div>
 
-            {/* Status Timeline */}
-            <div className="bg-white rounded-2xl shadow-card p-6 border border-gray-100">
-              <div className="flex items-center justify-between mb-6">
-                <h3 className="font-bold text-gray-900 text-lg">Order Progress</h3>
-                <span className="text-xs bg-brand-light-green text-brand-green font-semibold px-2.5 py-1 rounded-full flex items-center gap-1">
-                  <RefreshCw className="w-3 h-3 animate-spin" /> Live Updates
-                </span>
-              </div>
-
-              <div className="relative">
-                {ORDER_STATUSES.map((status, idx) => {
-                  const isCompleted = idx <= currentStatusIdx;
-                  const isCurrent = idx === currentStatusIdx;
-                  return (
-                    <div key={status.key} className="flex gap-4 mb-4 last:mb-0">
-                      {/* Icon & Line */}
-                      <div className="flex flex-col items-center">
-                        <div
-                          className={`w-11 h-11 rounded-full flex items-center justify-center text-lg flex-shrink-0 transition-all ${
-                            isCompleted
-                              ? isCurrent
-                                ? 'bg-brand-green text-white shadow-green-glow scale-110 ring-4 ring-brand-green/20'
-                                : 'bg-green-100 text-green-700'
-                              : 'bg-gray-100 text-gray-400'
-                          }`}
-                        >
-                          {isCurrent ? (
-                            <motion.span
-                              animate={{ scale: [1, 1.25, 1] }}
-                              transition={{ duration: 1.5, repeat: Infinity }}
-                            >
-                              {status.emoji}
-                            </motion.span>
-                          ) : (
-                            status.emoji
-                          )}
+                {/* ─── REQUIREMENT 11: DISPATCH & TRACKING ID HIGHLIGHT BOX ─── */}
+                {(activeOrder.order_status === 'shipped' || activeOrder.tracking_id) && (
+                  <motion.div
+                    initial={{ opacity: 0, scale: 0.98 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    className="my-6 p-5 bg-gradient-to-br from-purple-50 via-indigo-50/50 to-blue-50 border-2 border-purple-200/80 rounded-2xl shadow-sm space-y-3"
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div className="flex items-center gap-2.5">
+                        <div className="w-9 h-9 rounded-xl bg-purple-600 text-white flex items-center justify-center shadow-md">
+                          <Truck className="w-5 h-5" />
                         </div>
-                        {idx < ORDER_STATUSES.length - 1 && (
-                          <div
-                            className={`w-0.5 h-10 mt-1 rounded-full transition-all ${
-                              idx < currentStatusIdx ? 'bg-brand-green' : 'bg-gray-200'
-                            }`}
-                          />
+                        <div>
+                          <p className="text-xs font-black uppercase text-purple-900 tracking-wider">
+                            Package Dispatched / Tracking Details
+                          </p>
+                          <p className="text-xs text-purple-700">
+                            Carrier:{' '}
+                            <strong className="text-purple-950 font-bold">
+                              {activeOrder.courier_name || 'Standard Courier'}
+                            </strong>
+                          </p>
+                        </div>
+                      </div>
+
+                      {activeOrder.dispatched_at && (
+                        <div className="text-right">
+                          <p className="text-[11px] text-purple-600">Dispatched On</p>
+                          <p className="text-xs font-semibold text-purple-900">
+                            {new Date(activeOrder.dispatched_at).toLocaleDateString()} •{' '}
+                            {new Date(activeOrder.dispatched_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                          </p>
+                        </div>
+                      )}
+                    </div>
+
+                    {activeOrder.tracking_id ? (
+                      <div className="flex flex-wrap items-center gap-2 pt-1">
+                        <div className="flex items-center gap-2 bg-white px-3.5 py-2 rounded-xl border border-purple-200 font-mono text-sm font-bold text-purple-950 shadow-inner">
+                          <span>Tracking ID: {activeOrder.tracking_id}</span>
+                          <button
+                            type="button"
+                            onClick={() => handleCopyTracking(activeOrder.tracking_id!)}
+                            className="p-1 hover:bg-purple-100 rounded text-purple-700 transition-colors cursor-pointer"
+                            title="Copy Tracking ID"
+                          >
+                            {copiedTracking ? <Check className="w-4 h-4 text-emerald-600" /> : <Copy className="w-4 h-4" />}
+                          </button>
+                        </div>
+
+                        {activeOrder.tracking_url && (
+                          <a
+                            href={activeOrder.tracking_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-purple-700 hover:bg-purple-800 text-white font-bold text-xs shadow-sm transition-colors cursor-pointer"
+                          >
+                            <span>Track on Courier Site</span>
+                            <ExternalLink className="w-3.5 h-3.5" />
+                          </a>
                         )}
                       </div>
+                    ) : (
+                      <p className="text-xs text-purple-700 italic">
+                        Tracking ID will be assigned shortly by the dispatch team.
+                      </p>
+                    )}
+                  </motion.div>
+                )}
 
-                      {/* Label */}
-                      <div className="pt-2">
-                        <div className="flex items-center gap-2">
-                          <p
-                            className={`font-semibold text-sm ${
-                              isCurrent
-                                ? 'text-brand-green text-base'
-                                : isCompleted
-                                ? 'text-gray-800'
-                                : 'text-gray-400'
+                {/* Customer Delivery Details */}
+                <div className="grid sm:grid-cols-2 gap-4 text-xs pt-4 border-t border-gray-100">
+                  <div>
+                    <p className="text-gray-400 font-medium">Customer Recipient</p>
+                    <p className="font-bold text-gray-800 text-sm">{activeOrder.customer_name}</p>
+                    <p className="text-gray-600 font-mono">📞 {activeOrder.customer_mobile}</p>
+                  </div>
+                  <div>
+                    <p className="text-gray-400 font-medium">Delivery Destination</p>
+                    <p className="font-semibold text-gray-800">
+                      {activeOrder.delivery_address.house_no}, {activeOrder.delivery_address.street}
+                    </p>
+                    <p className="text-gray-600">
+                      {activeOrder.delivery_address.city}, {activeOrder.delivery_address.state} -{' '}
+                      <strong>{activeOrder.delivery_address.pincode}</strong>
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* ─── REQUIREMENT 12 & 17: REALTIME TIMELINE & STATUS HISTORY ─── */}
+              <div className="bg-white rounded-3xl shadow-card p-6 md:p-8 border border-gray-100">
+                <div className="flex items-center justify-between mb-6 pb-2 border-b border-gray-100">
+                  <div>
+                    <h3 className="font-bold text-gray-900 text-lg">Order Progress Timeline</h3>
+                    <p className="text-xs text-gray-400">
+                      Driven by actual order milestones & status history
+                    </p>
+                  </div>
+                  <span className="text-xs bg-brand-light-green text-brand-green font-bold px-3 py-1 rounded-full flex items-center gap-1">
+                    <CheckCircle2 className="w-3.5 h-3.5" /> Stage {Math.min(currentStatusIdx + 1, 6)} of 6
+                  </span>
+                </div>
+
+                <div className="relative pl-2">
+                  {ORDER_STATUSES.map((status, idx) => {
+                    const isCompleted = idx <= currentStatusIdx;
+                    const isCurrent = idx === currentStatusIdx;
+                    const isUpcoming = idx > currentStatusIdx;
+
+                    // Match history record for this milestone if available
+                    const historyRecord = activeOrder.order_status_history?.find(
+                      (h) => h.status === status.key
+                    );
+
+                    return (
+                      <div key={status.key} className="flex gap-4 mb-6 last:mb-0 relative group">
+                        {/* Connecting Vertical Line */}
+                        <div className="flex flex-col items-center">
+                          <div
+                            className={`w-11 h-11 rounded-2xl flex items-center justify-center text-lg flex-shrink-0 transition-all duration-300 ${
+                              isCompleted
+                                ? isCurrent
+                                  ? 'bg-brand-green text-white shadow-green-glow scale-110 ring-4 ring-brand-green/20'
+                                  : 'bg-emerald-100 text-emerald-800'
+                                : 'bg-gray-100 text-gray-400 border border-gray-200'
                             }`}
                           >
-                            {language === 'te' ? status.labelTe : status.label}
-                          </p>
-                          {isCurrent && (
-                            <span className="text-xs bg-brand-green text-white font-bold px-2 py-0.5 rounded-full animate-pulse">
-                              Current Status
-                            </span>
+                            {isCurrent ? (
+                              <motion.span
+                                animate={{ scale: [1, 1.2, 1] }}
+                                transition={{ duration: 1.5, repeat: Infinity }}
+                              >
+                                {status.emoji}
+                              </motion.span>
+                            ) : (
+                              status.emoji
+                            )}
+                          </div>
+                          {idx < ORDER_STATUSES.length - 1 && (
+                            <div
+                              className={`w-0.5 h-12 mt-2 rounded-full transition-all duration-500 ${
+                                idx < currentStatusIdx ? 'bg-brand-green' : 'bg-gray-200'
+                              }`}
+                            />
                           )}
                         </div>
-                        <p className="text-xs text-gray-400 mt-0.5">
-                          {isCompleted
-                            ? isCurrent
-                              ? 'Your order is currently at this stage'
-                              : 'Completed'
-                            : 'Upcoming stage'}
+
+                        {/* Milestone Content */}
+                        <div className="pt-1.5 flex-1">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <p
+                              className={`font-bold text-sm ${
+                                isCurrent
+                                  ? 'text-brand-green text-base'
+                                  : isCompleted
+                                  ? 'text-gray-900'
+                                  : 'text-gray-400'
+                              }`}
+                            >
+                              {language === 'te' ? status.labelTe : status.label}
+                            </p>
+                            {isCurrent && (
+                              <span className="text-[11px] bg-brand-green text-white font-extrabold px-2.5 py-0.5 rounded-full animate-pulse shadow-sm">
+                                Current Stage
+                              </span>
+                            )}
+                          </div>
+
+                          {/* Historical Timestamp & Details */}
+                          {historyRecord?.timestamp ? (
+                            <p className="text-xs text-gray-500 mt-0.5 flex items-center gap-1 font-medium">
+                              <Calendar className="w-3 h-3 text-gray-400" />
+                              <span>{new Date(historyRecord.timestamp).toLocaleDateString()}</span>
+                              <span>•</span>
+                              <span>{new Date(historyRecord.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                              {historyRecord.updated_by && (
+                                <span className="text-gray-400 text-[11px]">({historyRecord.updated_by})</span>
+                              )}
+                            </p>
+                          ) : (
+                            <p className="text-xs text-gray-400 mt-0.5">
+                              {isUpcoming ? 'Awaiting milestone' : 'Completed'}
+                            </p>
+                          )}
+
+                          {/* Tracking ID in Shipped Step */}
+                          {status.key === 'shipped' && isCompleted && activeOrder.tracking_id && (
+                            <div className="mt-2 inline-flex items-center gap-2 bg-purple-50 text-purple-900 px-3 py-1.5 rounded-xl border border-purple-200 text-xs font-mono font-bold">
+                              <span>Tracking ID: {activeOrder.tracking_id}</span>
+                              <span className="text-purple-600 font-sans">({activeOrder.courier_name || 'Courier'})</span>
+                            </div>
+                          )}
+
+                          {historyRecord?.notes && (
+                            <p className="text-xs text-amber-800 bg-amber-50/80 px-2.5 py-1 rounded-lg border border-amber-200/60 mt-1.5 inline-block">
+                              📝 {historyRecord.notes}
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Items Card */}
+              <div className="bg-white rounded-3xl shadow-card p-6 md:p-8 border border-gray-100">
+                <h3 className="font-bold text-gray-900 mb-4 text-base">Items in this Consignment</h3>
+                <div className="space-y-3">
+                  {activeOrder.items.map((item, i) => (
+                    <div
+                      key={i}
+                      className="flex justify-between items-center py-3 border-b border-gray-100 last:border-0"
+                    >
+                      <div>
+                        <p className="font-bold text-gray-800 text-sm">
+                          {language === 'te' ? item.product_name_te : item.product_name_en}
+                        </p>
+                        <p className="text-xs text-gray-500 font-medium mt-0.5">
+                          Net Weight: {item.weight} • Qty: {item.quantity} (₹{item.unit_price} each)
                         </p>
                       </div>
+                      <p className="font-bold text-brand-green text-base">₹{item.total_price}</p>
                     </div>
-                  );
-                })}
-              </div>
-            </div>
+                  ))}
+                </div>
 
-            {/* Items */}
-            <div className="bg-white rounded-2xl shadow-card p-6 border border-gray-100">
-              <h3 className="font-bold text-gray-900 mb-4 text-base">Items in this Order</h3>
-              <div className="space-y-3">
-                {currentOrder.items.map((item, i) => (
-                  <div
-                    key={i}
-                    className="flex justify-between items-center py-2.5 border-b border-gray-100 last:border-0"
-                  >
-                    <div>
-                      <p className="font-semibold text-gray-800">
-                        {language === 'te' ? item.product_name_te : item.product_name_en}
-                      </p>
-                      <p className="text-xs text-gray-500 font-medium">
-                        Weight: {item.weight} • Qty: {item.quantity} (₹{item.unit_price} each)
-                      </p>
-                    </div>
-                    <p className="font-bold text-brand-green text-base">₹{item.total_price}</p>
-                  </div>
-                ))}
+                <div className="mt-4 pt-4 border-t border-gray-100 flex justify-between items-center text-sm">
+                  <span className="text-gray-500">Order Grand Total</span>
+                  <span className="text-xl font-extrabold text-brand-green">₹{activeOrder.total}</span>
+                </div>
               </div>
-            </div>
 
-            {/* Help / WhatsApp Contact */}
-            <div className="bg-gradient-to-r from-emerald-50 to-green-50 rounded-2xl p-5 border border-emerald-200 flex flex-col sm:flex-row items-center justify-between gap-4">
-              <div>
-                <p className="font-bold text-emerald-950 text-sm">Need help with your order?</p>
-                <p className="text-xs text-emerald-800 mt-0.5">
-                  Contact our support team anytime on WhatsApp with your Order ID
-                </p>
+              {/* WhatsApp Support Callout */}
+              <div className="bg-gradient-to-r from-emerald-50 via-teal-50 to-green-50 rounded-3xl p-6 border border-emerald-200 flex flex-col sm:flex-row items-center justify-between gap-4">
+                <div>
+                  <p className="font-bold text-emerald-950 text-sm">Have a query regarding this delivery?</p>
+                  <p className="text-xs text-emerald-800 mt-1">
+                    Contact our store team directly on WhatsApp with Order ID{' '}
+                    <strong className="font-mono">{activeOrder.order_number}</strong>
+                  </p>
+                </div>
+                <a
+                  href={`https://wa.me/91${settings.businessWhatsApp}?text=${encodeURIComponent(
+                    `నమస్కారం! 🙏 నా ఆర్డర్ నంబర్: *${activeOrder.order_number}* స్టేటస్ గురించి వివరాలు కావాలి.`
+                  )}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-2 bg-[#25D366] text-white px-5 py-3 rounded-2xl font-bold text-xs hover:bg-green-600 transition-all shadow-md flex-shrink-0 cursor-pointer"
+                >
+                  <Phone className="w-4 h-4" />
+                  <span>Chat on WhatsApp</span>
+                </a>
               </div>
-              <a
-                href={`https://wa.me/91${settings.businessWhatsApp}?text=${encodeURIComponent(
-                  `నమస్కారం! 🙏 నా ఆర్డర్ నంబర్: *${currentOrder.order_number}* గురించి విచారణ చేయాలనుకుంటున్నాను.`
-                )}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex items-center gap-2 bg-[#25D366] text-white px-4 py-2.5 rounded-xl font-bold text-xs hover:bg-green-600 transition-colors shadow-sm flex-shrink-0"
-              >
-                <Phone className="w-3.5 h-3.5" />
-                <span>WhatsApp Support</span>
-              </a>
-            </div>
-          </motion.div>
-        )}
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
     </div>
   );

@@ -34,6 +34,8 @@ import {
   Database,
   Mail,
   Cloud,
+  User,
+  Users,
 } from 'lucide-react';
 import { useProductStore, type DiscountAnnouncement, type CouponItem } from '@/hooks/useProductStore';
 import { useAuthStore } from '@/hooks/useStore';
@@ -42,14 +44,35 @@ import { useSettingsStore } from '@/hooks/useSettingsStore';
 import { supabase } from '@/services/supabase';
 import AdminLoginForm from '@/components/admin/AdminLoginForm';
 import AdminOrdersTab from '@/components/admin/AdminOrdersTab';
+import AdminInventoryTab from '@/components/admin/AdminInventoryTab';
+import AdminUsersTab from '@/components/admin/AdminUsersTab';
+import AdminBusinessSettingsTab from '@/components/admin/AdminBusinessSettingsTab';
 import AdminSettingsTab from '@/components/admin/AdminSettingsTab';
 import AdminPaymentsTab from '@/components/admin/AdminPaymentsTab';
 import AdminDatabaseTab from '@/components/admin/AdminDatabaseTab';
 import AdminEmailTab from '@/components/admin/AdminEmailTab';
+import AppImage from '@/components/common/AppImage';
+import { useAdminAuthStore, ROLE_DEFINITIONS, type AdminCategory, type AdminRole } from '@/hooks/useAdminAuthStore';
 import { categories, type Product, type ProductVariant } from '@/data/products';
 import toast from 'react-hot-toast';
 
-type ActiveTab = 'orders' | 'products' | 'settings' | 'payments' | 'database' | 'email' | 'announcement' | 'coupons' | 'insights';
+export type ActiveCategoryTab =
+  | 'dashboard'
+  | 'orders'
+  | 'products'
+  | 'inventory'
+  | 'customers'
+  | 'users'
+  | 'settings';
+
+export type SettingsSubTab =
+  | 'business'
+  | 'email'
+  | 'contact'
+  | 'payments'
+  | 'database'
+  | 'announcement'
+  | 'coupons';
 
 // Image preset options for quick selection
 const IMAGE_PRESETS = [
@@ -75,9 +98,10 @@ const IMAGE_PRESETS = [
 ];
 
 export default function AdminConsolePage() {
-  const { isAdmin, userEmail, logout } = useAuthStore();
+  const { isAdmin, userEmail, logout, setAdmin } = useAuthStore();
   const { orders } = useOrderStore();
   const { settings } = useSettingsStore();
+  const { currentUser, canAccess, users, login: rbacLogin } = useAdminAuthStore();
 
   const {
     products,
@@ -97,7 +121,23 @@ export default function AdminConsolePage() {
     resetToDefaults,
   } = useProductStore();
 
-  const [activeTab, setActiveTab] = useState<ActiveTab>('orders');
+  const [activeTab, setActiveTab] = useState<ActiveCategoryTab>('dashboard');
+  const [settingsSubTab, setSettingsSubTab] = useState<SettingsSubTab>('business');
+
+  // Customer Management Search & Modal State
+  const [customerSearch, setCustomerSearch] = useState('');
+  const [selectedCustomer, setSelectedCustomer] = useState<{
+    name: string;
+    phone: string;
+    email?: string;
+    address: string;
+    city: string;
+    pincode: string;
+    totalOrders: number;
+    totalSpent: number;
+    orders: typeof orders;
+  } | null>(null);
+
   const [searchQuery, setSearchQuery] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
@@ -135,17 +175,159 @@ export default function AdminConsolePage() {
     const total = products.length;
     const active = products.filter((p) => p.is_active).length;
     const outOfStock = products.filter((p) => p.variants.some((v) => v.stock === 0)).length;
+    const lowStock = products.filter((p) =>
+      p.variants.some((v) => v.stock !== undefined && v.stock > 0 && v.stock <= 10)
+    ).length;
     const discounted = products.filter((p) =>
       p.variants.some((v) => v.comparePrice && v.comparePrice > v.price)
     ).length;
-    return { total, active, outOfStock, discounted };
-  }, [products]);
+
+    const totalRevenue = orders
+      .filter((o) => o.order_status !== 'cancelled')
+      .reduce((sum, o) => sum + Number(o.total_amount || 0), 0);
+
+    const pendingOrders = orders.filter(
+      (o) => o.order_status === 'placed' || o.order_status === 'confirmed' || o.order_status === 'preparing'
+    ).length;
+
+    const dispatchedOrders = orders.filter((o) => o.order_status === 'shipped').length;
+    const deliveredOrders = orders.filter((o) => o.order_status === 'delivered').length;
+
+    return {
+      total,
+      active,
+      outOfStock,
+      lowStock,
+      discounted,
+      totalRevenue,
+      pendingOrders,
+      dispatchedOrders,
+      deliveredOrders,
+    };
+  }, [products, orders]);
+
+  // Unique Customers Aggregation (Requirement 6, 8, 27)
+  const customersList = useMemo(() => {
+    const map = new Map<
+      string,
+      {
+        key: string;
+        name: string;
+        phone: string;
+        email?: string;
+        address: string;
+        city: string;
+        pincode: string;
+        totalOrders: number;
+        totalSpent: number;
+        lastOrderDate: string;
+        orders: typeof orders;
+      }
+    >();
+
+    orders.forEach((o) => {
+      const rawKey = (o.customer_phone || o.customer_name || 'unknown').trim().toLowerCase();
+      const existing = map.get(rawKey);
+      if (existing) {
+        existing.totalOrders += 1;
+        existing.totalSpent += Number(o.total_amount || 0);
+        if (new Date(o.created_at) > new Date(existing.lastOrderDate)) {
+          existing.lastOrderDate = o.created_at;
+        }
+        existing.orders.push(o);
+      } else {
+        const addrStr = typeof o.delivery_address === 'string'
+          ? o.delivery_address
+          : o.delivery_address
+            ? `${o.delivery_address.house_no ? o.delivery_address.house_no + ', ' : ''}${o.delivery_address.street || ''}${o.delivery_address.area ? ', ' + o.delivery_address.area : ''}`
+            : '';
+        const cityStr = o.city || (typeof o.delivery_address === 'object' && o.delivery_address ? o.delivery_address.city : '') || '';
+        const pincodeStr = o.pincode || (typeof o.delivery_address === 'object' && o.delivery_address ? o.delivery_address.pincode : '') || '';
+
+        map.set(rawKey, {
+          key: rawKey,
+          name: o.customer_name || 'Customer',
+          phone: o.customer_phone || o.customer_mobile || '',
+          email: o.customer_email || '',
+          address: addrStr,
+          city: cityStr,
+          pincode: pincodeStr,
+          totalOrders: 1,
+          totalSpent: Number(o.total_amount || o.total || 0),
+          lastOrderDate: o.created_at || new Date().toISOString(),
+          orders: [o],
+        });
+      }
+    });
+
+    const list = Array.from(map.values());
+    if (customerSearch.trim()) {
+      const q = customerSearch.toLowerCase();
+      return list.filter(
+        (c) =>
+          c.name.toLowerCase().includes(q) ||
+          c.phone.toLowerCase().includes(q) ||
+          c.city.toLowerCase().includes(q) ||
+          (c.email && c.email.toLowerCase().includes(q))
+      );
+    }
+    return list.sort((a, b) => b.totalSpent - a.totalSpent);
+  }, [orders, customerSearch]);
 
   // Handle Save Announcement
   const handleSaveAnnouncement = (e: React.FormEvent) => {
     e.preventDefault();
     updateAnnouncement(annForm);
     toast.success('Discount Announcement banner updated & published!');
+  };
+
+  // RBAC Category Definitions (Requirements 6, 8, 9, 27)
+  const CATEGORIES: Array<{
+    id: ActiveCategoryTab;
+    label: string;
+    icon: any;
+    badge?: number | string;
+    roleRequired?: string;
+  }> = [
+    { id: 'dashboard', label: 'Dashboard', icon: Sliders },
+    { id: 'orders', label: 'Orders', icon: ShoppingBag, badge: orders.length },
+    { id: 'products', label: 'Products', icon: Package, badge: products.length },
+    {
+      id: 'inventory',
+      label: 'Inventory',
+      icon: Layers,
+      badge: stats.lowStock + stats.outOfStock ? `${stats.lowStock + stats.outOfStock} Alerts` : undefined,
+    },
+    { id: 'customers', label: 'Customers', icon: User, badge: customersList.length },
+    { id: 'users', label: 'Users & Roles', icon: Users, badge: users.length, roleRequired: 'ROOT_ADMIN' },
+    { id: 'settings', label: 'Settings', icon: Store, roleRequired: 'ROOT_ADMIN' },
+  ];
+
+  // RBAC Navigation Visibility Enforcement
+  const visibleCategories = CATEGORIES.filter((cat) => canAccess(cat.id));
+
+  // Determine current active role display
+  const currentRole = currentUser?.role || 'ROOT_ADMIN';
+  const roleDef = ROLE_DEFINITIONS[currentRole] || ROLE_DEFINITIONS.ROOT_ADMIN;
+
+  // Handle Quick Switch Demo Role
+  const handleSwitchDemoRole = async (targetRole: AdminRole) => {
+    if (targetRole === 'ROOT_ADMIN') {
+      await rbacLogin('admin@sudhaswagruha.com', 'admin123');
+      setAdmin(true, 'admin@sudhaswagruha.com');
+      setActiveTab('dashboard');
+      toast.success('Switched to Root / Super Admin');
+    } else if (targetRole === 'STORE_KEEPER') {
+      await rbacLogin('store@sudhaswagruha.com', 'store123');
+      setAdmin(true, 'store@sudhaswagruha.com');
+      setActiveTab('inventory');
+      toast.success('Switched to Store Keeper (Inventory & Products only)');
+    } else if (targetRole === 'ORDER_PROCESSOR') {
+      await rbacLogin('orders@sudhaswagruha.com', 'orders123');
+      setAdmin(true, 'orders@sudhaswagruha.com');
+      setActiveTab('orders');
+      toast.success('Switched to Order Processor (Orders only)');
+    }
   };
 
   if (!isAdmin) {
@@ -163,21 +345,83 @@ export default function AdminConsolePage() {
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <h1 className="font-bold text-lg text-white tracking-tight">Admin Console</h1>
+                <h1 className="font-bold text-lg text-white tracking-tight">
+                  {settings.businessName || 'Sudha Swagruha Foods'} Admin
+                </h1>
                 <span className="px-2 py-0.5 text-[11px] font-semibold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded-full">
-                  Live Sync
+                  Live RBAC
                 </span>
               </div>
               <p className="text-xs text-slate-400">
-                Sudha Swagruha Foods • Order Processing, Products & Store Settings
+                Enterprise Commerce Console • Authoritative Sync
               </p>
             </div>
           </div>
 
           <div className="flex items-center gap-2 sm:gap-3">
-            <div className="hidden md:flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-slate-300 text-xs font-mono">
-              <span className="w-2 h-2 rounded-full bg-emerald-400" />
-              <span>{userEmail || 'admin@sudhaswagruha.com'}</span>
+            {/* Authenticated User & Role Badge */}
+            <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-800 text-slate-300 text-xs">
+              <span
+                className={`w-2 h-2 rounded-full ${
+                  currentRole === 'ROOT_ADMIN'
+                    ? 'bg-emerald-400'
+                    : currentRole === 'STORE_KEEPER'
+                    ? 'bg-blue-400'
+                    : 'bg-amber-400'
+                }`}
+              />
+              <span className="font-semibold text-white">
+                {currentUser?.full_name || userEmail}
+              </span>
+              <span
+                className={`px-2 py-0.5 rounded-md text-[10px] font-extrabold uppercase tracking-wider ${
+                  currentRole === 'ROOT_ADMIN'
+                    ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                    : currentRole === 'STORE_KEEPER'
+                    ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30'
+                    : 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                }`}
+              >
+                {roleDef.name}
+              </span>
+            </div>
+
+            {/* Quick Role Tester Switcher */}
+            <div className="hidden lg:flex items-center gap-1 bg-slate-850 p-1 rounded-xl border border-slate-800 text-xs">
+              <span className="text-[10px] text-slate-500 uppercase px-1 font-semibold">Test Role:</span>
+              <button
+                onClick={() => handleSwitchDemoRole('ROOT_ADMIN')}
+                className={`px-2 py-1 rounded-lg text-[11px] font-bold transition-colors cursor-pointer ${
+                  currentRole === 'ROOT_ADMIN'
+                    ? 'bg-emerald-600 text-white'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+                title="Switch to Root Admin"
+              >
+                Admin
+              </button>
+              <button
+                onClick={() => handleSwitchDemoRole('STORE_KEEPER')}
+                className={`px-2 py-1 rounded-lg text-[11px] font-bold transition-colors cursor-pointer ${
+                  currentRole === 'STORE_KEEPER'
+                    ? 'bg-blue-600 text-white'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+                title="Switch to Store Keeper"
+              >
+                Store
+              </button>
+              <button
+                onClick={() => handleSwitchDemoRole('ORDER_PROCESSOR')}
+                className={`px-2 py-1 rounded-lg text-[11px] font-bold transition-colors cursor-pointer ${
+                  currentRole === 'ORDER_PROCESSOR'
+                    ? 'bg-amber-600 text-white'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+                title="Switch to Order Processor"
+              >
+                Orders
+              </button>
             </div>
 
             <Link
@@ -186,18 +430,9 @@ export default function AdminConsolePage() {
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white text-xs font-semibold border border-slate-700 transition-colors"
             >
               <Store className="w-3.5 h-3.5 text-emerald-400" />
-              <span className="hidden sm:inline">View Store</span>
+              <span className="hidden sm:inline">Storefront</span>
               <ExternalLink className="w-3 h-3 opacity-60" />
             </Link>
-
-            <button
-              onClick={() => setResetConfirmOpen(true)}
-              className="hidden lg:flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800/60 hover:bg-red-500/20 text-slate-400 hover:text-red-300 text-xs font-medium border border-slate-800 hover:border-red-500/30 transition-colors cursor-pointer"
-              title="Reset catalog back to sample dataset"
-            >
-              <RefreshCw className="w-3 h-3" />
-              <span>Reset Catalog</span>
-            </button>
 
             <button
               onClick={async () => {
@@ -215,242 +450,558 @@ export default function AdminConsolePage() {
         </div>
       </header>
 
-      {/* ─── Metric Badges ────────────────────────────────────────── */}
+      {/* ─── Metric Badges Bar ────────────────────────────────────────── */}
       <section className="bg-slate-950/40 border-b border-slate-800/80 px-4 sm:px-8 py-3">
         <div className="max-w-7xl mx-auto grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
           <div
-            onClick={() => setActiveTab('orders')}
-            className="bg-slate-850/60 hover:bg-slate-800 border border-slate-800 rounded-xl px-4 py-2.5 flex items-center justify-between cursor-pointer transition-colors"
+            onClick={() => canAccess('orders') && setActiveTab('orders')}
+            className={`bg-slate-850/60 hover:bg-slate-800 border border-slate-800 rounded-xl px-4 py-2.5 flex items-center justify-between transition-colors ${
+              canAccess('orders') ? 'cursor-pointer' : 'opacity-60 cursor-not-allowed'
+            }`}
           >
             <div>
-              <p className="text-slate-400">Customer Orders</p>
+              <p className="text-slate-400">Total Orders</p>
               <p className="text-lg font-bold text-emerald-400 mt-0.5">{orders.length} Orders</p>
             </div>
             <ShoppingBag className="w-5 h-5 text-emerald-400/80" />
           </div>
 
           <div
-            onClick={() => setActiveTab('products')}
-            className="bg-slate-850/60 hover:bg-slate-800 border border-slate-800 rounded-xl px-4 py-2.5 flex items-center justify-between cursor-pointer transition-colors"
+            onClick={() => canAccess('inventory') && setActiveTab('inventory')}
+            className={`bg-slate-850/60 hover:bg-slate-800 border border-slate-800 rounded-xl px-4 py-2.5 flex items-center justify-between transition-colors ${
+              canAccess('inventory') ? 'cursor-pointer' : 'opacity-60 cursor-not-allowed'
+            }`}
           >
             <div>
-              <p className="text-slate-400">Total Catalog</p>
-              <p className="text-lg font-bold text-white mt-0.5">{stats.total} items</p>
+              <p className="text-slate-400">Stock Alerts</p>
+              <p className="text-lg font-bold text-amber-400 mt-0.5">
+                {stats.lowStock + stats.outOfStock} Items
+              </p>
             </div>
-            <Package className="w-5 h-5 text-blue-400/80" />
+            <AlertTriangle className="w-5 h-5 text-amber-400/80" />
           </div>
 
           <div
-            onClick={() => setActiveTab('settings')}
-            className="bg-slate-850/60 hover:bg-slate-800 border border-slate-800 rounded-xl px-4 py-2.5 flex items-center justify-between cursor-pointer transition-colors"
+            onClick={() => canAccess('customers') && setActiveTab('customers')}
+            className={`bg-slate-850/60 hover:bg-slate-800 border border-slate-800 rounded-xl px-4 py-2.5 flex items-center justify-between transition-colors ${
+              canAccess('customers') ? 'cursor-pointer' : 'opacity-60 cursor-not-allowed'
+            }`}
           >
             <div>
-              <p className="text-slate-400">Business WhatsApp</p>
-              <p className="text-sm font-bold text-white font-mono mt-0.5">
-                +91 {settings.businessWhatsApp}
+              <p className="text-slate-400">Customer Base</p>
+              <p className="text-lg font-bold text-blue-400 mt-0.5">
+                {customersList.length} Customers
               </p>
             </div>
-            <Phone className="w-5 h-5 text-green-400/80" />
+            <User className="w-5 h-5 text-blue-400/80" />
           </div>
 
           <div
-            onClick={() => setActiveTab('payments')}
-            className="bg-slate-850/60 hover:bg-slate-800 border border-slate-800 rounded-xl px-4 py-2.5 flex items-center justify-between cursor-pointer transition-colors"
+            onClick={() => canAccess('settings') && setActiveTab('settings')}
+            className={`bg-slate-850/60 hover:bg-slate-800 border border-slate-800 rounded-xl px-4 py-2.5 flex items-center justify-between transition-colors ${
+              canAccess('settings') ? 'cursor-pointer' : 'opacity-60 cursor-not-allowed'
+            }`}
           >
             <div>
-              <p className="text-slate-400">Payment Gateway</p>
-              <p className="text-sm font-bold mt-0.5">
-                {settings.paymentGatewayEnabled ? (
-                  <span className="text-emerald-400">Active (Razorpay)</span>
-                ) : (
-                  <span className="text-amber-400">Direct WhatsApp</span>
-                )}
-              </p>
+              <p className="text-slate-400">Total Net Revenue</p>
+              <p className="text-lg font-bold text-white mt-0.5">₹{stats.totalRevenue.toLocaleString()}</p>
             </div>
-            <CreditCard className="w-5 h-5 text-purple-400/80" />
+            <DollarSign className="w-5 h-5 text-purple-400/80" />
           </div>
         </div>
       </section>
 
-      {/* ─── Navigation Tabs ──────────────────────────────────────── */}
+      {/* ─── Primary Category Tabs Navigation (Requirement 6, 8, 9, 27) ── */}
       <div className="bg-slate-900 border-b border-slate-800 px-4 sm:px-8">
-        <div className="max-w-7xl mx-auto flex gap-2 overflow-x-auto py-2">
-          {/* Orders Tab */}
-          <button
-            onClick={() => setActiveTab('orders')}
-            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all flex-shrink-0 cursor-pointer ${
-              activeTab === 'orders'
-                ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-600/30'
-                : 'text-slate-400 hover:text-white hover:bg-slate-800'
-            }`}
-          >
-            <ShoppingBag className="w-4 h-4" />
-            <span>Customer Orders</span>
-            <span className="ml-1 px-2 py-0.5 rounded-full text-xs bg-slate-900/60 text-slate-300 font-mono">
-              {orders.length}
-            </span>
-          </button>
-
-          {/* Products Tab */}
-          <button
-            onClick={() => setActiveTab('products')}
-            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all flex-shrink-0 cursor-pointer ${
-              activeTab === 'products'
-                ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/30'
-                : 'text-slate-400 hover:text-white hover:bg-slate-800'
-            }`}
-          >
-            <Package className="w-4 h-4" />
-            <span>Products & Prices</span>
-            <span className="ml-1 px-2 py-0.5 rounded-full text-xs bg-slate-900/60 text-slate-300">
-              {products.length}
-            </span>
-          </button>
-
-          {/* Contact & Store Settings Tab */}
-          <button
-            onClick={() => setActiveTab('settings')}
-            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all flex-shrink-0 cursor-pointer ${
-              activeTab === 'settings'
-                ? 'bg-green-600 text-white shadow-lg shadow-green-600/30'
-                : 'text-slate-400 hover:text-white hover:bg-slate-800'
-            }`}
-          >
-            <Phone className="w-4 h-4" />
-            <span>Contact & Store Info</span>
-          </button>
-
-          {/* Payment Gateway Configuration Tab */}
-          <button
-            onClick={() => setActiveTab('payments')}
-            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all flex-shrink-0 cursor-pointer ${
-              activeTab === 'payments'
-                ? 'bg-teal-600 text-white shadow-lg shadow-teal-600/30'
-                : 'text-slate-400 hover:text-white hover:bg-slate-800'
-            }`}
-          >
-            <CreditCard className="w-4 h-4" />
-            <span>Payment Gateway</span>
-            <span
-              className={`ml-1 px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                settings.paymentGatewayEnabled
-                  ? 'bg-emerald-400 text-emerald-950'
-                  : 'bg-amber-400 text-amber-950'
-              }`}
-            >
-              {settings.paymentGatewayEnabled ? 'Online' : 'Disabled'}
-            </span>
-          </button>
-
-          {/* Cloud Database & Sync Tab */}
-          <button
-            onClick={() => setActiveTab('database')}
-            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all flex-shrink-0 cursor-pointer ${
-              activeTab === 'database'
-                ? 'bg-cyan-600 text-white shadow-lg shadow-cyan-600/30'
-                : 'text-slate-400 hover:text-white hover:bg-slate-800'
-            }`}
-          >
-            <Database className="w-4 h-4" />
-            <span>Cloud Database</span>
-            <span className="ml-1 w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-          </button>
-
-          {/* Email & SMTP Tab */}
-          <button
-            onClick={() => setActiveTab('email')}
-            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all flex-shrink-0 cursor-pointer ${
-              activeTab === 'email'
-                ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/30'
-                : 'text-slate-400 hover:text-white hover:bg-slate-800'
-            }`}
-          >
-            <Mail className="w-4 h-4" />
-            <span>Email & SMTP</span>
-            <span
-              className={`ml-1 px-1.5 py-0.2 rounded-full text-[10px] font-bold ${
-                settings.smtp?.enabled
-                  ? 'bg-emerald-400 text-emerald-950'
-                  : 'bg-slate-700 text-slate-300'
-              }`}
-            >
-              {settings.smtp?.enabled ? 'ON' : 'OFF'}
-            </span>
-          </button>
-
-          {/* Announcement Tab */}
-          <button
-            onClick={() => setActiveTab('announcement')}
-            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all flex-shrink-0 cursor-pointer ${
-              activeTab === 'announcement'
-                ? 'bg-amber-600 text-white shadow-lg shadow-amber-600/30'
-                : 'text-slate-400 hover:text-white hover:bg-slate-800'
-            }`}
-          >
-            <Sparkles className="w-4 h-4" />
-            <span>Announcement Bar</span>
-            {announcement.enabled && (
-              <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping" />
-            )}
-          </button>
-
-          {/* Coupons Tab */}
-          <button
-            onClick={() => setActiveTab('coupons')}
-            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all flex-shrink-0 cursor-pointer ${
-              activeTab === 'coupons'
-                ? 'bg-purple-600 text-white shadow-lg shadow-purple-600/30'
-                : 'text-slate-400 hover:text-white hover:bg-slate-800'
-            }`}
-          >
-            <Tag className="w-4 h-4" />
-            <span>Promo Coupons</span>
-            <span className="ml-1 px-2 py-0.5 rounded-full text-xs bg-slate-900/60 text-slate-300">
-              {coupons.length}
-            </span>
-          </button>
-
-          {/* Insights Tab */}
-          <button
-            onClick={() => setActiveTab('insights')}
-            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all flex-shrink-0 cursor-pointer ${
-              activeTab === 'insights'
-                ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/30'
-                : 'text-slate-400 hover:text-white hover:bg-slate-800'
-            }`}
-          >
-            <Layers className="w-4 h-4" />
-            <span>Insights</span>
-          </button>
+        <div className="max-w-7xl mx-auto flex gap-2 overflow-x-auto py-2.5">
+          {visibleCategories.map((cat) => {
+            const Icon = cat.icon;
+            const isActive = activeTab === cat.id;
+            return (
+              <button
+                key={cat.id}
+                onClick={() => setActiveTab(cat.id)}
+                className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all flex-shrink-0 cursor-pointer ${
+                  isActive
+                    ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-600/30'
+                    : 'text-slate-400 hover:text-white hover:bg-slate-800'
+                }`}
+              >
+                <Icon className="w-4 h-4" />
+                <span>{cat.label}</span>
+                {cat.badge !== undefined && (
+                  <span
+                    className={`ml-1 px-2 py-0.5 rounded-full text-xs font-mono ${
+                      isActive ? 'bg-emerald-700 text-white' : 'bg-slate-800 text-slate-300'
+                    }`}
+                  >
+                    {cat.badge}
+                  </span>
+                )}
+              </button>
+            );
+          })}
         </div>
       </div>
 
       {/* ─── Main Content Body ────────────────────────────────────── */}
       <main className="flex-1 max-w-7xl mx-auto w-full p-4 sm:p-8">
-        {/* ============================================================ */}
-        {/* TAB 0: ORDERS MANAGEMENT                                     */}
-        {/* ============================================================ */}
-        {activeTab === 'orders' && <AdminOrdersTab />}
+        {/* Guard: Ensure user has permission for active tab */}
+        {!canAccess(activeTab) ? (
+          <div className="bg-red-950/30 border border-red-500/40 rounded-2xl p-8 text-center max-w-xl mx-auto">
+            <AlertTriangle className="w-12 h-12 text-red-400 mx-auto mb-3" />
+            <h2 className="text-xl font-bold text-white">Access Denied (403 Forbidden)</h2>
+            <p className="text-sm text-slate-300 mt-2">
+              Your role <strong className="text-amber-400">{roleDef.name}</strong> is not authorized
+              to access the <strong>{activeTab.toUpperCase()}</strong> module.
+            </p>
+            <div className="mt-5">
+              <button
+                onClick={() => setActiveTab(visibleCategories[0]?.id || 'orders')}
+                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-xl text-xs font-semibold cursor-pointer"
+              >
+                Return to Authorized Section ({visibleCategories[0]?.label})
+              </button>
+            </div>
+          </div>
+        ) : (
+          <>
+            {/* ============================================================ */}
+            {/* CATEGORY 1: DASHBOARD OVERVIEW                               */}
+            {/* ============================================================ */}
+            {activeTab === 'dashboard' && (
+              <div className="space-y-6">
+                {/* Welcome Card */}
+                <div className="bg-gradient-to-r from-slate-900 via-slate-850 to-emerald-950/40 border border-slate-800 rounded-2xl p-6 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+                  <div>
+                    <h2 className="text-2xl font-black text-white tracking-tight">
+                      Welcome, {currentUser?.full_name || 'Administrator'}
+                    </h2>
+                    <p className="text-xs text-slate-400 mt-1">
+                      Here is the live operational summary for{' '}
+                      <strong className="text-emerald-400">{settings.businessName}</strong>. All data
+                      is synced with Cloud Database & Realtime.
+                    </p>
+                  </div>
 
-        {/* ============================================================ */}
-        {/* TAB 1: STORE & CONTACT SETTINGS                              */}
-        {/* ============================================================ */}
-        {activeTab === 'settings' && <AdminSettingsTab />}
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      onClick={() => setActiveTab('orders')}
+                      className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-lg shadow-emerald-600/30 transition-all flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <ShoppingBag className="w-4 h-4" />
+                      <span>Process Orders ({stats.pendingOrders})</span>
+                    </button>
+                    <button
+                      onClick={() => setActiveTab('inventory')}
+                      className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold border border-slate-700 transition-all flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <Layers className="w-4 h-4 text-amber-400" />
+                      <span>Stock Control</span>
+                    </button>
+                  </div>
+                </div>
 
-        {/* ============================================================ */}
-        {/* TAB 2: PAYMENT GATEWAY CONFIGURATION                         */}
-        {/* ============================================================ */}
-        {activeTab === 'payments' && <AdminPaymentsTab />}
+                {/* KPI Stat Cards */}
+                <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                  <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
+                    <p className="text-xs text-slate-400 font-medium">Pending Processing</p>
+                    <p className="text-2xl font-black text-amber-400 mt-1">{stats.pendingOrders}</p>
+                    <p className="text-[11px] text-slate-500 mt-0.5">Orders awaiting kitchen prep / packing</p>
+                  </div>
 
-        {/* ============================================================ */}
-        {/* TAB: SUPABASE CLOUD DATABASE CONFIGURATION                   */}
-        {/* ============================================================ */}
-        {activeTab === 'database' && <AdminDatabaseTab />}
+                  <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
+                    <p className="text-xs text-slate-400 font-medium">Dispatched / In Transit</p>
+                    <p className="text-2xl font-black text-purple-400 mt-1">{stats.dispatchedOrders}</p>
+                    <p className="text-[11px] text-slate-500 mt-0.5">Assigned Tracking ID & Courier</p>
+                  </div>
 
-        {/* ============================================================ */}
-        {/* TAB: CUSTOMER EMAIL & SMTP CONFIGURATION                     */}
-        {/* ============================================================ */}
-        {activeTab === 'email' && <AdminEmailTab />}
+                  <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
+                    <p className="text-xs text-slate-400 font-medium">Delivered Orders</p>
+                    <p className="text-2xl font-black text-emerald-400 mt-1">{stats.deliveredOrders}</p>
+                    <p className="text-[11px] text-slate-500 mt-0.5">Successfully received by customer</p>
+                  </div>
+
+                  <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
+                    <p className="text-xs text-slate-400 font-medium">Inventory Stock Alerts</p>
+                    <p className="text-2xl font-black text-red-400 mt-1">
+                      {stats.lowStock + stats.outOfStock}
+                    </p>
+                    <p className="text-[11px] text-slate-500 mt-0.5">
+                      {stats.outOfStock} out of stock, {stats.lowStock} low stock
+                    </p>
+                  </div>
+                </div>
+
+                {/* Recent Orders Preview */}
+                <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5">
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="font-bold text-white text-sm flex items-center gap-2">
+                      <ShoppingBag className="w-4 h-4 text-emerald-400" />
+                      <span>Recent Customer Orders</span>
+                    </h3>
+                    <button
+                      onClick={() => setActiveTab('orders')}
+                      className="text-xs text-emerald-400 hover:text-emerald-300 font-semibold cursor-pointer"
+                    >
+                      View All Orders ({orders.length}) →
+                    </button>
+                  </div>
+
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-xs">
+                      <thead className="bg-slate-950/60 border-b border-slate-800 text-slate-400 uppercase tracking-wider font-semibold">
+                        <tr>
+                          <th className="py-2.5 px-3">Order Number</th>
+                          <th className="py-2.5 px-3">Customer</th>
+                          <th className="py-2.5 px-3">Amount</th>
+                          <th className="py-2.5 px-3">Status</th>
+                          <th className="py-2.5 px-3">Tracking ID</th>
+                          <th className="py-2.5 px-3 text-right">Date</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-800/60">
+                        {orders.slice(0, 5).map((o) => (
+                          <tr key={o.id} className="hover:bg-slate-850/50">
+                            <td className="py-2.5 px-3 font-mono font-bold text-white">
+                              {o.order_number}
+                            </td>
+                            <td className="py-2.5 px-3 text-slate-300">
+                              <span className="font-semibold text-white">{o.customer_name}</span>
+                              <span className="block text-[11px] text-slate-500">{o.customer_phone}</span>
+                            </td>
+                            <td className="py-2.5 px-3 font-bold text-white">₹{o.total_amount}</td>
+                            <td className="py-2.5 px-3">
+                              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase bg-slate-800 border border-slate-700 text-slate-300">
+                                {o.order_status}
+                              </span>
+                            </td>
+                            <td className="py-2.5 px-3 font-mono text-emerald-400">
+                              {o.tracking_id || '—'}
+                            </td>
+                            <td className="py-2.5 px-3 text-right text-slate-400 font-mono">
+                              {new Date(o.created_at).toLocaleDateString('en-IN', {
+                                month: 'short',
+                                day: 'numeric',
+                              })}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* ============================================================ */}
+            {/* CATEGORY 2: ORDERS MANAGEMENT                                */}
+            {/* ============================================================ */}
+            {activeTab === 'orders' && <AdminOrdersTab />}
+
+            {/* ============================================================ */}
+            {/* CATEGORY 4: INVENTORY & STOCK CONTROL                        */}
+            {/* ============================================================ */}
+            {activeTab === 'inventory' && <AdminInventoryTab />}
+
+            {/* ============================================================ */}
+            {/* CATEGORY 5: CUSTOMERS DIRECTORY                              */}
+            {/* ============================================================ */}
+            {activeTab === 'customers' && (
+              <div className="space-y-6">
+                <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+                  <div>
+                    <h2 className="text-xl font-bold text-white flex items-center gap-2">
+                      <User className="w-5 h-5 text-blue-400" />
+                      <span>Customer Relationship & Directory</span>
+                    </h2>
+                    <p className="text-xs text-slate-400 mt-1">
+                      Aggregated customer records across all web and mobile storefront orders.
+                    </p>
+                  </div>
+
+                  <div className="relative w-full md:w-72">
+                    <Search className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
+                    <input
+                      type="text"
+                      placeholder="Search customer by name, mobile, city..."
+                      value={customerSearch}
+                      onChange={(e) => setCustomerSearch(e.target.value)}
+                      className="w-full pl-9 pr-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white text-xs placeholder-slate-500 focus:outline-none focus:border-emerald-500"
+                    />
+                  </div>
+                </div>
+
+                <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-xl">
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-xs">
+                      <thead className="bg-slate-950/70 border-b border-slate-800 text-slate-400 font-semibold uppercase tracking-wider">
+                        <tr>
+                          <th className="py-3 px-4">Customer Name</th>
+                          <th className="py-3 px-4">Contact Info</th>
+                          <th className="py-3 px-4">Location / Address</th>
+                          <th className="py-3 px-4">Total Orders</th>
+                          <th className="py-3 px-4">Total Spent</th>
+                          <th className="py-3 px-4">Last Order</th>
+                          <th className="py-3 px-4 text-right">Details</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-800/60">
+                        {customersList.length === 0 ? (
+                          <tr>
+                            <td colSpan={7} className="py-12 text-center text-slate-500">
+                              <User className="w-8 h-8 mx-auto mb-2 opacity-30" />
+                              <p className="font-semibold text-slate-300">No customers found</p>
+                            </td>
+                          </tr>
+                        ) : (
+                          customersList.map((cust) => (
+                            <tr key={cust.key} className="hover:bg-slate-850/50 transition-colors">
+                              <td className="py-3.5 px-4">
+                                <p className="font-bold text-white text-sm">{cust.name}</p>
+                              </td>
+
+                              <td className="py-3.5 px-4 font-mono text-slate-300">
+                                <div>{cust.phone}</div>
+                                {cust.email && (
+                                  <span className="text-[11px] text-slate-500 font-sans block">
+                                    {cust.email}
+                                  </span>
+                                )}
+                              </td>
+
+                              <td className="py-3.5 px-4 text-slate-300 max-w-xs truncate">
+                                <div>{cust.address}</div>
+                                <span className="text-[11px] text-slate-500">
+                                  {cust.city} {cust.pincode && `• ${cust.pincode}`}
+                                </span>
+                              </td>
+
+                              <td className="py-3.5 px-4">
+                                <span className="px-2.5 py-1 rounded-full bg-blue-500/10 text-blue-400 border border-blue-500/30 font-bold font-mono">
+                                  {cust.totalOrders} Orders
+                                </span>
+                              </td>
+
+                              <td className="py-3.5 px-4 font-bold text-white font-mono text-sm">
+                                ₹{cust.totalSpent.toLocaleString()}
+                              </td>
+
+                              <td className="py-3.5 px-4 text-slate-400 font-mono whitespace-nowrap">
+                                {new Date(cust.lastOrderDate).toLocaleDateString('en-IN', {
+                                  month: 'short',
+                                  day: 'numeric',
+                                  year: 'numeric',
+                                })}
+                              </td>
+
+                              <td className="py-3.5 px-4 text-right">
+                                <button
+                                  onClick={() => setSelectedCustomer(cust)}
+                                  className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 text-xs font-semibold transition-colors cursor-pointer"
+                                >
+                                  View History
+                                </button>
+                              </td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                {/* Customer Orders Modal */}
+                <AnimatePresence>
+                  {selectedCustomer && (
+                    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
+                      <motion.div
+                        initial={{ opacity: 0, scale: 0.95 }}
+                        animate={{ opacity: 1, scale: 1 }}
+                        exit={{ opacity: 0, scale: 0.95 }}
+                        className="bg-slate-900 border border-slate-700 rounded-3xl p-6 max-w-2xl w-full shadow-2xl relative max-h-[90vh] overflow-y-auto"
+                      >
+                        <button
+                          onClick={() => setSelectedCustomer(null)}
+                          className="absolute top-5 right-5 text-slate-400 hover:text-white"
+                        >
+                          <X className="w-5 h-5" />
+                        </button>
+
+                        <div className="flex items-center gap-3 mb-6">
+                          <div className="w-12 h-12 rounded-2xl bg-blue-500/20 border border-blue-500/40 flex items-center justify-center text-blue-400">
+                            <User className="w-6 h-6" />
+                          </div>
+                          <div>
+                            <h3 className="font-bold text-white text-lg">{selectedCustomer.name}</h3>
+                            <p className="text-xs text-slate-400 font-mono">
+                              {selectedCustomer.phone} • {selectedCustomer.city}
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-3 gap-3 mb-6 text-xs">
+                          <div className="p-3 bg-slate-800/80 rounded-xl border border-slate-700">
+                            <span className="text-slate-400 block">Total Lifetime Orders</span>
+                            <span className="text-lg font-bold text-white font-mono mt-0.5">
+                              {selectedCustomer.totalOrders}
+                            </span>
+                          </div>
+                          <div className="p-3 bg-slate-800/80 rounded-xl border border-slate-700">
+                            <span className="text-slate-400 block">Total Lifetime Value</span>
+                            <span className="text-lg font-bold text-emerald-400 font-mono mt-0.5">
+                              ₹{selectedCustomer.totalSpent.toLocaleString()}
+                            </span>
+                          </div>
+                          <div className="p-3 bg-slate-800/80 rounded-xl border border-slate-700">
+                            <span className="text-slate-400 block">Delivery Address</span>
+                            <span className="text-[11px] text-slate-300 truncate block mt-0.5">
+                              {selectedCustomer.address}
+                            </span>
+                          </div>
+                        </div>
+
+                        <h4 className="font-bold text-white text-xs uppercase tracking-wider mb-3">
+                          Order History ({selectedCustomer.orders.length})
+                        </h4>
+
+                        <div className="space-y-3">
+                          {selectedCustomer.orders.map((o) => (
+                            <div
+                              key={o.id}
+                              className="p-3.5 bg-slate-800/50 border border-slate-700/60 rounded-xl flex items-center justify-between text-xs"
+                            >
+                              <div>
+                                <span className="font-mono font-bold text-white">{o.order_number}</span>
+                                <span className="text-slate-400 ml-2">
+                                  {new Date(o.created_at).toLocaleDateString('en-IN', {
+                                    month: 'short',
+                                    day: 'numeric',
+                                    year: 'numeric',
+                                  })}
+                                </span>
+                                <p className="text-[11px] text-slate-400 mt-1">
+                                  {o.items?.length || 0} items • Status: <strong className="text-amber-400">{o.order_status}</strong>
+                                </p>
+                              </div>
+                              <div className="text-right">
+                                <span className="font-bold text-white font-mono text-sm">
+                                  ₹{o.total_amount}
+                                </span>
+                                {o.tracking_id && (
+                                  <span className="block text-[11px] font-mono text-emerald-400">
+                                    TRK: {o.tracking_id}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </motion.div>
+                    </div>
+                  )}
+                </AnimatePresence>
+              </div>
+            )}
+
+            {/* ============================================================ */}
+            {/* CATEGORY 6: USERS & RBAC MANAGEMENT                          */}
+            {/* ============================================================ */}
+            {activeTab === 'users' && <AdminUsersTab />}
+
+            {/* ============================================================ */}
+            {/* CATEGORY 7: SETTINGS (ROOT ADMIN ONLY)                       */}
+            {/* ============================================================ */}
+            {activeTab === 'settings' && (
+              <div className="space-y-6">
+                {/* Settings Subtabs Bar */}
+                <div className="bg-slate-900 border border-slate-800 rounded-2xl p-2 flex flex-wrap gap-2">
+                  <button
+                    onClick={() => setSettingsSubTab('business')}
+                    className={`px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                      settingsSubTab === 'business'
+                        ? 'bg-emerald-600 text-white shadow-md'
+                        : 'text-slate-400 hover:text-white hover:bg-slate-800'
+                    }`}
+                  >
+                    Business Branding & Name
+                  </button>
+
+                  <button
+                    onClick={() => setSettingsSubTab('email')}
+                    className={`px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                      settingsSubTab === 'email'
+                        ? 'bg-indigo-600 text-white shadow-md'
+                        : 'text-slate-400 hover:text-white hover:bg-slate-800'
+                    }`}
+                  >
+                    Email & SMTP Config
+                  </button>
+
+                  <button
+                    onClick={() => setSettingsSubTab('contact')}
+                    className={`px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                      settingsSubTab === 'contact'
+                        ? 'bg-green-600 text-white shadow-md'
+                        : 'text-slate-400 hover:text-white hover:bg-slate-800'
+                    }`}
+                  >
+                    Contact & WhatsApp
+                  </button>
+
+                  <button
+                    onClick={() => setSettingsSubTab('payments')}
+                    className={`px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                      settingsSubTab === 'payments'
+                        ? 'bg-teal-600 text-white shadow-md'
+                        : 'text-slate-400 hover:text-white hover:bg-slate-800'
+                    }`}
+                  >
+                    Payment Gateway
+                  </button>
+
+                  <button
+                    onClick={() => setSettingsSubTab('database')}
+                    className={`px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                      settingsSubTab === 'database'
+                        ? 'bg-cyan-600 text-white shadow-md'
+                        : 'text-slate-400 hover:text-white hover:bg-slate-800'
+                    }`}
+                  >
+                    Cloud DB Sync
+                  </button>
+
+                  <button
+                    onClick={() => setSettingsSubTab('announcement')}
+                    className={`px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                      settingsSubTab === 'announcement'
+                        ? 'bg-amber-600 text-white shadow-md'
+                        : 'text-slate-400 hover:text-white hover:bg-slate-800'
+                    }`}
+                  >
+                    Announcement Bar
+                  </button>
+
+                  <button
+                    onClick={() => setSettingsSubTab('coupons')}
+                    className={`px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                      settingsSubTab === 'coupons'
+                        ? 'bg-purple-600 text-white shadow-md'
+                        : 'text-slate-400 hover:text-white hover:bg-slate-800'
+                    }`}
+                  >
+                    Coupons ({coupons.length})
+                  </button>
+                </div>
+
+                {/* Subtab Content */}
+                {settingsSubTab === 'business' && <AdminBusinessSettingsTab />}
+                {settingsSubTab === 'email' && <AdminEmailTab />}
+                {settingsSubTab === 'contact' && <AdminSettingsTab />}
+                {settingsSubTab === 'payments' && <AdminPaymentsTab />}
+                {settingsSubTab === 'database' && <AdminDatabaseTab />}
+              </div>
+            )}
 
         {/* ============================================================ */}
         {/* TAB 3: PRODUCTS & PRICING                                    */}
@@ -707,9 +1258,9 @@ export default function AdminConsolePage() {
         )}
 
         {/* ============================================================ */}
-        {/* TAB 2: DISCOUNT ANNOUNCEMENT BAR                             */}
+        {/* TAB: DISCOUNT ANNOUNCEMENT BAR (UNDER SETTINGS)             */}
         {/* ============================================================ */}
-        {activeTab === 'announcement' && (
+        {(activeTab === 'settings' && settingsSubTab === 'announcement') && (
           <div className="grid lg:grid-cols-12 gap-8">
             {/* Form Settings */}
             <div className="lg:col-span-7 bg-slate-950/70 p-6 rounded-2xl border border-slate-800 shadow-xl space-y-6">
@@ -1012,9 +1563,9 @@ export default function AdminConsolePage() {
         )}
 
         {/* ============================================================ */}
-        {/* TAB 3: PROMO COUPONS                                         */}
+        {/* TAB: PROMO COUPONS (UNDER SETTINGS)                         */}
         {/* ============================================================ */}
-        {activeTab === 'coupons' && (
+        {(activeTab === 'settings' && settingsSubTab === 'coupons') && (
           <div className="space-y-6">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
               <div>
@@ -1119,83 +1670,9 @@ export default function AdminConsolePage() {
             </div>
           </div>
         )}
-
-        {/* ============================================================ */}
-        {/* TAB 4: INSIGHTS & OVERVIEW                                   */}
-        {/* ============================================================ */}
-        {activeTab === 'insights' && (
-          <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-6">
-            <div className="bg-slate-950/70 p-6 rounded-2xl border border-slate-800">
-              <h3 className="font-bold text-white mb-4">Category Distribution</h3>
-              <div className="space-y-3">
-                {categories.map((cat) => {
-                  const count = products.filter((p) => p.category === cat.slug).length;
-                  const pct = Math.round((count / (products.length || 1)) * 100);
-                  return (
-                    <div key={cat.id}>
-                      <div className="flex justify-between text-xs text-slate-300 mb-1">
-                        <span>
-                          {cat.icon} {cat.name_en}
-                        </span>
-                        <span className="font-mono">{count} items ({pct}%)</span>
-                      </div>
-                      <div className="w-full h-2 bg-slate-800 rounded-full overflow-hidden">
-                        <div
-                          className="h-full bg-emerald-500 rounded-full"
-                          style={{ width: `${pct}%` }}
-                        />
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-
-            <div className="bg-slate-950/70 p-6 rounded-2xl border border-slate-800">
-              <h3 className="font-bold text-white mb-4">Discount & Pricing Status</h3>
-              <div className="space-y-3 text-xs">
-                <div className="flex justify-between py-2 border-b border-slate-800 text-slate-300">
-                  <span>Products with Compare Price (Strike-through)</span>
-                  <span className="font-bold text-emerald-400">{stats.discounted}</span>
-                </div>
-                <div className="flex justify-between py-2 border-b border-slate-800 text-slate-300">
-                  <span>Active Announcement Bar</span>
-                  <span className="font-bold text-amber-400">
-                    {announcement.enabled ? `${announcement.discountPercent}% OFF` : 'Off'}
-                  </span>
-                </div>
-                <div className="flex justify-between py-2 border-b border-slate-800 text-slate-300">
-                  <span>Active Promo Coupons</span>
-                  <span className="font-bold text-purple-400">
-                    {coupons.filter((c) => c.isActive).length}
-                  </span>
-                </div>
-                <div className="flex justify-between py-2 text-slate-300">
-                  <span>Free Shipping Threshold</span>
-                  <span className="font-bold text-white">Orders above ₹499</span>
-                </div>
-              </div>
-            </div>
-
-            <div className="bg-slate-950/70 p-6 rounded-2xl border border-slate-800">
-              <h3 className="font-bold text-white mb-2">Database & Storage Status</h3>
-              <p className="text-xs text-slate-400 mb-4">
-                Your products and discounts are stored reactively and synced to local storage.
-              </p>
-              <div className="p-3 bg-slate-900 rounded-xl border border-slate-800 text-xs text-slate-400 space-y-2">
-                <p>
-                  ✅ <strong>Instant Storefront Reflection:</strong> Price changes and new products
-                  are live immediately on the customer pages.
-                </p>
-                <p>
-                  ✅ <strong>Safe Reset:</strong> You can reset back to the 10 original Telugu
-                  Swagruha Foods recipes at any time.
-                </p>
-              </div>
-            </div>
-          </div>
-        )}
-      </main>
+      </>
+    )}
+  </main>
 
       {/* ============================================================ */}
       {/* MODAL: ADD / EDIT FULL PRODUCT                               */}

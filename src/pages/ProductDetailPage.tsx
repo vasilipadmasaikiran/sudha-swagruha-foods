@@ -13,6 +13,7 @@ import { useCartStore, useLanguageStore } from '@/hooks/useStore';
 import { useProductStore } from '@/hooks/useProductStore';
 import { translations } from '@/i18n/translations';
 import ProductCard from '@/components/ProductCard';
+import AppImage from '@/components/common/AppImage';
 
 export default function ProductDetailPage() {
   const { slug } = useParams<{ slug: string }>();
@@ -94,10 +95,11 @@ export default function ProductDetailPage() {
             transition={{ duration: 0.5 }}
           >
             <div className="rounded-2xl overflow-hidden bg-white shadow-card mb-3 aspect-square">
-              <img
+              <AppImage
                 src={product.images[selectedImage]}
                 alt={product.name_en}
                 className="w-full h-full object-cover"
+                containerClassName="w-full h-full aspect-square"
               />
             </div>
             {product.images.length > 1 && (
@@ -110,7 +112,7 @@ export default function ProductDetailPage() {
                       selectedImage === i ? 'border-brand-green' : 'border-gray-200'
                     }`}
                   >
-                    <img src={img} alt="" className="w-full h-full object-cover" />
+                    <AppImage src={img} alt="" className="w-full h-full object-cover" containerClassName="w-full h-full" />
                   </button>
                 ))}
               </div>

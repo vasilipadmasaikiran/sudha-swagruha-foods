@@ -7,7 +7,9 @@ import { useLanguageStore } from '@/hooks/useStore';
 import { useSettingsStore } from '@/hooks/useSettingsStore';
 import { translations } from '@/i18n/translations';
 
-const logoPath = import.meta.env.BASE_URL + 'logo/logo.png';
+import AppImage from '@/components/common/AppImage';
+
+const defaultLogo = (import.meta.env.BASE_URL || '/') + 'logo/logo.jpg';
 
 export default function Footer() {
   const { language } = useLanguageStore();
@@ -36,16 +38,14 @@ export default function Footer() {
         {/* Brand */}
         <div className="lg:col-span-1">
           <div className="flex items-center gap-3 mb-4">
-            <img
-              src={logoPath}
-              alt="Sudha Swagruha Foods"
+            <AppImage
+              src={settings.logoUrl || defaultLogo}
+              alt={settings.businessName}
               className="w-12 h-12 object-contain bg-white rounded-xl p-1"
-              onError={(e) => {
-                (e.target as HTMLImageElement).style.display = 'none';
-              }}
+              containerClassName="w-12 h-12 rounded-xl bg-white flex-shrink-0"
             />
             <div>
-              <p className="font-bold text-white text-base">Sudha Swagruha Foods</p>
+              <p className="font-bold text-white text-base">{settings.businessName}</p>
               <p
                 className="text-xs text-gray-400"
                 style={{ fontFamily: 'Noto Sans Telugu, sans-serif' }}
@@ -55,8 +55,7 @@ export default function Footer() {
             </div>
           </div>
           <p className="text-sm text-gray-400 leading-relaxed">
-            Authentic homemade Telugu pickles, masalas & traditional foods. Made with love,
-            the way Amma makes it.
+            {settings.footerText || 'Authentic homemade Telugu pickles, masalas & traditional foods. Made with love, the way Amma makes it.'}
           </p>
           <div className="mt-4 flex items-center gap-1 text-sm text-gray-400">
             <span>Made with</span>
@@ -164,7 +163,7 @@ export default function Footer() {
       <div className="border-t border-gray-800 py-5 px-4">
         <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-3">
           <p className="text-sm text-gray-500 text-center">
-            © {new Date().getFullYear()} Sudha Swagruha Foods. All rights reserved.
+            © {new Date().getFullYear()} {settings.businessName}. All rights reserved.
           </p>
           <div className="flex items-center gap-4 text-xs text-gray-600">
             <span>100% Traditional Telugu Recipes</span>

@@ -6,6 +6,7 @@ import { X, Minus, Plus, Trash2, ShoppingBag } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useCartStore, useLanguageStore } from '@/hooks/useStore';
 import { translations } from '@/i18n/translations';
+import AppImage from '@/components/common/AppImage';
 
 export default function CartDrawer() {
   const {
@@ -96,11 +97,11 @@ export default function CartDrawer() {
                     >
                       <div className="flex gap-3">
                         {/* Product Image */}
-                        <img
+                        <AppImage
                           src={item.product.images[0]}
                           alt={item.product.name_en}
                           className="w-20 h-20 object-cover rounded-xl flex-shrink-0"
-                          loading="lazy"
+                          containerClassName="w-20 h-20 rounded-xl flex-shrink-0"
                         />
                         <div className="flex-1 min-w-0">
                           <h3 className="font-semibold text-sm text-gray-900 leading-tight">
