@@ -22,7 +22,6 @@ import {
   Truck,
   Sparkles,
   CreditCard,
-  DollarSign,
   ArrowRight,
 } from 'lucide-react';
 import { useOrderStore } from '@/hooks/useOrderStore';
@@ -385,7 +384,7 @@ export const AdminDashboardTab: React.FC<AdminDashboardTabProps> = ({ onNavigate
       {/* ─── SECONDARY FINANCIAL LEDGER SUMMARY ────────────────────── */}
       <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5">
         <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-3 flex items-center gap-2">
-          <DollarSign className="w-4 h-4 text-emerald-400" />
+          <IndianRupee className="w-4 h-4 text-emerald-400" />
           <span>Financial Breakdown (Tax, Discounts & Logistics)</span>
         </h3>
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">

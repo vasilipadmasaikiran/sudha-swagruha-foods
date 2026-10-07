@@ -18,7 +18,7 @@ import {
   Store,
   RefreshCw,
   Sliders,
-  DollarSign,
+  IndianRupee,
   AlertTriangle,
   ArrowRight,
   TrendingDown,
@@ -26,6 +26,11 @@ import {
   Copy,
   ExternalLink,
   X,
+  Menu,
+  ChevronDown,
+  ChevronRight,
+  PanelLeftClose,
+  PanelLeftOpen,
   Save,
   ShoppingBag,
   LogOut,
@@ -137,6 +142,10 @@ export default function AdminConsolePage() {
 
   const [activeTab, setActiveTab] = useState<ActiveCategoryTab>('dashboard');
   const [settingsSubTab, setSettingsSubTab] = useState<SettingsSubTab>('business');
+  const [ordersSubFilter, setOrdersSubFilter] = useState<string>('all');
+  const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(false);
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState<boolean>(false);
+  const [ordersSubMenuOpen, setOrdersSubMenuOpen] = useState<boolean>(true);
 
   // Customer Management Search & Modal State
   const [customerSearch, setCustomerSearch] = useState('');
@@ -310,7 +319,7 @@ export default function AdminConsolePage() {
     roleRequired?: string;
   }> = [
     { id: 'dashboard', label: 'Dashboard', icon: Sliders },
-    { id: 'sales', label: 'Sales & Financials', icon: DollarSign },
+    { id: 'sales', label: 'Sales & Financials', icon: IndianRupee },
     { id: 'orders', label: 'Orders', icon: ShoppingBag, badge: orders.length },
     { id: 'products', label: 'Products', icon: Package, badge: products.length },
     {
@@ -364,99 +373,324 @@ export default function AdminConsolePage() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-900 text-slate-100 flex flex-col font-sans">
-      {/* ─── Top Admin Bar ────────────────────────────────────────── */}
-      <header className="sticky top-0 z-40 bg-slate-950/90 backdrop-blur-md border-b border-slate-800 px-4 sm:px-8 py-3.5">
-        <div className="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-emerald-500 to-green-700 flex items-center justify-center shadow-lg shadow-emerald-500/20">
-              <Sliders className="w-5 h-5 text-white" />
+    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col lg:flex-row font-sans">
+      {/* ─── DESKTOP LEFT VERTICAL SIDEBAR (Section 11) ─────────── */}
+      <aside
+        className={`hidden lg:flex flex-col bg-slate-900 border-r border-slate-800 transition-all duration-300 z-30 sticky top-0 h-screen ${
+          sidebarCollapsed ? 'w-20' : 'w-64'
+        }`}
+      >
+        {/* Sidebar Header & Branding */}
+        <div className="p-4 border-b border-slate-800 flex items-center justify-between">
+          <div className="flex items-center gap-3 overflow-hidden">
+            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-emerald-500 to-green-700 flex items-center justify-center shadow-lg shadow-emerald-500/20 flex-shrink-0">
+              <span className="text-xl">🌿</span>
             </div>
+            {!sidebarCollapsed && (
+              <div className="min-w-0">
+                <h1 className="font-bold text-sm text-white tracking-tight truncate">
+                  {settings.businessName || 'Sudha Swagruha Foods'}
+                </h1>
+                <p className="text-[11px] text-emerald-400 font-semibold truncate">
+                  Admin Console
+                </p>
+              </div>
+            )}
+          </div>
+          <button
+            onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
+            className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer"
+            title={sidebarCollapsed ? 'Expand Sidebar' : 'Collapse Sidebar'}
+          >
+            {sidebarCollapsed ? (
+              <PanelLeftOpen className="w-4 h-4" />
+            ) : (
+              <PanelLeftClose className="w-4 h-4" />
+            )}
+          </button>
+        </div>
+
+        {/* Sidebar Nav List (Scrollable) */}
+        <div className="flex-1 overflow-y-auto p-3 space-y-1.5">
+          {visibleCategories.map((cat) => {
+            const Icon = cat.icon;
+            const isActive = activeTab === cat.id;
+            const isOrders = cat.id === 'orders';
+
+            return (
+              <div key={cat.id} className="space-y-1">
+                <button
+                  onClick={() => {
+                    setActiveTab(cat.id);
+                    if (isOrders) {
+                      setOrdersSubMenuOpen(!ordersSubMenuOpen);
+                    }
+                  }}
+                  className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
+                    isActive
+                      ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-600/30 font-bold'
+                      : 'text-slate-400 hover:text-white hover:bg-slate-800/80'
+                  }`}
+                  title={cat.label}
+                >
+                  <div className="flex items-center gap-3 min-w-0">
+                    <Icon className="w-4 h-4 flex-shrink-0" />
+                    {!sidebarCollapsed && <span className="truncate">{cat.label}</span>}
+                  </div>
+
+                  {!sidebarCollapsed && (
+                    <div className="flex items-center gap-1.5">
+                      {cat.badge !== undefined && (
+                        <span
+                          className={`px-2 py-0.5 rounded-full text-[10px] font-mono ${
+                            isActive ? 'bg-emerald-700 text-white' : 'bg-slate-800 text-slate-300'
+                          }`}
+                        >
+                          {cat.badge}
+                        </span>
+                      )}
+                      {isOrders && (
+                        <ChevronDown
+                          className={`w-3.5 h-3.5 transition-transform ${
+                            ordersSubMenuOpen ? 'rotate-180' : ''
+                          }`}
+                        />
+                      )}
+                    </div>
+                  )}
+                </button>
+
+                {/* Sub-menu for Orders (Section 11) */}
+                {isOrders && ordersSubMenuOpen && !sidebarCollapsed && (
+                  <div className="pl-6 pr-1 py-1 space-y-1 border-l-2 border-slate-800 ml-4">
+                    {[
+                      { id: 'all', label: 'All Orders' },
+                      { id: 'placed', label: 'Pending' },
+                      { id: 'active_processing', label: 'Processing' },
+                      { id: 'shipped', label: 'Shipped' },
+                      { id: 'delivered', label: 'Delivered' },
+                      { id: 'cancelled', label: 'Cancelled' },
+                      { id: 'payment_info', label: 'Payment Info', isHighlight: true },
+                    ].map((sub) => {
+                      const isSubActive = activeTab === 'orders' && ordersSubFilter === sub.id;
+                      return (
+                        <button
+                          key={sub.id}
+                          onClick={() => {
+                            setActiveTab('orders');
+                            setOrdersSubFilter(sub.id);
+                          }}
+                          className={`w-full text-left px-2.5 py-1.5 rounded-lg text-[11px] font-medium transition-colors flex items-center justify-between cursor-pointer ${
+                            isSubActive
+                              ? 'bg-emerald-500/20 text-emerald-300 font-bold border border-emerald-500/30'
+                              : sub.isHighlight
+                              ? 'text-emerald-400 hover:text-emerald-300 hover:bg-slate-800/60'
+                              : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
+                          }`}
+                        >
+                          <span className="flex items-center gap-1.5">
+                            {sub.isHighlight && <IndianRupee className="w-3 h-3 text-emerald-400" />}
+                            <span>{sub.label}</span>
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Sidebar Footer with Role & Actions */}
+        <div className="p-3 border-t border-slate-800 space-y-2 bg-slate-950/40">
+          {!sidebarCollapsed && (
+            <div className="px-2 py-1.5 rounded-xl bg-slate-900 border border-slate-800 text-[11px] flex items-center justify-between">
+              <div className="truncate">
+                <p className="font-bold text-white truncate">{currentUser?.full_name || userEmail}</p>
+                <p className="text-[10px] text-amber-400 font-bold uppercase">{roleDef.name}</p>
+              </div>
+              <span className="w-2 h-2 rounded-full bg-emerald-400" />
+            </div>
+          )}
+
+          <div className="flex items-center gap-1">
+            <Link
+              to="/"
+              target="_blank"
+              className="flex-1 flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white text-xs font-semibold border border-slate-700 transition-colors"
+              title="Open Customer Storefront"
+            >
+              <Store className="w-3.5 h-3.5 text-emerald-400" />
+              {!sidebarCollapsed && <span>Storefront</span>}
+            </Link>
+
+            <button
+              onClick={async () => {
+                await supabase.auth.signOut();
+                logout();
+                toast.success('Logged out from Admin Console');
+              }}
+              className="p-1.5 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/30 transition-colors cursor-pointer"
+              title="Sign out"
+            >
+              <LogOut className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </div>
+      </aside>
+
+      {/* ─── MOBILE DRAWER (Section 11) ─────────────────────────── */}
+      <AnimatePresence>
+        {mobileSidebarOpen && (
+          <div className="fixed inset-0 z-50 lg:hidden flex">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setMobileSidebarOpen(false)}
+              className="fixed inset-0 bg-black/80 backdrop-blur-sm"
+            />
+            <motion.div
+              initial={{ x: -280 }}
+              animate={{ x: 0 }}
+              exit={{ x: -280 }}
+              className="relative w-72 bg-slate-900 h-full border-r border-slate-800 flex flex-col z-10 shadow-2xl"
+            >
+              <div className="p-4 border-b border-slate-800 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="text-xl">🌿</span>
+                  <span className="font-bold text-white text-sm">Admin Console</span>
+                </div>
+                <button
+                  onClick={() => setMobileSidebarOpen(false)}
+                  className="p-1.5 text-slate-400 hover:text-white rounded-lg"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="flex-1 overflow-y-auto p-3 space-y-1">
+                {visibleCategories.map((cat) => {
+                  const Icon = cat.icon;
+                  const isActive = activeTab === cat.id;
+                  const isOrders = cat.id === 'orders';
+                  return (
+                    <div key={cat.id} className="space-y-1">
+                      <button
+                        onClick={() => {
+                          setActiveTab(cat.id);
+                          if (!isOrders) setMobileSidebarOpen(false);
+                        }}
+                        className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-semibold cursor-pointer ${
+                          isActive
+                            ? 'bg-emerald-600 text-white font-bold'
+                            : 'text-slate-400 hover:text-white hover:bg-slate-800'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2.5">
+                          <Icon className="w-4 h-4" />
+                          <span>{cat.label}</span>
+                        </div>
+                        {cat.badge !== undefined && (
+                          <span className="px-2 py-0.5 rounded-full text-[10px] bg-slate-800 text-slate-300">
+                            {cat.badge}
+                          </span>
+                        )}
+                      </button>
+
+                      {isOrders && (
+                        <div className="pl-6 space-y-1 border-l-2 border-slate-800 ml-4 py-1">
+                          {[
+                            { id: 'all', label: 'All Orders' },
+                            { id: 'placed', label: 'Pending' },
+                            { id: 'active_processing', label: 'Processing' },
+                            { id: 'shipped', label: 'Shipped' },
+                            { id: 'delivered', label: 'Delivered' },
+                            { id: 'cancelled', label: 'Cancelled' },
+                            { id: 'payment_info', label: 'Payment Info', isHighlight: true },
+                          ].map((sub) => (
+                            <button
+                              key={sub.id}
+                              onClick={() => {
+                                setActiveTab('orders');
+                                setOrdersSubFilter(sub.id);
+                                setMobileSidebarOpen(false);
+                              }}
+                              className={`w-full text-left px-2 py-1.5 rounded-lg text-xs font-medium cursor-pointer ${
+                                activeTab === 'orders' && ordersSubFilter === sub.id
+                                  ? 'bg-emerald-500/20 text-emerald-300 font-bold'
+                                  : 'text-slate-400 hover:text-white'
+                              }`}
+                            >
+                              {sub.label}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* ─── MAIN CONTENT COLUMN ───────────────────────────────── */}
+      <div className="flex-1 flex flex-col min-w-0 min-h-screen">
+        {/* Top Navigation & Status Bar */}
+        <header className="sticky top-0 z-20 bg-slate-950/90 backdrop-blur-md border-b border-slate-800 px-4 sm:px-8 py-3.5 flex items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => setMobileSidebarOpen(true)}
+              className="lg:hidden p-2 rounded-xl bg-slate-900 border border-slate-800 text-slate-300 hover:text-white cursor-pointer"
+            >
+              <Menu className="w-5 h-5" />
+            </button>
+
             <div>
               <div className="flex items-center gap-2">
-                <h1 className="font-bold text-lg text-white tracking-tight">
-                  {settings.businessName || 'Sudha Swagruha Foods'} Admin
+                <h1 className="font-bold text-base sm:text-lg text-white capitalize tracking-tight">
+                  {activeTab === 'orders' && ordersSubFilter === 'payment_info'
+                    ? 'Orders — Payment Info'
+                    : activeTab === 'orders' && ordersSubFilter !== 'all'
+                    ? `Orders — ${ordersSubFilter.replace('_', ' ')}`
+                    : activeTab.replace('_', ' ')}
                 </h1>
-                <span className="px-2 py-0.5 text-[11px] font-semibold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded-full">
-                  Live RBAC
+                <span className="hidden sm:inline-block px-2 py-0.5 text-[10px] font-semibold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded-full">
+                  Live Sync
                 </span>
               </div>
-              <p className="text-xs text-slate-400">
-                Enterprise Commerce Console • Authoritative Sync
+              <p className="text-[11px] text-slate-400 hidden sm:block">
+                Sudha Swagruha Foods Administration Console
               </p>
             </div>
           </div>
 
           <div className="flex items-center gap-2 sm:gap-3">
-            {/* Authenticated User & Role Badge */}
-            <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-800 text-slate-300 text-xs">
-              <span
-                className={`w-2 h-2 rounded-full ${
-                  currentRole === 'ROOT_ADMIN'
-                    ? 'bg-emerald-400'
-                    : currentRole === 'STORE_KEEPER'
-                    ? 'bg-blue-400'
-                    : 'bg-amber-400'
-                }`}
-              />
-              <span className="font-semibold text-white">
-                {currentUser?.full_name || userEmail}
-              </span>
-              <span
-                className={`px-2 py-0.5 rounded-md text-[10px] font-extrabold uppercase tracking-wider ${
-                  currentRole === 'ROOT_ADMIN'
-                    ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
-                    : currentRole === 'STORE_KEEPER'
-                    ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30'
-                    : 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
-                }`}
-              >
-                {roleDef.name}
-              </span>
-            </div>
-
             {/* Quick Role Tester Switcher */}
-            <div className="hidden lg:flex items-center gap-1 bg-slate-850 p-1 rounded-xl border border-slate-800 text-xs">
-              <span className="text-[10px] text-slate-500 uppercase px-1 font-semibold">Test Role:</span>
-              <button
-                onClick={() => handleSwitchDemoRole('ROOT_ADMIN')}
-                className={`px-2 py-1 rounded-lg text-[11px] font-bold transition-colors cursor-pointer ${
-                  currentRole === 'ROOT_ADMIN'
-                    ? 'bg-emerald-600 text-white'
-                    : 'text-slate-400 hover:text-white'
-                }`}
-                title="Switch to Root Admin"
-              >
-                Admin
-              </button>
-              <button
-                onClick={() => handleSwitchDemoRole('STORE_KEEPER')}
-                className={`px-2 py-1 rounded-lg text-[11px] font-bold transition-colors cursor-pointer ${
-                  currentRole === 'STORE_KEEPER'
-                    ? 'bg-blue-600 text-white'
-                    : 'text-slate-400 hover:text-white'
-                }`}
-                title="Switch to Store Keeper"
-              >
-                Store
-              </button>
-              <button
-                onClick={() => handleSwitchDemoRole('ORDER_PROCESSOR')}
-                className={`px-2 py-1 rounded-lg text-[11px] font-bold transition-colors cursor-pointer ${
-                  currentRole === 'ORDER_PROCESSOR'
-                    ? 'bg-amber-600 text-white'
-                    : 'text-slate-400 hover:text-white'
-                }`}
-                title="Switch to Order Processor"
-              >
-                Orders
-              </button>
+            <div className="hidden md:flex items-center gap-1 bg-slate-900 p-1 rounded-xl border border-slate-800 text-xs">
+              <span className="text-[10px] text-slate-500 uppercase px-1 font-semibold">Role:</span>
+              {(['ROOT_ADMIN', 'STORE_KEEPER', 'ORDER_PROCESSOR'] as AdminRole[]).map((r) => (
+                <button
+                  key={r}
+                  onClick={() => handleSwitchDemoRole(r)}
+                  className={`px-2 py-0.5 rounded-lg text-[10px] font-bold transition-colors cursor-pointer ${
+                    currentRole === r
+                      ? 'bg-emerald-600 text-white'
+                      : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  {r === 'ROOT_ADMIN' ? 'Admin' : r === 'STORE_KEEPER' ? 'Store' : 'Orders'}
+                </button>
+              ))}
             </div>
 
             <Link
               to="/"
               target="_blank"
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white text-xs font-semibold border border-slate-700 transition-colors"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white text-xs font-semibold border border-slate-800 transition-colors"
             >
               <Store className="w-3.5 h-3.5 text-emerald-400" />
               <span className="hidden sm:inline">Storefront</span>
@@ -469,148 +703,96 @@ export default function AdminConsolePage() {
                 logout();
                 toast.success('Logged out from Admin Console');
               }}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-400 text-xs font-semibold border border-red-500/30 transition-colors cursor-pointer"
-              title="Sign out"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-red-500/10 hover:bg-red-500/20 text-red-400 text-xs font-semibold border border-red-500/30 transition-colors cursor-pointer"
             >
               <LogOut className="w-3.5 h-3.5" />
-              <span>Logout</span>
+              <span className="hidden sm:inline">Logout</span>
             </button>
           </div>
-        </div>
-      </header>
+        </header>
 
-      {/* ─── Metric Badges Bar ────────────────────────────────────────── */}
-      <section className="bg-slate-950/40 border-b border-slate-800/80 px-4 sm:px-8 py-3">
-        <div className="max-w-7xl mx-auto grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
-          <div
-            onClick={() => canAccess('orders') && setActiveTab('orders')}
-            className={`bg-slate-850/60 hover:bg-slate-800 border border-slate-800 rounded-xl px-4 py-2.5 flex items-center justify-between transition-colors ${
-              canAccess('orders') ? 'cursor-pointer' : 'opacity-60 cursor-not-allowed'
-            }`}
-          >
-            <div>
-              <p className="text-slate-400">Total Orders</p>
-              <p className="text-lg font-bold text-emerald-400 mt-0.5">{orders.length} Orders</p>
+        {/* ─── Metric Badges Bar ─── */}
+        <section className="bg-slate-950/40 border-b border-slate-800/80 px-4 sm:px-8 py-2.5">
+          <div className="max-w-7xl mx-auto grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+            <div
+              onClick={() => {
+                setActiveTab('orders');
+                setOrdersSubFilter('all');
+              }}
+              className="bg-slate-900/60 hover:bg-slate-850 border border-slate-800 rounded-xl px-3.5 py-2 flex items-center justify-between transition-colors cursor-pointer"
+            >
+              <div>
+                <p className="text-[11px] text-slate-400">Total Orders</p>
+                <p className="text-base font-bold text-emerald-400 mt-0.5">{orders.length}</p>
+              </div>
+              <ShoppingBag className="w-4 h-4 text-emerald-400/80" />
             </div>
-            <ShoppingBag className="w-5 h-5 text-emerald-400/80" />
-          </div>
 
-          <div
-            onClick={() => canAccess('inventory') && setActiveTab('inventory')}
-            className={`bg-slate-850/60 hover:bg-slate-800 border border-slate-800 rounded-xl px-4 py-2.5 flex items-center justify-between transition-colors ${
-              canAccess('inventory') ? 'cursor-pointer' : 'opacity-60 cursor-not-allowed'
-            }`}
-          >
-            <div>
-              <p className="text-slate-400">Stock Alerts</p>
-              <p className="text-lg font-bold text-amber-400 mt-0.5">
-                {stats.lowStock + stats.outOfStock} Items
+            <div
+              onClick={() => canAccess('inventory') && setActiveTab('inventory')}
+              className="bg-slate-900/60 hover:bg-slate-850 border border-slate-800 rounded-xl px-3.5 py-2 flex items-center justify-between transition-colors cursor-pointer"
+            >
+              <div>
+                <p className="text-[11px] text-slate-400">Stock Alerts</p>
+                <p className="text-base font-bold text-amber-400 mt-0.5">
+                  {stats.lowStock + stats.outOfStock} Items
+                </p>
+              </div>
+              <AlertTriangle className="w-4 h-4 text-amber-400/80" />
+            </div>
+
+            <div
+              onClick={() => canAccess('customers') && setActiveTab('customers')}
+              className="bg-slate-900/60 hover:bg-slate-850 border border-slate-800 rounded-xl px-3.5 py-2 flex items-center justify-between transition-colors cursor-pointer"
+            >
+              <div>
+                <p className="text-[11px] text-slate-400">Customer Base</p>
+                <p className="text-base font-bold text-blue-400 mt-0.5">{customersList.length}</p>
+              </div>
+              <User className="w-4 h-4 text-blue-400/80" />
+            </div>
+
+            <div
+              onClick={() => canAccess('sales') && setActiveTab('sales')}
+              className="bg-slate-900/60 hover:bg-slate-850 border border-slate-800 rounded-xl px-3.5 py-2 flex items-center justify-between transition-colors cursor-pointer"
+            >
+              <div>
+                <p className="text-[11px] text-slate-400">Net Revenue</p>
+                <p className="text-base font-bold text-white mt-0.5">
+                  ₹{stats.totalRevenue.toLocaleString()}
+                </p>
+              </div>
+              <IndianRupee className="w-4 h-4 text-purple-400/80" />
+            </div>
+          </div>
+        </section>
+
+        {/* ─── Main Content Body ─── */}
+        <main className="flex-1 max-w-7xl mx-auto w-full p-4 sm:p-8">
+          {!canAccess(activeTab) ? (
+            <div className="bg-red-950/30 border border-red-500/40 rounded-2xl p-8 text-center max-w-xl mx-auto">
+              <AlertTriangle className="w-12 h-12 text-red-400 mx-auto mb-3" />
+              <h2 className="text-xl font-bold text-white">Access Denied (403 Forbidden)</h2>
+              <p className="text-sm text-slate-300 mt-2">
+                Your role <strong className="text-amber-400">{roleDef.name}</strong> is not authorized
+                to access the <strong>{activeTab.toUpperCase()}</strong> module.
               </p>
+              <div className="mt-5">
+                <button
+                  onClick={() => setActiveTab(visibleCategories[0]?.id || 'orders')}
+                  className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-xl text-xs font-semibold cursor-pointer"
+                >
+                  Return to Authorized Section ({visibleCategories[0]?.label})
+                </button>
+              </div>
             </div>
-            <AlertTriangle className="w-5 h-5 text-amber-400/80" />
-          </div>
-
-          <div
-            onClick={() => canAccess('customers') && setActiveTab('customers')}
-            className={`bg-slate-850/60 hover:bg-slate-800 border border-slate-800 rounded-xl px-4 py-2.5 flex items-center justify-between transition-colors ${
-              canAccess('customers') ? 'cursor-pointer' : 'opacity-60 cursor-not-allowed'
-            }`}
-          >
-            <div>
-              <p className="text-slate-400">Customer Base</p>
-              <p className="text-lg font-bold text-blue-400 mt-0.5">
-                {customersList.length} Customers
-              </p>
-            </div>
-            <User className="w-5 h-5 text-blue-400/80" />
-          </div>
-
-          <div
-            onClick={() => canAccess('settings') && setActiveTab('settings')}
-            className={`bg-slate-850/60 hover:bg-slate-800 border border-slate-800 rounded-xl px-4 py-2.5 flex items-center justify-between transition-colors ${
-              canAccess('settings') ? 'cursor-pointer' : 'opacity-60 cursor-not-allowed'
-            }`}
-          >
-            <div>
-              <p className="text-slate-400">Total Net Revenue</p>
-              <p className="text-lg font-bold text-white mt-0.5">₹{stats.totalRevenue.toLocaleString()}</p>
-            </div>
-            <DollarSign className="w-5 h-5 text-purple-400/80" />
-          </div>
-        </div>
-      </section>
-
-      {/* ─── Primary Category Tabs Navigation (Requirement 6, 8, 9, 27) ── */}
-      <div className="bg-slate-900 border-b border-slate-800 px-4 sm:px-8">
-        <div className="max-w-7xl mx-auto flex gap-2 overflow-x-auto py-2.5">
-          {visibleCategories.map((cat) => {
-            const Icon = cat.icon;
-            const isActive = activeTab === cat.id;
-            return (
-              <button
-                key={cat.id}
-                onClick={() => setActiveTab(cat.id)}
-                className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all flex-shrink-0 cursor-pointer ${
-                  isActive
-                    ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-600/30'
-                    : 'text-slate-400 hover:text-white hover:bg-slate-800'
-                }`}
-              >
-                <Icon className="w-4 h-4" />
-                <span>{cat.label}</span>
-                {cat.badge !== undefined && (
-                  <span
-                    className={`ml-1 px-2 py-0.5 rounded-full text-xs font-mono ${
-                      isActive ? 'bg-emerald-700 text-white' : 'bg-slate-800 text-slate-300'
-                    }`}
-                  >
-                    {cat.badge}
-                  </span>
-                )}
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* ─── Main Content Body ────────────────────────────────────── */}
-      <main className="flex-1 max-w-7xl mx-auto w-full p-4 sm:p-8">
-        {/* Guard: Ensure user has permission for active tab */}
-        {!canAccess(activeTab) ? (
-          <div className="bg-red-950/30 border border-red-500/40 rounded-2xl p-8 text-center max-w-xl mx-auto">
-            <AlertTriangle className="w-12 h-12 text-red-400 mx-auto mb-3" />
-            <h2 className="text-xl font-bold text-white">Access Denied (403 Forbidden)</h2>
-            <p className="text-sm text-slate-300 mt-2">
-              Your role <strong className="text-amber-400">{roleDef.name}</strong> is not authorized
-              to access the <strong>{activeTab.toUpperCase()}</strong> module.
-            </p>
-            <div className="mt-5">
-              <button
-                onClick={() => setActiveTab(visibleCategories[0]?.id || 'orders')}
-                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-xl text-xs font-semibold cursor-pointer"
-              >
-                Return to Authorized Section ({visibleCategories[0]?.label})
-              </button>
-            </div>
-          </div>
-        ) : (
-          <>
-            {/* ============================================================ */}
-            {/* CATEGORY 1: DASHBOARD OVERVIEW                               */}
-            {/* ============================================================ */}
-            {activeTab === 'dashboard' && (
-              <AdminDashboardTab onNavigateToTab={(tab) => setActiveTab(tab as ActiveCategoryTab)} />
-            )}
-
-            {/* ============================================================ */}
-            {/* CATEGORY: SALES & FINANCIAL OVERVIEW (Requirements 21-24)    */}
-            {/* ============================================================ */}
-            {activeTab === 'sales' && <AdminSalesTab />}
-
-            {/* ============================================================ */}
-            {/* CATEGORY 2: ORDERS MANAGEMENT                                */}
-            {/* ============================================================ */}
-            {activeTab === 'orders' && <AdminOrdersTab />}
+          ) : (
+            <>
+              {activeTab === 'dashboard' && (
+                <AdminDashboardTab onNavigateToTab={(tab) => setActiveTab(tab as ActiveCategoryTab)} />
+              )}
+              {activeTab === 'sales' && <AdminSalesTab />}
+              {activeTab === 'orders' && <AdminOrdersTab initialSubFilter={ordersSubFilter} />}
 
             {/* ============================================================ */}
             {/* CATEGORY 4: INVENTORY & STOCK CONTROL                        */}
@@ -1178,7 +1360,7 @@ export default function AdminConsolePage() {
                                   className="p-2 rounded-lg bg-slate-800/80 hover:bg-emerald-500/20 text-slate-300 hover:text-emerald-300 border border-slate-700/60 transition-colors"
                                   title="Quick update price & discounts"
                                 >
-                                  <DollarSign className="w-4 h-4" />
+                                  <IndianRupee className="w-4 h-4" />
                                 </button>
 
                                 {/* Full Edit */}
@@ -1782,6 +1964,7 @@ export default function AdminConsolePage() {
           </div>
         )}
       </AnimatePresence>
+      </div>
     </div>
   );
 }
@@ -2497,7 +2680,7 @@ function QuickPriceModal({
         <div className="flex items-center justify-between pb-3 border-b border-slate-800">
           <div>
             <h3 className="font-bold text-white text-base flex items-center gap-2">
-              <DollarSign className="w-5 h-5 text-emerald-400" />
+              <IndianRupee className="w-5 h-5 text-emerald-400" />
               Quick Price & Discount Update
             </h3>
             <p className="text-xs text-slate-400 truncate">{product.name_en}</p>

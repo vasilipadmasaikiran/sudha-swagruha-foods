@@ -147,7 +147,11 @@ export type NotificationEvent =
   | 'REFUND_COMPLETED'
   | 'REFUND_FAILED'
   | 'CANCELLATION_REQUESTED'
-  | 'CANCELLATION_REJECTED';
+  | 'CANCELLATION_REJECTED'
+  | 'PAYMENT_RECEIVED'
+  | 'FULLY_PAID'
+  | 'PARTIALLY_PAID'
+  | 'REFUND_PROCESSED';
 
 export interface NotificationLogItem {
   id: string;

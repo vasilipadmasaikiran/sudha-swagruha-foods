@@ -77,6 +77,14 @@ export const SMS_TEMPLATES: Record<NotificationEvent, string> = {
     'Your cancellation request for order {{orderNumber}} has been received and is under review by {{businessName}}. Track: {{trackingUrl}}',
   CANCELLATION_REJECTED:
     'Update for order {{orderNumber}}: Your cancellation request was rejected ({{rejectionReason}}). Your order remains active with {{businessName}}. Track: {{trackingUrl}}',
+  PAYMENT_RECEIVED:
+    'Payment Received: Your payment of Rs. {{paymentAmount}} has been received for Order #{{orderNumber}}. Total: Rs. {{totalAmount}}, Paid: Rs. {{totalPaid}}, Balance: Rs. {{balanceAmount}}. Thank you for your order. - {{businessName}}',
+  FULLY_PAID:
+    'Your payment of Rs. {{paymentAmount}} for Order #{{orderNumber}} has been received successfully. Your order is now FULLY PAID. Thank you for choosing {{businessName}}!',
+  PARTIALLY_PAID:
+    'We received Rs. {{paymentAmount}} for Order #{{orderNumber}}. Total Amount: Rs. {{totalAmount}}, Paid: Rs. {{totalPaid}}, Balance: Rs. {{balanceAmount}}. Please complete the remaining payment. - {{businessName}}',
+  REFUND_PROCESSED:
+    'A refund of Rs. {{refundAmount}} has been processed for Order #{{orderNumber}}. Refund Reference: {{refundReference}}. - {{businessName}}',
 };
 
 // Internal in-memory log buffer for instantaneous UI access
@@ -148,6 +156,10 @@ export const SmsService = {
       REFUND_FAILED: 'refundFailed',
       CANCELLATION_REQUESTED: 'fullOrderCancelled',
       CANCELLATION_REJECTED: 'fullOrderCancelled',
+      PAYMENT_RECEIVED: 'orderConfirmed',
+      FULLY_PAID: 'orderConfirmed',
+      PARTIALLY_PAID: 'orderConfirmed',
+      REFUND_PROCESSED: 'refundCompleted',
     };
 
     const eventKey = eventMap[event];

@@ -314,4 +314,133 @@ export const NotificationService = {
 
     return { emailSent, smsSent };
   },
+
+  /**
+   * Notifies customer when a Payment is added / received (Section 8)
+   */
+  async notifyPaymentReceived({
+    order,
+    payment,
+    breakdown,
+    settings,
+  }: {
+    order: DbOrder;
+    payment: {
+      amount: number;
+      payment_method: string;
+      reference?: string;
+      payment_date?: string;
+      notes?: string;
+    };
+    breakdown?: {
+      adjustedOrderTotal: number;
+      totalAmountReceived: number;
+      balanceAmount: number;
+      paymentStatus: string;
+    };
+    settings: StoreSettings;
+  }): Promise<{ emailSent: boolean; smsSent: boolean }> {
+    const isFull = breakdown ? breakdown.paymentStatus === 'FULLY PAID' : false;
+    const event: NotificationEvent = isFull ? 'FULLY_PAID' : 'PAYMENT_RECEIVED';
+
+    if (this.isDuplicateEvent(order.order_number, event, payment.reference || String(payment.amount))) {
+      return { emailSent: false, smsSent: false };
+    }
+
+    let emailSent = false;
+    let smsSent = false;
+
+    // 1. Email
+    try {
+      const emailRes = await EmailService.sendPaymentConfirmation(
+        order,
+        {
+          amount: payment.amount,
+          payment_method: payment.payment_method,
+          reference: payment.reference,
+          payment_date: payment.payment_date,
+          notes: payment.notes,
+          total_paid: breakdown?.totalAmountReceived,
+          amount_due: breakdown?.balanceAmount,
+          payment_status: breakdown?.paymentStatus,
+        },
+        settings
+      );
+      emailSent = emailRes.success;
+    } catch (err) {
+      console.warn('Payment confirmation email notice:', err);
+    }
+
+    // 2. SMS
+    try {
+      const totalAmt = breakdown?.adjustedOrderTotal ?? order.total;
+      const totalPaid = breakdown?.totalAmountReceived ?? payment.amount;
+      const balance = breakdown?.balanceAmount ?? Math.max(0, totalAmt - totalPaid);
+
+      const smsRes = await SmsService.sendOrderEventSms(
+        event,
+        order,
+        {
+          paymentAmount: payment.amount,
+          totalAmount: totalAmt,
+          totalPaid,
+          balanceAmount: balance,
+        },
+        settings
+      );
+      smsSent = smsRes.success;
+    } catch (err) {
+      console.warn('Payment confirmation SMS notice:', err);
+    }
+
+    return { emailSent, smsSent };
+  },
+
+  /**
+   * Notifies customer when a Refund is processed (Section 8)
+   */
+  async notifyRefundProcessed({
+    order,
+    refund,
+    settings,
+  }: {
+    order: DbOrder;
+    refund: OrderRefundRecord;
+    settings: StoreSettings;
+  }): Promise<{ emailSent: boolean; smsSent: boolean }> {
+    if (this.isDuplicateEvent(order.order_number, 'REFUND_PROCESSED', refund.id)) {
+      return { emailSent: false, smsSent: false };
+    }
+
+    let emailSent = false;
+    let smsSent = false;
+
+    // 1. Email
+    try {
+      const emailRes = await EmailService.sendRefundUpdate(order, refund, settings);
+      emailSent = emailRes.success;
+    } catch (err) {
+      console.warn('Refund notification email notice:', err);
+    }
+
+    // 2. SMS
+    try {
+      const smsRes = await SmsService.sendOrderEventSms(
+        'REFUND_PROCESSED',
+        order,
+        {
+          refundAmount: refund.amount,
+          refundReference: refund.provider_refund_id || refund.id,
+          refundReason: refund.reason,
+        },
+        settings
+      );
+      smsSent = smsRes.success;
+    } catch (err) {
+      console.warn('Refund notification SMS notice:', err);
+    }
+
+    return { emailSent, smsSent };
+  },
 };
+

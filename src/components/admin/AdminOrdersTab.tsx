@@ -25,7 +25,7 @@ import {
   Send,
   Ban,
   RotateCcw,
-  DollarSign,
+  IndianRupee,
   MinusCircle,
   AlertTriangle,
   Receipt,
@@ -38,6 +38,7 @@ import { useOrderStore } from '@/hooks/useOrderStore';
 import { useAdminAuthStore } from '@/hooks/useAdminAuthStore';
 import { useSettingsStore } from '@/hooks/useSettingsStore';
 import { EmailService } from '@/services/emailService';
+import AdminPaymentInfoSubTab from './AdminPaymentInfoSubTab';
 import { logAdminAction } from '@/services/auditLogger';
 import { calculateOrderRefundableMetrics, roundToTwoDecimals } from '@/services/refundService';
 import type { DbOrder, OrderItem, OrderRefundRecord, OrderPaymentRecord } from '@/services/supabase';
@@ -77,7 +78,7 @@ const COURIER_OPTIONS = [
   'Other Courier',
 ];
 
-export default function AdminOrdersTab() {
+export default function AdminOrdersTab({ initialSubFilter }: { initialSubFilter?: string } = {}) {
   const {
     orders,
     updateOrderDetails,
@@ -97,9 +98,15 @@ export default function AdminOrdersTab() {
   const { settings } = useSettingsStore();
 
   const [searchQuery, setSearchQuery] = useState('');
-  const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [statusFilter, setStatusFilter] = useState<string>(initialSubFilter || 'all');
   const [selectedOrder, setSelectedOrder] = useState<DbOrder | null>(null);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (initialSubFilter) {
+      setStatusFilter(initialSubFilter);
+    }
+  }, [initialSubFilter]);
 
   // Dispatch / Tracking Modal State (Requirement 11)
   const [dispatchModalOrder, setDispatchModalOrder] = useState<DbOrder | null>(null);
@@ -850,6 +857,19 @@ export default function AdminOrdersTab() {
           </span>
         </button>
 
+        {/* Dedicated Sub-tab: Payment Info (Section 1) */}
+        <button
+          onClick={() => setStatusFilter('payment_info')}
+          className={`px-3.5 py-1.5 rounded-xl font-medium transition-all flex items-center gap-1.5 flex-shrink-0 cursor-pointer ${
+            statusFilter === 'payment_info'
+              ? 'bg-gradient-to-r from-emerald-600 to-teal-600 text-white font-bold shadow-md'
+              : 'bg-slate-900 text-emerald-400 hover:text-white border border-emerald-500/30'
+          }`}
+        >
+          <IndianRupee className="w-3.5 h-3.5" />
+          <span>Payment Info</span>
+        </button>
+
         {/* Dedicated Ledger: Refund Transactions */}
         <button
           onClick={() => setStatusFilter('refund_ledger')}
@@ -867,8 +887,10 @@ export default function AdminOrdersTab() {
         </button>
       </div>
 
-      {/* ─── CONDITIONAL VIEW: REFUND LEDGER OR ORDERS TABLE ─── */}
-      {statusFilter === 'refund_ledger' ? (
+      {/* ─── CONDITIONAL VIEW: PAYMENT INFO, REFUND LEDGER OR ORDERS TABLE ─── */}
+      {statusFilter === 'payment_info' ? (
+        <AdminPaymentInfoSubTab onSelectOrder={(o) => setSelectedOrder(o)} />
+      ) : statusFilter === 'refund_ledger' ? (
         /* Dedicated Refund Ledger Table */
         <div className="bg-slate-950/60 rounded-2xl border border-slate-800 overflow-hidden shadow-xl">
           <div className="p-4 bg-slate-900/80 border-b border-slate-800 flex items-center justify-between">
@@ -1774,7 +1796,7 @@ export default function AdminOrdersTab() {
                     <div className="p-4 bg-slate-950/80 rounded-2xl border border-slate-800 space-y-3">
                       <div className="flex items-center justify-between pb-2 border-b border-slate-800">
                         <span className="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-1.5">
-                          <DollarSign className="w-4 h-4 text-emerald-400" />
+                          <IndianRupee className="w-4 h-4 text-emerald-400" />
                           <span>Authoritative Financial Summary</span>
                         </span>
                         <span
