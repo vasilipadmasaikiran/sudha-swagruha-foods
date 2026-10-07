@@ -545,17 +545,39 @@ export const useOrderStore = create<OrderStore>()(
               coupon_discount: existing.coupon_discount,
             };
 
-            const { error: fullError } = await supabase
+            let { error: fullError } = await supabase
               .from('orders')
               .update(fullPayload)
               .eq('order_number', existing.order_number);
 
+            // If check constraint violation occurred (e.g. 'partially_paid' or 'unpaid' not yet in DB check constraint),
+            // automatically retry with compliant payment_status 'pending' while full payment ledger is preserved in payments & notes
+            if (
+              fullError &&
+              (fullError.code === '23514' ||
+                fullError.message?.toLowerCase().includes('violates check constraint') ||
+                fullError.message?.toLowerCase().includes('payment_status'))
+            ) {
+              console.warn('DB payment_status check constraint violation; retrying with compliant "pending":', fullError.message);
+              fullPayload.payment_status = 'pending';
+              const retryRes = await supabase
+                .from('orders')
+                .update(fullPayload)
+                .eq('order_number', existing.order_number);
+              fullError = retryRes.error;
+            }
+
             if (fullError) {
               // If column does not exist yet (pre-migration), fallback safely to standard columns + encoded notes
               console.warn('Dedicated tracking columns not yet in DB schema cache; updating via standard schema fallback:', fullError.message);
+              const safeDbStatus =
+                newPaymentStatus === 'partially_paid' || newPaymentStatus === 'unpaid'
+                  ? 'pending'
+                  : newPaymentStatus;
+
               const fallbackPayload: Record<string, unknown> = {
                 order_status: newStatus,
-                payment_status: newPaymentStatus,
+                payment_status: safeDbStatus,
                 notes: encodedNotes,
                 updated_at: now,
               };
@@ -1362,252 +1384,305 @@ export const useOrderStore = create<OrderStore>()(
           recordedByRole?: string;
         }
       ) => {
-        const order = get().orders.find((o) => o.id === orderId || o.order_number === orderId);
-        if (!order) {
-          return { success: false, error: 'Order not found in database or store' };
-        }
-
-        // 1. Authoritative Backend/Service Validation (Never trust frontend values)
-        const validation = validateNewPaymentEntry(order, paymentData.amount);
-        if (!validation.valid) {
-          return { success: false, error: validation.error };
-        }
-
-        const now = new Date().toISOString();
-        const paymentDate = paymentData.paymentDate || now;
-        const recordedBy = paymentData.recordedBy || 'Admin';
-        const recordedByRole = paymentData.recordedByRole || 'Store Owner';
-        const txnId = paymentData.transactionId?.trim() || `MANUAL-${Date.now().toString().slice(-6)}`;
-        const paymentMethod = paymentData.paymentMethod || 'cash';
-
-        const newPayment: OrderPaymentRecord = {
-          id: `pay_${Date.now()}`,
-          payment_id: `pay_${Date.now()}`,
-          order_id: order.id,
-          orderId: order.id,
-          order_number: order.order_number,
-          transaction_id: txnId,
-          reference: txnId,
-          amount: validation.roundedAmount,
-          status: 'success',
-          provider: paymentData.provider || 'manual',
-          payment_method: paymentMethod,
-          paymentMethod: paymentMethod,
-          paid_at: paymentDate,
-          payment_date: paymentDate,
-          paymentDate: paymentDate,
-          notes: paymentData.notes || `Manual payment recorded by ${recordedBy}`,
-          recorded_by: recordedBy,
-          recordedBy: recordedBy,
-          recorded_by_role: recordedByRole,
-          recordedByRole: recordedByRole,
-          created_at: now,
-          createdAt: now,
-        };
-
-        const existingPayments = Array.isArray(order.payments) ? [...order.payments] : [];
-        const updatedPayments = [...existingPayments, newPayment];
-
-        // 2. Central Authoritative Calculation
-        const interimOrder: DbOrder = {
-          ...order,
-          payments: updatedPayments,
-        };
-        const breakdown = calculateOrderPaymentBreakdown(interimOrder);
-
-        const mappedPaymentStatus: DbOrder['payment_status'] =
-          breakdown.paymentStatus === 'FULLY PAID'
-            ? 'paid'
-            : breakdown.paymentStatus === 'EXCESS AMOUNT'
-            ? 'paid'
-            : breakdown.paymentStatus === 'PARTIALLY PAID'
-            ? 'partially_paid'
-            : 'unpaid';
-
-        const updatedHistory: OrderStatusHistoryItem[] = [
-          ...(order.order_status_history || []),
-          {
-            status: order.order_status,
-            timestamp: now,
-            updated_by: recordedBy,
-            notes: `Payment recorded: ₹${validation.roundedAmount} via ${paymentMethod.toUpperCase()} (Ref: ${txnId}). Status: ${breakdown.paymentStatus}. Total Received: ₹${breakdown.totalAmountReceived}, Balance: ₹${breakdown.balanceAmount}${breakdown.excessAmount > 0 ? `, Excess: ₹${breakdown.excessAmount}` : ''}`,
-          },
-        ];
-
-        // 3. Persist to Supabase and update local state via updateOrderDetails
-        const updatedOrder = await get().updateOrderDetails(order.id, {
-          payment_status: mappedPaymentStatus,
-          amount_paid: breakdown.totalAmountReceived,
-          amount_due: breakdown.balanceAmount,
-          payments: updatedPayments,
-          notes: order.notes || undefined,
-          updated_by: recordedBy,
-        });
-
-        // Ensure in-memory Zustand store is immediately updated with full payments array
-        const finalOrder: DbOrder = {
-          ...updatedOrder,
-          payments: updatedPayments,
-          amount_paid: breakdown.totalAmountReceived,
-          amount_due: breakdown.balanceAmount,
-          payment_status: mappedPaymentStatus,
-          order_status_history: updatedHistory,
-        };
-
-        set((state) => ({
-          orders: state.orders.map((o) =>
-            o.id === order.id || o.order_number === order.order_number ? finalOrder : o
-          ),
-        }));
-
-        // 4. Audit Logging: MANUAL_PAYMENT_RECORDED
-        await logAdminAction(recordedBy, recordedByRole, 'MANUAL_PAYMENT_RECORDED', 'ORDER', order.order_number, {
-          orderId: order.id,
-          paymentId: newPayment.id,
-          amount: validation.roundedAmount,
-          paymentMethod,
-          reference: txnId,
-          status: 'SUCCESS',
-          paymentDate,
-          notes: newPayment.notes,
-          recordedBy,
-          recordedByRole,
-          totalReceived: breakdown.totalAmountReceived,
-          balanceAmount: breakdown.balanceAmount,
-          excessAmount: breakdown.excessAmount,
-          authoritativeStatus: breakdown.paymentStatus,
-        });
-
-        // 5. Customer Notification (SMS + Email) (Section 8)
         try {
-          const storeSettings = useSettingsStore.getState().settings;
-          await NotificationService.notifyPaymentReceived({
-            order: finalOrder,
-            payment: {
-              amount: validation.roundedAmount,
-              payment_method: paymentMethod,
-              reference: txnId,
-              payment_date: paymentDate,
-              notes: newPayment.notes || undefined,
-            },
-            breakdown: {
-              adjustedOrderTotal: breakdown.adjustedOrderTotal,
-              totalAmountReceived: breakdown.totalAmountReceived,
-              balanceAmount: breakdown.balanceAmount,
-              paymentStatus: breakdown.paymentStatus,
-            },
-            settings: storeSettings,
-          });
-        } catch (notifErr) {
-          console.warn('Customer payment notification non-blocking issue:', notifErr);
-        }
+          const order = get().orders.find((o) => o.id === orderId || o.order_number === orderId);
+          if (!order) {
+            return { success: false, error: 'Order not found in database or store' };
+          }
 
-        return { success: true, order: finalOrder, breakdown };
+          // 1. Authoritative Backend/Service Validation (Never trust frontend values)
+          const validation = validateNewPaymentEntry(order, paymentData.amount);
+          if (!validation.valid) {
+            return { success: false, error: validation.error };
+          }
+
+          const txnId = paymentData.transactionId?.trim() || `MANUAL-${Date.now().toString().slice(-6)}`;
+
+          // 2. Prevent Duplicate Entry (Deduplication Guard)
+          if (
+            paymentData.transactionId?.trim() &&
+            order.payments?.some(
+              (p) =>
+                p.transaction_id &&
+                p.transaction_id.toLowerCase() === paymentData.transactionId?.trim().toLowerCase()
+            )
+          ) {
+            return {
+              success: false,
+              error: `A payment with Transaction Reference "${paymentData.transactionId}" has already been recorded for this order.`,
+            };
+          }
+
+          // Rapid accidental double-click guard (same amount within 10 seconds)
+          const recentDuplicate = order.payments?.find((p) => {
+            if (Number(p.amount) !== validation.roundedAmount) return false;
+            const pTime = new Date(p.created_at || p.createdAt || 0).getTime();
+            return Date.now() - pTime < 10000;
+          });
+          if (recentDuplicate) {
+            return {
+              success: false,
+              error: `A payment of ₹${validation.roundedAmount} was already recorded a few moments ago (Ref: ${recentDuplicate.transaction_id || recentDuplicate.id}). Please wait or specify a distinct Transaction ID.`,
+            };
+          }
+
+          const now = new Date().toISOString();
+          const paymentDate = paymentData.paymentDate || now;
+          const recordedBy = paymentData.recordedBy || 'Admin';
+          const recordedByRole = paymentData.recordedByRole || 'Store Owner';
+          const paymentMethod = paymentData.paymentMethod || 'cash';
+
+          const newPayment: OrderPaymentRecord = {
+            id: `pay_${Date.now()}`,
+            payment_id: `pay_${Date.now()}`,
+            order_id: order.id,
+            orderId: order.id,
+            order_number: order.order_number,
+            transaction_id: txnId,
+            reference: txnId,
+            amount: validation.roundedAmount,
+            status: 'success',
+            provider: paymentData.provider || 'manual',
+            payment_method: paymentMethod,
+            paymentMethod: paymentMethod,
+            paid_at: paymentDate,
+            payment_date: paymentDate,
+            paymentDate: paymentDate,
+            notes: paymentData.notes || `Manual payment recorded by ${recordedBy}`,
+            recorded_by: recordedBy,
+            recordedBy: recordedBy,
+            recorded_by_role: recordedByRole,
+            recordedByRole: recordedByRole,
+            created_at: now,
+            createdAt: now,
+          };
+
+          const existingPayments = Array.isArray(order.payments) ? [...order.payments] : [];
+          const updatedPayments = [...existingPayments, newPayment];
+
+          // 3. Central Authoritative Calculation
+          const interimOrder: DbOrder = {
+            ...order,
+            payments: updatedPayments,
+          };
+          const breakdown = calculateOrderPaymentBreakdown(interimOrder);
+
+          const mappedPaymentStatus: DbOrder['payment_status'] =
+            breakdown.paymentStatus === 'FULLY PAID'
+              ? 'paid'
+              : breakdown.paymentStatus === 'EXCESS AMOUNT'
+              ? 'paid'
+              : breakdown.paymentStatus === 'PARTIALLY PAID'
+              ? 'partially_paid'
+              : 'unpaid';
+
+          const updatedHistory: OrderStatusHistoryItem[] = [
+            ...(order.order_status_history || []),
+            {
+              status: order.order_status,
+              timestamp: now,
+              updated_by: recordedBy,
+              notes: `Payment recorded: ₹${validation.roundedAmount} via ${paymentMethod.toUpperCase()} (Ref: ${txnId}). Status: ${breakdown.paymentStatus}. Total Received: ₹${breakdown.totalAmountReceived}, Balance: ₹${breakdown.balanceAmount}${breakdown.excessAmount > 0 ? `, Excess: ₹${breakdown.excessAmount}` : ''}`,
+            },
+          ];
+
+          // 4. Persist to Supabase and update local state via updateOrderDetails
+          const updatedOrder = await get().updateOrderDetails(order.id, {
+            payment_status: mappedPaymentStatus,
+            amount_paid: breakdown.totalAmountReceived,
+            amount_due: breakdown.balanceAmount,
+            payments: updatedPayments,
+            notes: order.notes || undefined,
+            updated_by: recordedBy,
+          });
+
+          // Ensure in-memory Zustand store is immediately updated with full payments array
+          const finalOrder: DbOrder = {
+            ...updatedOrder,
+            payments: updatedPayments,
+            amount_paid: breakdown.totalAmountReceived,
+            amount_due: breakdown.balanceAmount,
+            payment_status: mappedPaymentStatus,
+            order_status_history: updatedHistory,
+          };
+
+          set((state) => ({
+            orders: state.orders.map((o) =>
+              o.id === order.id || o.order_number === order.order_number ? finalOrder : o
+            ),
+          }));
+
+          // 5. Audit Logging: MANUAL_PAYMENT_RECORDED
+          try {
+            await logAdminAction(recordedBy, recordedByRole, 'MANUAL_PAYMENT_RECORDED', 'ORDER', order.order_number, {
+              orderId: order.id,
+              paymentId: newPayment.id,
+              amount: validation.roundedAmount,
+              paymentMethod,
+              reference: txnId,
+              status: 'SUCCESS',
+              paymentDate,
+              notes: newPayment.notes,
+              recordedBy,
+              recordedByRole,
+              totalReceived: breakdown.totalAmountReceived,
+              balanceAmount: breakdown.balanceAmount,
+              excessAmount: breakdown.excessAmount,
+              authoritativeStatus: breakdown.paymentStatus,
+            });
+          } catch (auditErr) {
+            console.warn('Non-blocking audit log notice:', auditErr);
+          }
+
+          // 6. Customer Notification (SMS + Email) (Section 8)
+          try {
+            const storeSettings = useSettingsStore.getState().settings;
+            await NotificationService.notifyPaymentReceived({
+              order: finalOrder,
+              payment: {
+                amount: validation.roundedAmount,
+                payment_method: paymentMethod,
+                reference: txnId,
+                payment_date: paymentDate,
+                notes: newPayment.notes || undefined,
+              },
+              breakdown: {
+                adjustedOrderTotal: breakdown.adjustedOrderTotal,
+                totalAmountReceived: breakdown.totalAmountReceived,
+                balanceAmount: breakdown.balanceAmount,
+                paymentStatus: breakdown.paymentStatus,
+              },
+              settings: storeSettings,
+            });
+          } catch (notifErr) {
+            console.warn('Customer payment notification non-blocking issue:', notifErr);
+          }
+
+          return { success: true, order: finalOrder, breakdown };
+        } catch (err: any) {
+          console.error('Error in recordOrderPayment:', err);
+          return {
+            success: false,
+            error: err.message || 'Failed to record payment due to an unexpected error',
+          };
+        }
       },
 
       // ─── Process Excess / Order Refund (Section 5, 6, 14, 15) ───────────────
       processExcessRefund: async (orderId, refundData) => {
-        const order = get().orders.find((o) => o.id === orderId || o.order_number === orderId);
-        if (!order) {
-          return { success: false, error: 'Order not found in database or store' };
-        }
+        try {
+          const order = get().orders.find((o) => o.id === orderId || o.order_number === orderId);
+          if (!order) {
+            return { success: false, error: 'Order not found in database or store' };
+          }
 
-        // RBAC Enforcement (Section 14: Order Processors cannot refund unless permitted)
-        const processedByRole = refundData.processedByRole || 'ROOT_ADMIN';
-        if (processedByRole === 'ORDER_PROCESSOR') {
+          // RBAC Enforcement (Section 14: Order Processors cannot refund unless permitted)
+          const processedByRole = refundData.processedByRole || 'ROOT_ADMIN';
+          if (processedByRole === 'ORDER_PROCESSOR') {
+            return {
+              success: false,
+              error: 'Order Processors are not authorized to process refunds. Please contact an Administrator.',
+            };
+          }
+
+          // Validate refund amount (Section 5: Never allow refunding more than calculated excess amount)
+          const validation = validateRefundAmount(order, refundData.amount);
+          if (!validation.valid) {
+            return { success: false, error: validation.error };
+          }
+
+          const now = new Date().toISOString();
+          const refundDate = refundData.refundDate || now;
+          const processedBy = refundData.processedBy || 'Admin';
+          const refundTxnId = refundData.transactionId?.trim() || `REF-${Date.now().toString().slice(-6)}`;
+          const refundMethod = refundData.refundMethod || 'bank_transfer';
+          const refundAmount = validation.roundedRefund;
+
+          const newRefund: OrderRefundRecord = {
+            id: `rfnd_${Date.now()}`,
+            order_id: order.id,
+            order_number: order.order_number,
+            amount: refundAmount,
+            type: 'partial',
+            reason: refundData.notes?.trim() || 'Excess payment refund',
+            status: 'success',
+            provider: refundMethod,
+            provider_refund_id: refundTxnId,
+            requested_by: processedBy,
+            requested_at: refundDate,
+            completed_at: refundDate,
+          };
+
+          const existingRefunds = Array.isArray(order.refunds) ? [...order.refunds] : [];
+          const updatedRefunds = [...existingRefunds, newRefund];
+          const newTotalRefunded = roundToTwo(Number(order.refunded_amount || 0) + refundAmount);
+
+          const updatedHistory: OrderStatusHistoryItem[] = [
+            ...(order.order_status_history || []),
+            {
+              status: order.order_status,
+              timestamp: now,
+              updated_by: processedBy,
+              notes: `Refund processed: ₹${refundAmount} via ${refundMethod.toUpperCase()} (Ref: ${refundTxnId}). Reason: ${newRefund.reason}`,
+            },
+          ];
+
+          // Persist to Supabase and update local state
+          const updatedOrder = await get().updateOrderDetails(order.id, {
+            refunds: updatedRefunds,
+            refunded_amount: newTotalRefunded,
+            updated_by: processedBy,
+          });
+
+          const finalOrder: DbOrder = {
+            ...updatedOrder,
+            refunds: updatedRefunds,
+            refunded_amount: newTotalRefunded,
+            order_status_history: updatedHistory,
+          };
+
+          set((state) => ({
+            orders: state.orders.map((o) =>
+              o.id === order.id || o.order_number === order.order_number ? finalOrder : o
+            ),
+          }));
+
+          // Audit Logging (Section 15)
+          try {
+            await logAdminAction(processedBy, processedByRole, 'PROCESS_REFUND', 'ORDER', order.order_number, {
+              orderId: order.id,
+              refundId: newRefund.id,
+              amount: refundAmount,
+              refundMethod,
+              reference: refundTxnId,
+              totalRefunded: newTotalRefunded,
+              processedBy,
+              processedByRole,
+            });
+          } catch (auditErr) {
+            console.warn('Non-blocking refund audit log notice:', auditErr);
+          }
+
+          // Customer Notification (SMS + Email) (Section 8)
+          try {
+            const storeSettings = useSettingsStore.getState().settings;
+            await NotificationService.notifyRefundProcessed({
+              order: finalOrder,
+              refund: newRefund,
+              settings: storeSettings,
+            });
+          } catch (notifErr) {
+            console.warn('Customer refund notification non-blocking issue:', notifErr);
+          }
+
+          return { success: true, order: finalOrder, refund: newRefund };
+        } catch (err: any) {
+          console.error('Error in processExcessRefund:', err);
           return {
             success: false,
-            error: 'Order Processors are not authorized to process refunds. Please contact an Administrator.',
+            error: err.message || 'Failed to process refund due to an unexpected error',
           };
         }
-
-        // Validate refund amount (Section 5: Never allow refunding more than calculated excess amount)
-        const validation = validateRefundAmount(order, refundData.amount);
-        if (!validation.valid) {
-          return { success: false, error: validation.error };
-        }
-
-        const now = new Date().toISOString();
-        const refundDate = refundData.refundDate || now;
-        const processedBy = refundData.processedBy || 'Admin';
-        const refundTxnId = refundData.transactionId?.trim() || `REF-${Date.now().toString().slice(-6)}`;
-        const refundMethod = refundData.refundMethod || 'bank_transfer';
-        const refundAmount = validation.roundedRefund;
-
-        const newRefund: OrderRefundRecord = {
-          id: `rfnd_${Date.now()}`,
-          order_id: order.id,
-          order_number: order.order_number,
-          amount: refundAmount,
-          type: 'partial',
-          reason: refundData.notes?.trim() || 'Excess payment refund',
-          status: 'success',
-          provider: refundMethod,
-          provider_refund_id: refundTxnId,
-          requested_by: processedBy,
-          requested_at: refundDate,
-          completed_at: refundDate,
-        };
-
-        const existingRefunds = Array.isArray(order.refunds) ? [...order.refunds] : [];
-        const updatedRefunds = [...existingRefunds, newRefund];
-        const newTotalRefunded = roundToTwo(Number(order.refunded_amount || 0) + refundAmount);
-
-        const updatedHistory: OrderStatusHistoryItem[] = [
-          ...(order.order_status_history || []),
-          {
-            status: order.order_status,
-            timestamp: now,
-            updated_by: processedBy,
-            notes: `Refund processed: ₹${refundAmount} via ${refundMethod.toUpperCase()} (Ref: ${refundTxnId}). Reason: ${newRefund.reason}`,
-          },
-        ];
-
-        // Persist to Supabase and update local state
-        const updatedOrder = await get().updateOrderDetails(order.id, {
-          refunds: updatedRefunds,
-          refunded_amount: newTotalRefunded,
-          updated_by: processedBy,
-        });
-
-        const finalOrder: DbOrder = {
-          ...updatedOrder,
-          refunds: updatedRefunds,
-          refunded_amount: newTotalRefunded,
-          order_status_history: updatedHistory,
-        };
-
-        set((state) => ({
-          orders: state.orders.map((o) =>
-            o.id === order.id || o.order_number === order.order_number ? finalOrder : o
-          ),
-        }));
-
-        // Audit Logging (Section 15)
-        await logAdminAction(processedBy, processedByRole, 'PROCESS_REFUND', 'ORDER', order.order_number, {
-          orderId: order.id,
-          refundId: newRefund.id,
-          amount: refundAmount,
-          refundMethod,
-          reference: refundTxnId,
-          totalRefunded: newTotalRefunded,
-          processedBy,
-          processedByRole,
-        });
-
-        // Customer Notification (SMS + Email) (Section 8)
-        try {
-          const storeSettings = useSettingsStore.getState().settings;
-          await NotificationService.notifyRefundProcessed({
-            order: finalOrder,
-            refund: newRefund,
-            settings: storeSettings,
-          });
-        } catch (notifErr) {
-          console.warn('Customer refund notification non-blocking issue:', notifErr);
-        }
-
-        return { success: true, order: finalOrder, refund: newRefund };
       },
 
       // ─── Delete order ──────────────────────────────────────────────

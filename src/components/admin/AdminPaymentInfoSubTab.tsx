@@ -230,8 +230,8 @@ export default function AdminPaymentInfoSubTab({
       } else {
         toast.error(res.error || 'Failed to record payment');
       }
-    } catch {
-      toast.error('An unexpected error occurred while saving payment');
+    } catch (err: any) {
+      toast.error(err?.message || 'An unexpected error occurred while saving payment');
     } finally {
       setIsSubmittingPayment(false);
     }
@@ -276,8 +276,8 @@ export default function AdminPaymentInfoSubTab({
       } else {
         toast.error(res.error || 'Failed to process refund');
       }
-    } catch {
-      toast.error('Failed to process refund');
+    } catch (err: any) {
+      toast.error(err?.message || 'Failed to process refund');
     } finally {
       setIsSubmittingRefund(false);
     }
