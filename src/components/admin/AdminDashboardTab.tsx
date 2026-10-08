@@ -28,7 +28,7 @@ import { useOrderStore } from '@/hooks/useOrderStore';
 import { useProductStore } from '@/hooks/useProductStore';
 import { useSettingsStore } from '@/hooks/useSettingsStore';
 import { useAdminAuthStore } from '@/hooks/useAdminAuthStore';
-import { roundToTwo } from '@/services/orderCalculationService';
+import { calculateOrderFinancials, roundToTwo } from '@/services/orderCalculationService';
 import type { DbOrder } from '@/services/supabase';
 
 export type DashboardDateFilter =
@@ -151,51 +151,18 @@ export const AdminDashboardTab: React.FC<AdminDashboardTabProps> = ({ onNavigate
         else pendingOrders += 1; // placed, confirmed, preparing, packed
       }
 
-      const subtotal = roundToTwo(o.subtotal || o.total || 0);
-      const discount = roundToTwo(
-        (o.discount || 0) + (o.coupon_discount || 0) + (o.item_discount || 0)
-      );
-      const shipping = roundToTwo(o.delivery_charge || 0);
-      const gst = roundToTwo(o.gst_amount || 0);
-      const taxable = roundToTwo(
-        o.taxable_amount !== undefined ? o.taxable_amount : Math.max(0, subtotal - discount)
-      );
-      const grandTotal = roundToTwo(o.total || (taxable + gst + shipping));
+      const fin = calculateOrderFinancials(o);
 
-      // Calculate refunds
-      let refundAmt = 0;
-      if (Array.isArray(o.refunds) && o.refunds.length > 0) {
-        refundAmt = o.refunds
-          .filter((r) => r.status === 'success' || r.status === 'processing')
-          .reduce((sum, r) => sum + roundToTwo(r.amount), 0);
-      } else {
-        refundAmt = roundToTwo(o.refunded_amount || 0);
-      }
-
-      // Calculate payments
-      let paidAmt = 0;
-      if (Array.isArray(o.payments) && o.payments.length > 0) {
-        paidAmt = o.payments
-          .filter((p) => p.status === 'success')
-          .reduce((sum, p) => sum + roundToTwo(p.amount), 0);
-      } else if (o.amount_paid !== undefined) {
-        paidAmt = roundToTwo(o.amount_paid);
-      } else if (o.payment_status === 'paid') {
-        paidAmt = grandTotal;
-      }
-
-      const dueAmt = isCancelled ? 0 : Math.max(0, roundToTwo(grandTotal - paidAmt));
-
-      totalRefunds += refundAmt;
-      totalPaid += paidAmt;
+      totalRefunds += fin.refundedAmount;
+      totalPaid += fin.totalAmountReceived;
 
       if (!isCancelled) {
-        grossSales += subtotal;
-        totalDiscounts += discount;
-        totalTaxable += taxable;
-        totalGST += gst;
-        totalShipping += shipping;
-        totalOutstanding += dueAmt;
+        grossSales += fin.originalSubtotal;
+        totalDiscounts += fin.totalDiscount;
+        totalTaxable += fin.taxableAmount;
+        totalGST += fin.gstAmount;
+        totalShipping += fin.finalShipping;
+        totalOutstanding += fin.balanceAmount;
       }
     });
 

@@ -378,61 +378,79 @@ export const usePromotionStore = create<PromotionStore>()(
           ),
         }));
 
-        let emailSent = 0;
-        let emailFailed = 0;
-        let smsSent = 0;
-        let smsFailed = 0;
+        // Background Dispatch Worker (Requirement 5.6):
+        // Decouples intensive SMTP & SMS network calls from Admin response
+        const executeBackgroundDispatch = async () => {
+          let emailSent = 0;
+          let emailFailed = 0;
+          let smsSent = 0;
+          let smsFailed = 0;
 
-        const newLogs: CampaignRecipientLog[] = [];
-        const businessName = settings.businessName || 'Sudha Swagruha Foods';
+          const newLogs: CampaignRecipientLog[] = [];
+          const businessName = settings.businessName || 'Sudha Swagruha Foods';
 
-        // ─── 2. Batch Dispatch Email (Chunks of 5 with non-blocking intervals) ───
-        const BATCH_SIZE = 5;
-        for (let i = 0; i < emailRecipients.length; i += BATCH_SIZE) {
-          const batch = emailRecipients.slice(i, i + BATCH_SIZE);
+          // ─── 2. Batch Dispatch Email (Chunks of 5 with non-blocking intervals) ───
+          const BATCH_SIZE = 5;
+          for (let i = 0; i < emailRecipients.length; i += BATCH_SIZE) {
+            const batch = emailRecipients.slice(i, i + BATCH_SIZE);
 
-          await Promise.all(
-            batch.map(async (cust) => {
-              if (!cust.email) return;
+            await Promise.all(
+              batch.map(async (cust) => {
+                if (!cust.email) return;
 
-              // Idempotency check: don't double send if log exists for this campaign & recipient
-              const alreadySent = get().recipientLogs.some(
-                (l) => l.campaign_id === campaignId && l.recipient === cust.email && l.status === 'sent'
-              );
-              if (alreadySent) return;
+                const alreadySent = get().recipientLogs.some(
+                  (l) => l.campaign_id === campaignId && l.recipient === cust.email && l.status === 'sent'
+                );
+                if (alreadySent) return;
 
-              try {
-                const res = await EmailService.sendPromotionalEmail({
-                  to: cust.email,
-                  customerName: cust.name,
-                  subject: campaign.email_subject || `${campaign.title} - ${businessName}`,
-                  campaignTitle: campaign.title,
-                  campaignMessage: campaign.email_message || campaign.description,
-                  bannerUrl: campaign.banner_url,
-                  voucherCode: campaign.voucher_code,
-                  discountText: campaign.discount_percent ? `${campaign.discount_percent}% OFF` : undefined,
-                  ctaText: campaign.email_cta_text,
-                  ctaLink: campaign.email_cta_link,
-                  validUntil: campaign.end_date,
-                  settings,
-                });
-
-                if (res.success) {
-                  emailSent++;
-                  newLogs.push({
-                    id: `log_em_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-                    campaign_id: campaignId,
-                    campaign_name: campaign.name,
-                    customer_key: cust.key,
-                    customer_name: cust.name,
-                    channel: 'email',
-                    recipient: cust.email,
-                    status: 'sent',
-                    provider: 'smtp-resend',
-                    sent_at: new Date().toISOString(),
-                    attempt_count: 1,
+                try {
+                  const res = await EmailService.sendPromotionalEmail({
+                    to: cust.email,
+                    customerName: cust.name,
+                    subject: campaign.email_subject || `${campaign.title} - ${businessName}`,
+                    campaignTitle: campaign.title,
+                    campaignMessage: campaign.email_message || campaign.description,
+                    bannerUrl: campaign.banner_url,
+                    voucherCode: campaign.voucher_code,
+                    discountText: campaign.discount_percent ? `${campaign.discount_percent}% OFF` : undefined,
+                    ctaText: campaign.email_cta_text,
+                    ctaLink: campaign.email_cta_link,
+                    validUntil: campaign.end_date,
+                    settings,
                   });
-                } else {
+
+                  if (res.success) {
+                    emailSent++;
+                    newLogs.push({
+                      id: `log_em_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+                      campaign_id: campaignId,
+                      campaign_name: campaign.name,
+                      customer_key: cust.key,
+                      customer_name: cust.name,
+                      channel: 'email',
+                      recipient: cust.email,
+                      status: 'sent',
+                      provider: 'smtp-resend',
+                      sent_at: new Date().toISOString(),
+                      attempt_count: 1,
+                    });
+                  } else {
+                    emailFailed++;
+                    newLogs.push({
+                      id: `log_em_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+                      campaign_id: campaignId,
+                      campaign_name: campaign.name,
+                      customer_key: cust.key,
+                      customer_name: cust.name,
+                      channel: 'email',
+                      recipient: cust.email,
+                      status: 'failed',
+                      failure_reason: res.message,
+                      sent_at: new Date().toISOString(),
+                      attempt_count: 1,
+                    });
+                  }
+                } catch (err: any) {
                   emailFailed++;
                   newLogs.push({
                     id: `log_em_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
@@ -443,77 +461,78 @@ export const usePromotionStore = create<PromotionStore>()(
                     channel: 'email',
                     recipient: cust.email,
                     status: 'failed',
-                    failure_reason: res.message,
+                    failure_reason: err?.message || 'Email dispatch failed',
                     sent_at: new Date().toISOString(),
                     attempt_count: 1,
                   });
                 }
-              } catch (err: any) {
-                emailFailed++;
-                newLogs.push({
-                  id: `log_em_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-                  campaign_id: campaignId,
-                  campaign_name: campaign.name,
-                  customer_key: cust.key,
-                  customer_name: cust.name,
-                  channel: 'email',
-                  recipient: cust.email,
-                  status: 'failed',
-                  failure_reason: err?.message || 'Email dispatch failed',
-                  sent_at: new Date().toISOString(),
-                  attempt_count: 1,
-                });
-              }
-            })
-          );
-        }
+              })
+            );
+          }
 
-        // ─── 3. Batch Dispatch SMS (Chunks of 5) ──────────────────────
-        if (campaign.channels.includes('sms') && settings.sms?.enabled) {
-          for (let i = 0; i < smsRecipients.length; i += BATCH_SIZE) {
-            const batch = smsRecipients.slice(i, i + BATCH_SIZE);
+          // ─── 3. Batch Dispatch SMS (Chunks of 5) ──────────────────────
+          if (campaign.channels.includes('sms') && settings.sms?.enabled) {
+            for (let i = 0; i < smsRecipients.length; i += BATCH_SIZE) {
+              const batch = smsRecipients.slice(i, i + BATCH_SIZE);
 
-            await Promise.all(
-              batch.map(async (cust) => {
-                if (!cust.phone) return;
+              await Promise.all(
+                batch.map(async (cust) => {
+                  if (!cust.phone) return;
 
-                const alreadySent = get().recipientLogs.some(
-                  (l) => l.campaign_id === campaignId && l.recipient === cust.phone && l.status === 'sent'
-                );
-                if (alreadySent) return;
+                  const alreadySent = get().recipientLogs.some(
+                    (l) => l.campaign_id === campaignId && l.recipient === cust.phone && l.status === 'sent'
+                  );
+                  if (alreadySent) return;
 
-                try {
-                  const smsTemplate =
-                    campaign.sms_message ||
-                    `Namaskaram {{customerName}}! ${campaign.title}. Use voucher {{voucherCode}} at {{businessName}}. Shop: {{shopUrl}}`;
+                  try {
+                    const smsTemplate =
+                      campaign.sms_message ||
+                      `Namaskaram {{customerName}}! ${campaign.title}. Use voucher {{voucherCode}} at {{businessName}}. Shop: {{shopUrl}}`;
 
-                  const res = await SmsService.sendPromotionalSms({
-                    mobileNumber: cust.phone,
-                    customerName: cust.name,
-                    message: smsTemplate,
-                    settings,
-                    campaignId: campaign.id,
-                    campaignName: campaign.name,
-                    customerKey: cust.key,
-                  });
-
-                  if (res.success) {
-                    smsSent++;
-                    newLogs.push({
-                      id: `log_sms_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-                      campaign_id: campaignId,
-                      campaign_name: campaign.name,
-                      customer_key: cust.key,
-                      customer_name: cust.name,
-                      channel: 'sms',
-                      recipient: cust.phone,
-                      status: 'sent',
-                      provider: res.provider,
-                      provider_message_id: res.providerMessageId,
-                      sent_at: new Date().toISOString(),
-                      attempt_count: 1,
+                    const res = await SmsService.sendPromotionalSms({
+                      mobileNumber: cust.phone,
+                      customerName: cust.name,
+                      message: smsTemplate,
+                      settings,
+                      campaignId: campaign.id,
+                      campaignName: campaign.name,
+                      customerKey: cust.key,
                     });
-                  } else {
+
+                    if (res.success) {
+                      smsSent++;
+                      newLogs.push({
+                        id: `log_sms_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+                        campaign_id: campaignId,
+                        campaign_name: campaign.name,
+                        customer_key: cust.key,
+                        customer_name: cust.name,
+                        channel: 'sms',
+                        recipient: cust.phone,
+                        status: 'sent',
+                        provider: res.provider,
+                        provider_message_id: res.providerMessageId,
+                        sent_at: new Date().toISOString(),
+                        attempt_count: 1,
+                      });
+                    } else {
+                      smsFailed++;
+                      newLogs.push({
+                        id: `log_sms_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+                        campaign_id: campaignId,
+                        campaign_name: campaign.name,
+                        customer_key: cust.key,
+                        customer_name: cust.name,
+                        channel: 'sms',
+                        recipient: cust.phone,
+                        status: 'failed',
+                        provider: res.provider,
+                        failure_reason: res.message,
+                        sent_at: new Date().toISOString(),
+                        attempt_count: 1,
+                      });
+                    }
+                  } catch (err: any) {
                     smsFailed++;
                     newLogs.push({
                       id: `log_sms_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
@@ -524,77 +543,64 @@ export const usePromotionStore = create<PromotionStore>()(
                       channel: 'sms',
                       recipient: cust.phone,
                       status: 'failed',
-                      provider: res.provider,
-                      failure_reason: res.message,
+                      failure_reason: err?.message || 'SMS dispatch failed',
                       sent_at: new Date().toISOString(),
                       attempt_count: 1,
                     });
                   }
-                } catch (err: any) {
-                  smsFailed++;
-                  newLogs.push({
-                    id: `log_sms_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-                    campaign_id: campaignId,
-                    campaign_name: campaign.name,
-                    customer_key: cust.key,
-                    customer_name: cust.name,
-                    channel: 'sms',
-                    recipient: cust.phone,
-                    status: 'failed',
-                    failure_reason: err?.message || 'SMS dispatch failed',
-                    sent_at: new Date().toISOString(),
-                    attempt_count: 1,
-                  });
-                }
-              })
-            );
+                })
+              );
+            }
           }
-        }
 
-        // ─── 4. Mark Campaign Finished (SENT / FAILED) ────────────────
-        const overallSuccess = (emailSent > 0 || smsSent > 0) || (emailFailed === 0 && smsFailed === 0);
-        const finalStatus = overallSuccess ? 'sent' : 'failed';
-        const completedAt = new Date().toISOString();
+          // ─── 4. Mark Campaign Finished (SENT / FAILED) ────────────────
+          const overallSuccess = (emailSent > 0 || smsSent > 0) || (emailFailed === 0 && smsFailed === 0);
+          const finalStatus = overallSuccess ? 'sent' : 'failed';
+          const completedAt = new Date().toISOString();
 
-        set((state) => ({
-          isProcessing: false,
-          campaigns: state.campaigns.map((c) =>
-            c.id === campaignId
-              ? {
-                  ...c,
-                  status: finalStatus,
-                  completed_at: completedAt,
-                  email_sent: emailSent,
-                  email_failed: emailFailed,
-                  sms_sent: smsSent,
-                  sms_failed: smsFailed,
-                  updated_at: completedAt,
-                }
-              : c
-          ),
-          recipientLogs: [...newLogs, ...state.recipientLogs],
-        }));
+          set((state) => ({
+            isProcessing: false,
+            campaigns: state.campaigns.map((c) =>
+              c.id === campaignId
+                ? {
+                    ...c,
+                    status: finalStatus,
+                    completed_at: completedAt,
+                    email_sent: emailSent,
+                    email_failed: emailFailed,
+                    sms_sent: smsSent,
+                    sms_failed: smsFailed,
+                    updated_at: completedAt,
+                  }
+                : c
+            ),
+            recipientLogs: [...newLogs, ...state.recipientLogs],
+          }));
 
-        await logAdminAction(
-          initiatedBy,
-          'ROOT_ADMIN',
-          'SEND_PROMOTION',
-          'CAMPAIGN',
-          campaign.name,
-          {
-            emailSent,
-            emailFailed,
-            smsSent,
-            smsFailed,
-            totalAudience: totalEligibleCount,
-            finalStatus,
-          }
-        );
+          await logAdminAction(
+            initiatedBy,
+            'ROOT_ADMIN',
+            'SEND_PROMOTION',
+            'CAMPAIGN',
+            campaign.name,
+            {
+              emailSent,
+              emailFailed,
+              smsSent,
+              smsFailed,
+              totalAudience: totalEligibleCount,
+              finalStatus,
+            }
+          );
+        };
+
+        // Queue worker execution in next event cycle
+        setTimeout(executeBackgroundDispatch, 10);
 
         return {
-          success: overallSuccess,
-          message: `Campaign "${campaign.name}" dispatched! Emails: ${emailSent} sent (${emailFailed} failed) | SMS: ${smsSent} sent (${smsFailed} failed).`,
-          results: { emailSent, emailFailed, smsSent, smsFailed },
+          success: true,
+          message: `Campaign "${campaign.name}" dispatched to background queue! Processing for ${totalEligibleCount} recipients.`,
+          results: { emailSent: 0, emailFailed: 0, smsSent: 0, smsFailed: 0 },
         };
       },
 

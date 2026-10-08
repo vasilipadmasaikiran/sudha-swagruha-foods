@@ -19,7 +19,8 @@ import {
   Percent,
 } from 'lucide-react';
 import { useOrderStore } from '@/hooks/useOrderStore';
-import { roundToTwo } from '@/services/orderCalculationService';
+import { calculateOrderFinancials, roundToTwo } from '@/services/orderCalculationService';
+import { exportOrdersToCsv } from '@/services/csvExportService';
 import type { DbOrder } from '@/services/supabase';
 
 type DateFilterRange =
@@ -133,40 +134,20 @@ export const AdminSalesTab: React.FC = () => {
         deliveredOrders += 1;
       }
 
-      const subtotal = roundToTwo(o.subtotal || o.total || 0);
-      const discount = roundToTwo(
-        (o.discount || 0) + (o.coupon_discount || 0) + (o.item_discount || 0)
-      );
-      const shipping = roundToTwo(o.delivery_charge || 0);
-      const gst = roundToTwo(o.gst_amount || 0);
-      const taxable = roundToTwo(o.taxable_amount !== undefined ? o.taxable_amount : Math.max(0, subtotal - discount));
-      const grandTotal = roundToTwo(o.total || (taxable + gst + shipping));
-
-      // Calculate refunds (only count confirmed/successful refunds)
-      let refundAmt = 0;
-      if (Array.isArray(o.refunds) && o.refunds.length > 0) {
-        refundAmt = o.refunds
-          .filter((r) => r.status === 'success' || r.status === 'processing')
-          .reduce((sum, r) => sum + roundToTwo(r.amount), 0);
-      } else {
-        refundAmt = roundToTwo(o.refunded_amount || 0);
-      }
-
-      const paid = roundToTwo(o.amount_paid !== undefined ? o.amount_paid : (o.payment_status === 'paid' ? grandTotal : 0));
-      const due = roundToTwo(o.amount_due !== undefined ? o.amount_due : Math.max(0, grandTotal - paid));
+      const fin = calculateOrderFinancials(o);
 
       // Aggregate non-cancelled orders towards gross/net sales
       if (!isCancelled) {
-        grossSales += subtotal;
-        totalDiscounts += discount;
-        totalTaxable += taxable;
-        totalGST += gst;
-        totalShipping += shipping;
-        totalAmountDue += due;
+        grossSales += fin.originalSubtotal;
+        totalDiscounts += fin.totalDiscount;
+        totalTaxable += fin.taxableAmount;
+        totalGST += fin.gstAmount;
+        totalShipping += fin.finalShipping;
+        totalAmountDue += fin.balanceAmount;
       }
 
-      totalRefunds += refundAmt;
-      totalAmountPaid += paid;
+      totalRefunds += fin.refundedAmount;
+      totalAmountPaid += fin.totalAmountReceived;
     });
 
     grossSales = roundToTwo(grossSales);
@@ -179,7 +160,6 @@ export const AdminSalesTab: React.FC = () => {
     totalAmountDue = roundToTwo(totalAmountDue);
 
     // Canonical Net Sales = Gross Sales - Total Discounts - Total Refunds + GST + Shipping
-    // Or Net Merchandise Sales = Gross Subtotal - Discounts - Refunds
     const netSales = roundToTwo(Math.max(0, grossSales - totalDiscounts - totalRefunds + totalGST + totalShipping));
 
     return {
@@ -199,53 +179,12 @@ export const AdminSalesTab: React.FC = () => {
     };
   }, [filteredOrders]);
 
-  // Export financial summary to CSV
+  // Export financial summary to authoritative Excel-compatible CSV (Requirements 20.9, 20.10, 20.11)
   const handleExportCSV = () => {
-    const headers = [
-      'Order Number',
-      'Date',
-      'Customer',
-      'Status',
-      'Payment Status',
-      'Subtotal',
-      'Discount',
-      'GST',
-      'Shipping',
-      'Grand Total',
-      'Amount Paid',
-      'Amount Due',
-      'Refunded',
-    ];
-
-    const rows = filteredOrders.map((o) => {
-      const discount = (o.discount || 0) + (o.coupon_discount || 0);
-      const paid = o.amount_paid !== undefined ? o.amount_paid : (o.payment_status === 'paid' ? o.total : 0);
-      const due = o.amount_due !== undefined ? o.amount_due : Math.max(0, o.total - paid);
-      return [
-        o.order_number,
-        new Date(o.created_at).toLocaleDateString('en-IN'),
-        `"${o.customer_name || 'Customer'}"`,
-        o.order_status,
-        o.payment_status,
-        o.subtotal || o.total,
-        discount,
-        o.gst_amount || 0,
-        o.delivery_charge || 0,
-        o.total,
-        paid,
-        due,
-        o.refunded_amount || 0,
-      ].join(',');
-    });
-
-    const csvContent = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows].join('\n');
-    const encodedUri = encodeURI(csvContent);
-    const link = document.createElement('a');
-    link.setAttribute('href', encodedUri);
-    link.setAttribute('download', `SudhaSwagruha_Sales_Report_${dateFilter}_${new Date().toISOString().slice(0, 10)}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    if (filteredOrders.length === 0) {
+      return;
+    }
+    exportOrdersToCsv(filteredOrders, `SudhaSwagruha_Sales_Report_${dateFilter}`);
   };
 
   return (

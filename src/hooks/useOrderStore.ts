@@ -5,7 +5,7 @@
 // ============================================================
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { DbOrder, OrderStatusHistoryItem, OrderRefundRecord, OrderPaymentRecord, OrderItem, CustomerCancellationRequest } from '@/services/supabase';
+import type { DbOrder, OrderStatusHistoryItem, OrderRefundRecord, OrderPaymentRecord, OrderItem, CustomerCancellationRequest, ShippingSnapshot, ShippingAuditItem } from '@/services/supabase';
 import { supabase, isSupabaseConfigured, normalizeOrderTracking } from '@/services/supabase';
 import { RefundService, calculateOrderRefundableMetrics, roundToTwoDecimals } from '@/services/refundService';
 import { NotificationService } from '@/services/notificationService';
@@ -33,6 +33,14 @@ export interface OrderUpdatePayload {
   payments?: OrderPaymentRecord[];
   refunds?: OrderRefundRecord[];
   refunded_amount?: number;
+  subtotal?: number;
+  delivery_charge?: number;
+  total?: number;
+  calculated_delivery_charge?: number;
+  admin_shipping_override?: number;
+  shipping_override_reason?: string;
+  shipping_audit_trail?: ShippingAuditItem[];
+  shipping_snapshot?: ShippingSnapshot;
 }
 
 interface OrderStore {
@@ -131,6 +139,13 @@ interface OrderStore {
       processedByRole?: string;
     }
   ) => Promise<{ success: boolean; order?: DbOrder; refund?: OrderRefundRecord; error?: string }>;
+  updateOrderShipping: (
+    orderId: string,
+    newShippingCharge: number,
+    reason: string,
+    changedBy?: string,
+    changedByRole?: string
+  ) => Promise<{ success: boolean; order?: DbOrder; error?: string; breakdown?: OrderPaymentBreakdown }>;
   deleteOrder: (orderId: string) => Promise<void>;
   getOrderByNumber: (orderNumber: string) => DbOrder | undefined;
   resetOrders: () => void;
@@ -490,15 +505,25 @@ export const useOrderStore = create<OrderStore>()(
           order_discount: existing.order_discount,
           amount_paid: payload.amount_paid !== undefined ? payload.amount_paid : existing.amount_paid,
           amount_due: payload.amount_due !== undefined ? payload.amount_due : existing.amount_due,
+          shipping_snapshot: payload.shipping_snapshot !== undefined ? payload.shipping_snapshot : existing.shipping_snapshot,
+          calculated_delivery_charge: payload.calculated_delivery_charge !== undefined ? payload.calculated_delivery_charge : existing.calculated_delivery_charge,
+          admin_shipping_override: payload.admin_shipping_override !== undefined ? payload.admin_shipping_override : existing.admin_shipping_override,
+          shipping_override_reason: payload.shipping_override_reason !== undefined ? payload.shipping_override_reason : existing.shipping_override_reason,
+          shipping_audit_trail: payload.shipping_audit_trail !== undefined ? payload.shipping_audit_trail : existing.shipping_audit_trail,
         };
         const encodedNotes = `${cleanUserNotes ? cleanUserNotes + ' ' : ''}[SSF_TRACKING:${JSON.stringify(trackingMetadata)}]`;
 
         const newPaymentStatus = payload.payment_status || existing.payment_status;
         const newAmountPaid = payload.amount_paid !== undefined ? payload.amount_paid : existing.amount_paid;
         const newAmountDue = payload.amount_due !== undefined ? payload.amount_due : existing.amount_due;
+        const newDeliveryCharge = payload.delivery_charge !== undefined ? payload.delivery_charge : existing.delivery_charge;
+        const newTotal = payload.total !== undefined ? payload.total : existing.total;
 
         const updatedOrder: DbOrder = normalizeOrderTracking({
           ...existing,
+          delivery_charge: newDeliveryCharge,
+          total: newTotal,
+          total_amount: newTotal,
           order_status: newStatus,
           payment_status: newPaymentStatus,
           amount_paid: newAmountPaid,
@@ -506,6 +531,11 @@ export const useOrderStore = create<OrderStore>()(
           payments: trackingMetadata.payments,
           refunds: trackingMetadata.refunds,
           refunded_amount: trackingMetadata.refunded_amount,
+          shipping_snapshot: trackingMetadata.shipping_snapshot,
+          calculated_delivery_charge: trackingMetadata.calculated_delivery_charge,
+          admin_shipping_override: trackingMetadata.admin_shipping_override,
+          shipping_override_reason: trackingMetadata.shipping_override_reason,
+          shipping_audit_trail: trackingMetadata.shipping_audit_trail,
           tracking_id: newTrackingId,
           courier_name: newCourier,
           tracking_url: newTrackingUrl,
@@ -529,6 +559,9 @@ export const useOrderStore = create<OrderStore>()(
             const fullPayload: Record<string, unknown> = {
               order_status: newStatus,
               payment_status: newPaymentStatus,
+              delivery_charge: newDeliveryCharge,
+              total: newTotal,
+              total_amount: newTotal,
               notes: encodedNotes,
               updated_at: now,
               tracking_id: newTrackingId,
@@ -543,6 +576,11 @@ export const useOrderStore = create<OrderStore>()(
               gst_rate: existing.gst_rate,
               gst_amount: existing.gst_amount,
               coupon_discount: existing.coupon_discount,
+              calculated_delivery_charge: trackingMetadata.calculated_delivery_charge,
+              admin_shipping_override: trackingMetadata.admin_shipping_override,
+              shipping_override_reason: trackingMetadata.shipping_override_reason,
+              shipping_audit_trail: trackingMetadata.shipping_audit_trail,
+              shipping_snapshot: trackingMetadata.shipping_snapshot,
             };
 
             let { error: fullError } = await supabase
@@ -578,6 +616,8 @@ export const useOrderStore = create<OrderStore>()(
               const fallbackPayload: Record<string, unknown> = {
                 order_status: newStatus,
                 payment_status: safeDbStatus,
+                delivery_charge: newDeliveryCharge,
+                total: newTotal,
                 notes: encodedNotes,
                 updated_at: now,
               };
@@ -1681,6 +1721,174 @@ export const useOrderStore = create<OrderStore>()(
           return {
             success: false,
             error: err.message || 'Failed to process refund due to an unexpected error',
+          };
+        }
+      },
+
+      // ─── Authoritative Shipping Override Before Dispatch (Requirements 1.4, 1.5, 1.7) ───
+      updateOrderShipping: async (
+        orderId: string,
+        newShippingCharge: number,
+        reason: string,
+        changedBy: string = 'Admin',
+        changedByRole: string = 'Store Owner'
+      ) => {
+        try {
+          const order = get().orders.find((o) => o.id === orderId || o.order_number === orderId);
+          if (!order) {
+            return { success: false, error: 'Order not found in store or database' };
+          }
+
+          // Guard: Only allow shipping override before dispatch
+          if (order.order_status === 'shipped' || order.order_status === 'delivered') {
+            return {
+              success: false,
+              error: `Cannot update shipping for an order that is already ${order.order_status.toUpperCase()}. Shipping can only be modified before dispatch.`,
+            };
+          }
+
+          if (order.order_status === 'cancelled') {
+            return {
+              success: false,
+              error: 'Cannot update shipping for a cancelled order.',
+            };
+          }
+
+          if (typeof newShippingCharge !== 'number' || isNaN(newShippingCharge) || newShippingCharge < 0) {
+            return { success: false, error: 'Shipping charge must be a valid non-negative number.' };
+          }
+
+          if (!reason || !reason.trim()) {
+            return { success: false, error: 'A reason for changing the shipping charge is mandatory for audit logging.' };
+          }
+
+          const roundedNewShipping = roundToTwo(newShippingCharge);
+          const previousShipping = roundToTwo(Number(order.delivery_charge || 0));
+
+          // Retain original calculated charge if not already recorded
+          const calculatedShipping =
+            order.calculated_delivery_charge !== undefined
+              ? roundToTwo(order.calculated_delivery_charge)
+              : (order.shipping_snapshot?.originalCalculatedCharge !== undefined
+                ? roundToTwo(order.shipping_snapshot.originalCalculatedCharge)
+                : (order.shipping_snapshot?.shippingCharge !== undefined
+                  ? roundToTwo(order.shipping_snapshot.shippingCharge)
+                  : previousShipping));
+
+          const now = new Date().toISOString();
+
+          // 1. Recalculate Order Total (Product Total + Final Shipping Charge - Discounts)
+          const subtotal = roundToTwo(Number(order.subtotal || 0));
+          const discount = roundToTwo(Number(order.discount || 0));
+          const newOrderTotal = Math.max(0, roundToTwo(subtotal + roundedNewShipping - discount));
+
+          // 2. Shipping Audit Trail (Requirement 1.7)
+          const auditItem: ShippingAuditItem = {
+            previousShipping,
+            newShipping: roundedNewShipping,
+            reason: reason.trim(),
+            changedBy,
+            changedAt: now,
+          };
+          const updatedAuditTrail: ShippingAuditItem[] = [
+            ...(order.shipping_audit_trail || []),
+            auditItem,
+          ];
+
+          // 3. Status History Entry
+          const historyNotes = `Shipping charge updated from ₹${previousShipping} to ₹${roundedNewShipping} (Original: ₹${calculatedShipping}). Reason: ${reason.trim()} (Changed by: ${changedBy})`;
+          const updatedHistory: OrderStatusHistoryItem[] = [
+            ...(order.order_status_history || []),
+            {
+              status: order.order_status,
+              timestamp: now,
+              updated_by: changedBy,
+              notes: historyNotes,
+            },
+          ];
+
+          // 4. Payment Recalculation (Requirement 1.5)
+          const interimOrder: DbOrder = {
+            ...order,
+            delivery_charge: roundedNewShipping,
+            total: newOrderTotal,
+            total_amount: newOrderTotal,
+            calculated_delivery_charge: calculatedShipping,
+            admin_shipping_override: roundedNewShipping,
+            shipping_override_reason: reason.trim(),
+            shipping_audit_trail: updatedAuditTrail,
+          };
+          const breakdown = calculateOrderPaymentBreakdown(interimOrder);
+
+          const mappedPaymentStatus: DbOrder['payment_status'] =
+            breakdown.paymentStatus === 'FULLY PAID'
+              ? 'paid'
+              : breakdown.paymentStatus === 'EXCESS AMOUNT'
+              ? 'paid'
+              : breakdown.paymentStatus === 'PARTIALLY PAID'
+              ? 'partially_paid'
+              : 'unpaid';
+
+          // 5. Persist to Supabase and update state
+          const updatedOrder = await get().updateOrderDetails(order.id, {
+            delivery_charge: roundedNewShipping,
+            total: newOrderTotal,
+            calculated_delivery_charge: calculatedShipping,
+            admin_shipping_override: roundedNewShipping,
+            shipping_override_reason: reason.trim(),
+            shipping_audit_trail: updatedAuditTrail,
+            payment_status: mappedPaymentStatus,
+            amount_paid: breakdown.totalAmountReceived,
+            amount_due: breakdown.balanceAmount,
+            updated_by: changedBy,
+          });
+
+          const finalOrder: DbOrder = {
+            ...updatedOrder,
+            delivery_charge: roundedNewShipping,
+            total: newOrderTotal,
+            total_amount: newOrderTotal,
+            calculated_delivery_charge: calculatedShipping,
+            admin_shipping_override: roundedNewShipping,
+            shipping_override_reason: reason.trim(),
+            shipping_audit_trail: updatedAuditTrail,
+            payment_status: mappedPaymentStatus,
+            amount_paid: breakdown.totalAmountReceived,
+            amount_due: breakdown.balanceAmount,
+            order_status_history: updatedHistory,
+          };
+
+          set((state) => ({
+            orders: state.orders.map((o) =>
+              o.id === order.id || o.order_number === order.order_number ? finalOrder : o
+            ),
+          }));
+
+          // 6. Audit Logging (Requirement 1.7)
+          try {
+            await logAdminAction(changedBy, changedByRole, 'SHIPPING_OVERRIDE', 'ORDER', order.order_number, {
+              orderId: order.id,
+              previousShipping,
+              newShipping: roundedNewShipping,
+              calculatedShipping,
+              reason: reason.trim(),
+              originalTotal: order.total,
+              newOrderTotal,
+              totalAmountReceived: breakdown.totalAmountReceived,
+              balanceAmount: breakdown.balanceAmount,
+              excessAmount: breakdown.excessAmount,
+              paymentStatus: breakdown.paymentStatus,
+            });
+          } catch (auditErr) {
+            console.warn('Non-blocking shipping override audit log notice:', auditErr);
+          }
+
+          return { success: true, order: finalOrder, breakdown };
+        } catch (err: any) {
+          console.error('Error updating order shipping:', err);
+          return {
+            success: false,
+            error: err.message || 'Failed to update shipping charge',
           };
         }
       },

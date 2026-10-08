@@ -33,7 +33,12 @@ export type AdminCategory =
   | 'users'
   | 'promotions'
   | 'website'
-  | 'settings';
+  | 'settings'
+  | 'shipping'
+  | 'appearance'
+  | 'content'
+  | 'customer-auth'
+  | 'reconciliation';
 
 export interface RolePermissions {
   name: string;
@@ -65,7 +70,7 @@ export const ROLE_DEFINITIONS: Record<AdminRole, RolePermissions> = {
   ROOT_ADMIN: {
     name: 'Root / Super Admin',
     description: 'Full unrestricted access to all administration modules, user roles, orders, settings, website content, and business configurations.',
-    allowedCategories: ['dashboard', 'sales', 'orders', 'products', 'inventory', 'customers', 'users', 'promotions', 'website', 'settings'],
+    allowedCategories: ['dashboard', 'sales', 'orders', 'products', 'inventory', 'customers', 'users', 'promotions', 'website', 'settings', 'reconciliation'],
     canManageUsers: true,
     canManageRoles: true,
     canConfigureSettings: true,
@@ -114,8 +119,8 @@ export const ROLE_DEFINITIONS: Record<AdminRole, RolePermissions> = {
   },
   ORDER_PROCESSOR: {
     name: 'Order Processor',
-    description: 'Restricted to customer order fulfillment, item removals, cancellations, refunds, and courier tracking.',
-    allowedCategories: ['orders'],
+    description: 'Restricted to customer order fulfillment, item removals, cancellations, refunds, courier tracking, and shipping adjustments.',
+    allowedCategories: ['orders', 'shipping'],
     canManageUsers: false,
     canManageRoles: false,
     canConfigureSettings: false,

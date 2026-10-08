@@ -43,6 +43,11 @@ import {
   Users,
   BookOpen,
   Megaphone,
+  Truck,
+  Palette,
+  FileText,
+  Lock,
+  Scale,
 } from 'lucide-react';
 import { useProductStore, type DiscountAnnouncement, type CouponItem } from '@/hooks/useProductStore';
 import { useAuthStore } from '@/hooks/useStore';
@@ -62,6 +67,11 @@ import AdminDatabaseTab from '@/components/admin/AdminDatabaseTab';
 import AdminEmailTab from '@/components/admin/AdminEmailTab';
 import AdminSmsTab from '@/components/admin/AdminSmsTab';
 import AdminAboutUsTab from '@/components/admin/AdminAboutUsTab';
+import AdminShippingTab from '@/components/admin/AdminShippingTab';
+import AdminAppearanceTab from '@/components/admin/AdminAppearanceTab';
+import AdminContentTab from '@/components/admin/AdminContentTab';
+import AdminCustomerAuthTab from '@/components/admin/AdminCustomerAuthTab';
+import { AdminReconciliationTab } from '@/components/admin/AdminReconciliationTab';
 import { AdminSalesTab } from '@/components/admin/AdminSalesTab';
 import { AdminDashboardTab } from '@/components/admin/AdminDashboardTab';
 import AppImage, { validateProductImageFile, normalizeImageUrl } from '@/components/common/AppImage';
@@ -78,6 +88,11 @@ export type ActiveCategoryTab =
   | 'inventory'
   | 'customers'
   | 'promotions'
+  | 'shipping'
+  | 'appearance'
+  | 'content'
+  | 'customer-auth'
+  | 'reconciliation'
   | 'users'
   | 'settings';
 
@@ -320,6 +335,7 @@ export default function AdminConsolePage() {
   }> = [
     { id: 'dashboard', label: 'Dashboard', icon: Sliders },
     { id: 'sales', label: 'Sales & Financials', icon: IndianRupee },
+    { id: 'reconciliation', label: 'Financial Audit', icon: Scale, roleRequired: 'ROOT_ADMIN' },
     { id: 'orders', label: 'Orders', icon: ShoppingBag, badge: orders.length },
     { id: 'products', label: 'Products', icon: Package, badge: products.length },
     {
@@ -330,6 +346,10 @@ export default function AdminConsolePage() {
     },
     { id: 'customers', label: 'Customers', icon: User, badge: customersList.length },
     { id: 'promotions', label: 'Promotions & Offers', icon: Megaphone },
+    { id: 'shipping', label: 'Shipping & Delivery', icon: Truck },
+    { id: 'appearance', label: 'Website Appearance', icon: Palette, roleRequired: 'ROOT_ADMIN' },
+    { id: 'content', label: 'Website Content', icon: FileText, roleRequired: 'ROOT_ADMIN' },
+    { id: 'customer-auth', label: 'Customer Auth', icon: Lock, roleRequired: 'ROOT_ADMIN' },
     { id: 'users', label: 'Users & Roles', icon: Users, badge: users.length, roleRequired: 'ROOT_ADMIN' },
     { id: 'settings', label: 'Settings', icon: Store, roleRequired: 'ROOT_ADMIN' },
   ];
@@ -792,6 +812,7 @@ export default function AdminConsolePage() {
                 <AdminDashboardTab onNavigateToTab={(tab) => setActiveTab(tab as ActiveCategoryTab)} />
               )}
               {activeTab === 'sales' && <AdminSalesTab />}
+              {activeTab === 'reconciliation' && <AdminReconciliationTab />}
               {activeTab === 'orders' && <AdminOrdersTab initialSubFilter={ordersSubFilter} />}
 
             {/* ============================================================ */}
@@ -1008,6 +1029,26 @@ export default function AdminConsolePage() {
             {/* CATEGORY 7: USERS & RBAC MANAGEMENT                          */}
             {/* ============================================================ */}
             {activeTab === 'users' && <AdminUsersTab />}
+
+            {/* ============================================================ */}
+            {/* CATEGORY: SHIPPING & DELIVERY CONFIGURATION (Req 1.2)        */}
+            {/* ============================================================ */}
+            {activeTab === 'shipping' && <AdminShippingTab />}
+
+            {/* ============================================================ */}
+            {/* CATEGORY: WEBSITE APPEARANCE MANAGER (Req 3.1)               */}
+            {/* ============================================================ */}
+            {activeTab === 'appearance' && <AdminAppearanceTab />}
+
+            {/* ============================================================ */}
+            {/* CATEGORY: WEBSITE CONTENT & POLICY CMS (Req 3.2)             */}
+            {/* ============================================================ */}
+            {activeTab === 'content' && <AdminContentTab />}
+
+            {/* ============================================================ */}
+            {/* CATEGORY: CUSTOMER AUTHENTICATION CONTROLS (Req 4.1)         */}
+            {/* ============================================================ */}
+            {activeTab === 'customer-auth' && <AdminCustomerAuthTab />}
 
             {/* ============================================================ */}
             {/* CATEGORY 8: SETTINGS (ROOT ADMIN ONLY)                       */}

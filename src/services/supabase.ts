@@ -228,6 +228,9 @@ export interface OrderPaymentRecord {
   createdAt?: string;
 }
 
+import type { ShippingSnapshot, ShippingAuditItem } from './shippingService';
+export type { ShippingSnapshot, ShippingAuditItem };
+
 export interface DbOrder {
   id: string;
   order_number: string;
@@ -264,6 +267,12 @@ export interface DbOrder {
   amount_paid?: number;
   amount_due?: number;
   payments?: OrderPaymentRecord[];
+  // Shipping & Delivery Snapshot & Override
+  shipping_snapshot?: ShippingSnapshot;
+  calculated_delivery_charge?: number;
+  admin_shipping_override?: number;
+  shipping_override_reason?: string;
+  shipping_audit_trail?: ShippingAuditItem[];
   // Tracking & Timeline Extensions
   tracking_id?: string | null;
   courier_name?: string | null;
@@ -341,6 +350,12 @@ export function normalizeOrderTracking(rawOrder: DbOrder): DbOrder {
         if (meta.item_discount !== undefined && extractedItemDiscount === undefined) extractedItemDiscount = meta.item_discount;
         if (meta.amount_paid !== undefined && extractedAmountPaid === undefined) extractedAmountPaid = meta.amount_paid;
         if (meta.amount_due !== undefined && extractedAmountDue === undefined) extractedAmountDue = meta.amount_due;
+        // Shipping Snapshot & Override metadata
+        if (meta.shipping_snapshot && !order.shipping_snapshot) (order as any).shipping_snapshot = meta.shipping_snapshot;
+        if (meta.calculated_delivery_charge !== undefined && order.calculated_delivery_charge === undefined) (order as any).calculated_delivery_charge = meta.calculated_delivery_charge;
+        if (meta.admin_shipping_override !== undefined && order.admin_shipping_override === undefined) (order as any).admin_shipping_override = meta.admin_shipping_override;
+        if (meta.shipping_override_reason && !order.shipping_override_reason) (order as any).shipping_override_reason = meta.shipping_override_reason;
+        if (Array.isArray(meta.shipping_audit_trail) && !order.shipping_audit_trail) (order as any).shipping_audit_trail = meta.shipping_audit_trail;
       }
     } catch (e) {
       console.warn('Could not parse encoded tracking from notes', e);
@@ -440,6 +455,11 @@ export function normalizeOrderTracking(rawOrder: DbOrder): DbOrder {
     refunded_amount: extractedRefundedAmount,
     refunds: extractedRefunds,
     order_status_history: extractedHistory,
+    shipping_snapshot: order.shipping_snapshot || undefined,
+    calculated_delivery_charge: order.calculated_delivery_charge !== undefined ? Number(order.calculated_delivery_charge) : deliveryCharge,
+    admin_shipping_override: order.admin_shipping_override !== undefined ? Number(order.admin_shipping_override) : undefined,
+    shipping_override_reason: order.shipping_override_reason || undefined,
+    shipping_audit_trail: order.shipping_audit_trail || [],
   };
 }
 

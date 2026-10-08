@@ -3,13 +3,15 @@
 // ============================================================
 import { useState, useEffect } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { ShoppingCart, Menu, X, Search, Globe, ChevronDown } from 'lucide-react';
+import { ShoppingCart, Menu, X, Search, Globe, ChevronDown, User } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useCartStore, useLanguageStore, useUIStore } from '@/hooks/useStore';
 import { useSettingsStore } from '@/hooks/useSettingsStore';
+import { useCustomerAuthStore } from '@/hooks/useCustomerAuthStore';
 import { translations } from '@/i18n/translations';
 import AnnouncementBar from '@/components/AnnouncementBar';
 import AppImage from '@/components/common/AppImage';
+import CustomerAuthModal from '@/components/customer/CustomerAuthModal';
 
 const defaultLogo = (import.meta.env.BASE_URL || '/') + 'logo/logo.jpg';
 
@@ -20,6 +22,7 @@ export default function Navbar() {
   const { language, toggle } = useLanguageStore();
   const { mobileMenuOpen, toggleMobileMenu, closeMobileMenu } = useUIStore();
   const { settings } = useSettingsStore();
+  const { customer, isAuthenticated, openAuthModal } = useCustomerAuthStore();
   const location = useLocation();
   const t = translations[language];
   const itemCount = getItemCount();
@@ -150,6 +153,20 @@ export default function Navbar() {
                 </span>
               </button>
 
+              {/* Customer Account Button (Requirements 4.1, 4.2) */}
+              {settings.customerAuth?.customerLoginEnabled !== false && (
+                <button
+                  onClick={() => openAuthModal(isAuthenticated ? 'profile' : 'login')}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-200 hover:border-amber-500 hover:bg-amber-50/60 transition-colors text-sm font-semibold bg-white text-gray-800"
+                  title={isAuthenticated ? 'My Account & Orders' : 'Sign In'}
+                >
+                  <User className="w-4 h-4 text-amber-600" />
+                  <span className="hidden sm:inline">
+                    {isAuthenticated ? (customer?.name?.split(' ')[0] || 'Account') : 'Sign In'}
+                  </span>
+                </button>
+              )}
+
               {/* Cart Button */}
               <button
                 onClick={openCart}
@@ -226,11 +243,28 @@ export default function Navbar() {
                   ))}
                 </div>
 
+                {settings.customerAuth?.customerLoginEnabled !== false && (
+                  <div className="pt-2 border-t border-gray-100">
+                    <button
+                      onClick={() => {
+                        closeMobileMenu();
+                        openAuthModal(isAuthenticated ? 'profile' : 'login');
+                      }}
+                      className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold text-gray-800 hover:bg-amber-50 transition-colors"
+                    >
+                      <User className="w-5 h-5 text-amber-600" />
+                      <span>{isAuthenticated ? (customer?.name || 'My Account') : 'Sign In / My Account'}</span>
+                    </button>
+                  </div>
+                )}
               </div>
             </motion.div>
           )}
         </AnimatePresence>
       </header>
+
+      {/* Customer Authentication Modal */}
+      <CustomerAuthModal />
 
       {/* Spacer */}
       <div className="h-16 md:h-18" />

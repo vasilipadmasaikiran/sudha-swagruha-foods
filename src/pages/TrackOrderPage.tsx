@@ -938,8 +938,21 @@ export default function TrackOrderPage() {
                           )}
                           <div className="flex justify-between items-center text-gray-700">
                             <span>Shipping / Delivery</span>
-                            <span className="font-mono">{shippingAmount === 0 ? 'FREE' : `₹${shippingAmount}`}</span>
+                            <span className="font-mono">
+                              {shippingAmount === 0 ? 'FREE' : `₹${shippingAmount}`}
+                              {activeOrder.admin_shipping_override !== undefined && (
+                                <span className="ml-1 text-[11px] text-amber-700 font-sans font-semibold">
+                                  (Adjusted by Admin)
+                                </span>
+                              )}
+                            </span>
                           </div>
+                          {activeOrder.shipping_override_reason && (
+                            <div className="flex justify-between items-center text-amber-700 text-[11px]">
+                              <span>Shipping Adjustment Note:</span>
+                              <span className="font-sans italic">{activeOrder.shipping_override_reason}</span>
+                            </div>
+                          )}
                           <div className="flex justify-between items-center pt-2 border-t border-gray-200 text-sm font-bold text-gray-900">
                             <span>Final Order Amount</span>
                             <span className="font-mono text-brand-green text-base">₹{activeOrder.total}</span>

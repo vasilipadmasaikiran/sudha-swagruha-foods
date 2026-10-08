@@ -32,24 +32,75 @@ export interface OrderFinancialInputs {
   historicalGstRate?: number;
   historicalGstAmount?: number;
   historicalTaxableAmount?: number;
+  shippingResult?: any;
+}
+
+export interface CalculationStep {
+  step: string;
+  label: string;
+  amount: number;
+  operation: 'add' | 'subtract' | 'result' | 'info';
+  description?: string;
 }
 
 export interface OrderFinancialSummary {
-  originalSubtotal: number; // sum of original (unit_price * quantity) of all active items
-  itemDiscount: number; // discounts at item level
+  // Subtotals & Discounts
+  originalSubtotal: number; // Gross sum of (unit_price * quantity) of all items before cancellations
+  productDiscount: number; // Item-level discounts
+  itemDiscount: number; // Alias for productDiscount
   subtotalAfterItemDiscount: number;
-  couponDiscount: number; // discounts from coupon
-  totalDiscount: number; // itemDiscount + couponDiscount
-  taxableAmount: number; // base taxable amount (subtotal - discounts)
-  gstRate: number; // applied GST % (0 if GST disabled)
-  gstAmount: number; // calculated GST amount
-  shippingAmount: number; // delivery / shipping charge
-  grandTotal: number; // taxableAmount + gstAmount + shippingAmount
-  amountPaid: number; // recorded payments received
-  amountRefunded: number; // recorded refunds issued
-  amountDue: number; // Math.max(0, grandTotal - amountPaid)
-  netReceived: number; // amountPaid - amountRefunded
-  remainingRefundable: number; // Math.max(0, amountPaid - amountRefunded)
+  orderDiscount: number; // Order/Coupon discount
+  couponDiscount: number; // Alias for orderDiscount
+  totalDiscount: number; // productDiscount + orderDiscount
+  
+  // Cancellations & Returns
+  cancelledAmount: number; // Value of cancelled / removed items
+  returnedAmount: number; // Value of returned items
+  adjustedSubtotal: number; // Max(0, originalSubtotal - totalDiscount - cancelledAmount)
+  taxableAmount: number; // Base taxable amount (adjustedSubtotal)
+  
+  // Taxes / GST
+  gstRate: number; // Applied GST rate %
+  gstAmount: number; // Applied GST amount
+  taxAmount: number; // Alias for gstAmount
+
+  // Delivery / Shipping
+  calculatedShipping: number; // Original calculated delivery fee
+  shippingOverride?: number; // Admin override delivery fee if set
+  finalShipping: number; // Effective shipping fee applied
+  shippingAmount: number; // Alias for finalShipping
+  shippingResult?: any; // Full calculation breakdown from calculateShipping
+
+  // Other Charges
+  otherCharges: number; // COD fee, packaging fee, etc.
+
+  // Grand Totals
+  originalOrderTotal: number; // Order total before cancellations
+  adjustedOrderTotal: number; // Order total after item cancellations
+  finalOrderTotal: number; // Final payable amount (adjustedSubtotal + finalShipping + tax + otherCharges)
+  grandTotal: number; // Alias for finalOrderTotal
+
+  // Payment Reconciliation
+  totalAmountReceived: number; // Verified payments collected
+  amountPaid: number; // Alias for totalAmountReceived
+  balanceAmount: number; // Math.max(0, finalOrderTotal - totalAmountReceived)
+  amountDue: number; // Alias for balanceAmount
+  excessAmount: number; // Math.max(0, totalAmountReceived - finalOrderTotal)
+  refundAmount: number; // Total refund required / due
+  refundedAmount: number; // Amount actually refunded
+  amountRefunded: number; // Alias for refundedAmount
+  pendingRefundAmount: number; // Refund initiated but pending processing
+  netReceived: number; // totalAmountReceived - refundedAmount
+  remainingRefundable: number; // Math.max(0, totalAmountReceived - refundedAmount)
+
+  // Statuses
+  paymentStatus: 'unpaid' | 'partially_paid' | 'paid' | 'excess_payment' | 'refunded' | 'partially_refunded';
+  
+  // Audit, Diagnostics & Inspection
+  recordedTotal?: number; // Stored total in DB for reconciliation comparison
+  hasDiscrepancy?: boolean; // True if stored total deviates from calculated total
+  discrepancyReason?: string; // Clear diagnostic explanation
+  breakdown: CalculationStep[]; // Step-by-step trace for "View Calculation Details"
 }
 
 /**
@@ -71,98 +122,435 @@ export const DEFAULT_TAX_CONFIG: TaxConfiguration = {
 };
 
 /**
- * Authoritative Order Financial Calculator
+ * Single Authoritative Order Financial Calculation Engine
  * 
- * Formula:
- * 1. Subtotal = sum(unit_price * quantity) for non-cancelled items
- * 2. Item Discounts = sum(item_discount)
- * 3. Coupon Discount = (Subtotal - Item Discounts) * (couponPercent / 100) + fixedCouponDiscount
- * 4. Taxable Amount = Subtotal - Total Discounts
- * 5. GST Amount = Taxable Amount * (gstRate / 100) [if GST enabled]
- * 6. Grand Total = Taxable Amount + GST Amount + Shipping
- * 7. Amount Due = max(0, Grand Total - Amount Paid)
- * 8. Remaining Refundable = max(0, Amount Paid - Amount Refunded)
+ * Authoritative Sequence:
+ * 1. Gross Product Subtotal (sum of unit_price * quantity for all items)
+ * 2. Less Product Discounts
+ * 3. Less Order/Coupon Discounts
+ * 4. Less Cancelled Items
+ * 5. = Adjusted Subtotal
+ * 6. Add Final Shipping (Calculated + Admin Override)
+ * 7. Add Applicable Taxes (GST)
+ * 8. Add Other Surcharges (COD)
+ * 9. = FINAL ORDER TOTAL
+ * 10. Reconcile Payments:
+ *     - Paid < Total  => Balance Due (PARTIALLY PAID / UNPAID)
+ *     - Paid == Total => Balance = 0 (FULLY PAID)
+ *     - Paid > Total  => Excess Payment => Refund Due (EXCESS AMOUNT)
  */
-export function calculateOrderFinancials(inputs: OrderFinancialInputs): OrderFinancialSummary {
-  const items = Array.isArray(inputs.items) ? inputs.items : [];
+export function calculateOrderFinancials(inputsOrOrder: any): OrderFinancialSummary {
+  if (!inputsOrOrder) {
+    return {
+      originalSubtotal: 0,
+      productDiscount: 0,
+      itemDiscount: 0,
+      subtotalAfterItemDiscount: 0,
+      orderDiscount: 0,
+      couponDiscount: 0,
+      totalDiscount: 0,
+      cancelledAmount: 0,
+      returnedAmount: 0,
+      adjustedSubtotal: 0,
+      taxableAmount: 0,
+      gstRate: 0,
+      gstAmount: 0,
+      taxAmount: 0,
+      calculatedShipping: 0,
+      finalShipping: 0,
+      shippingAmount: 0,
+      otherCharges: 0,
+      originalOrderTotal: 0,
+      adjustedOrderTotal: 0,
+      finalOrderTotal: 0,
+      grandTotal: 0,
+      totalAmountReceived: 0,
+      amountPaid: 0,
+      balanceAmount: 0,
+      amountDue: 0,
+      excessAmount: 0,
+      refundAmount: 0,
+      refundedAmount: 0,
+      amountRefunded: 0,
+      pendingRefundAmount: 0,
+      netReceived: 0,
+      remainingRefundable: 0,
+      paymentStatus: 'unpaid',
+      breakdown: [],
+    };
+  }
+
+  const items = Array.isArray(inputsOrOrder.items) ? inputsOrOrder.items : [];
   
-  // 1. Calculate active subtotal (ignore removed/cancelled items)
-  let rawSubtotal = 0;
-  let rawItemDiscount = 0;
+  // 1. Calculate Gross Subtotal, Cancelled Items & Item Discounts
+  let grossSubtotal = 0;
+  let activeSubtotal = 0;
+  let cancelledItemsVal = 0;
+  let itemDiscountVal = 0;
 
   for (const it of items) {
-    if (it.status === 'removed' || it.status === 'cancelled') {
-      continue;
-    }
     const unitPrice = roundToTwo(Number(it.unit_price || 0));
     const qty = Math.max(0, Number(it.quantity || 0));
     const lineTotal = it.total_price !== undefined ? roundToTwo(Number(it.total_price)) : roundToTwo(unitPrice * qty);
-    rawSubtotal += lineTotal;
-    rawItemDiscount += roundToTwo(Number(it.item_discount || 0));
+    
+    grossSubtotal += lineTotal;
+    
+    const isCancelled = it.status === 'removed' || it.status === 'cancelled';
+    if (isCancelled) {
+      cancelledItemsVal += lineTotal;
+    } else if (it.cancelled_quantity && it.cancelled_quantity > 0) {
+      const cancelledPart = roundToTwo(unitPrice * it.cancelled_quantity);
+      cancelledItemsVal += cancelledPart;
+      activeSubtotal += Math.max(0, lineTotal - cancelledPart);
+      itemDiscountVal += roundToTwo(Number(it.item_discount || 0));
+    } else {
+      activeSubtotal += lineTotal;
+      itemDiscountVal += roundToTwo(Number(it.item_discount || 0));
+    }
   }
 
-  const originalSubtotal = roundToTwo(rawSubtotal);
-  const itemDiscount = roundToTwo(rawItemDiscount);
-  const subtotalAfterItemDiscount = Math.max(0, roundToTwo(originalSubtotal - itemDiscount));
-
-  // 2. Coupon Discount calculation
-  let couponDiscount = 0;
-  if (inputs.fixedCouponDiscount && inputs.fixedCouponDiscount > 0) {
-    couponDiscount = roundToTwo(inputs.fixedCouponDiscount);
-  } else if (inputs.couponDiscountPercent && inputs.couponDiscountPercent > 0) {
-    couponDiscount = roundToTwo((subtotalAfterItemDiscount * inputs.couponDiscountPercent) / 100);
+  // Fallback if order has top-level subtotal but no items array populated
+  if (items.length === 0 && inputsOrOrder.subtotal !== undefined) {
+    grossSubtotal = roundToTwo(Number(inputsOrOrder.subtotal));
+    activeSubtotal = grossSubtotal;
   }
+
+  const originalSubtotal = roundToTwo(grossSubtotal);
+  const cancelledAmount = roundToTwo(cancelledItemsVal);
+  const productDiscount = roundToTwo(itemDiscountVal);
+  const subtotalAfterItemDiscount = Math.max(0, roundToTwo(originalSubtotal - productDiscount - cancelledAmount));
+
+  // 2. Order / Coupon Discount
+  let couponDiscountVal = 0;
+  if (inputsOrOrder.fixedCouponDiscount && inputsOrOrder.fixedCouponDiscount > 0) {
+    couponDiscountVal = roundToTwo(inputsOrOrder.fixedCouponDiscount);
+  } else if (inputsOrOrder.couponDiscountPercent && inputsOrOrder.couponDiscountPercent > 0) {
+    couponDiscountVal = roundToTwo((subtotalAfterItemDiscount * inputsOrOrder.couponDiscountPercent) / 100);
+  } else if (inputsOrOrder.coupon_discount !== undefined) {
+    couponDiscountVal = roundToTwo(Number(inputsOrOrder.coupon_discount));
+  } else if (inputsOrOrder.discount !== undefined) {
+    couponDiscountVal = roundToTwo(Number(inputsOrOrder.discount));
+  } else if (inputsOrOrder.order_discount !== undefined) {
+    couponDiscountVal = roundToTwo(Number(inputsOrOrder.order_discount));
+  }
+  
   // Cap coupon discount so it never exceeds subtotal
-  couponDiscount = Math.min(couponDiscount, subtotalAfterItemDiscount);
+  const orderDiscount = Math.min(couponDiscountVal, subtotalAfterItemDiscount);
+  const totalDiscount = roundToTwo(productDiscount + orderDiscount);
 
-  const totalDiscount = roundToTwo(itemDiscount + couponDiscount);
-  const taxableAmount = Math.max(0, roundToTwo(originalSubtotal - totalDiscount));
+  // 3. Adjusted Subtotal
+  const adjustedSubtotal = Math.max(0, roundToTwo(originalSubtotal - totalDiscount - cancelledAmount));
+  const taxableAmount = adjustedSubtotal;
 
-  // 3. GST Tax Calculation
-  // If historical snapshot is provided (for existing orders), preserve historical values!
+  // 4. GST Tax Calculation
   let gstRate = 0;
   let gstAmount = 0;
 
-  if (inputs.historicalGstRate !== undefined && inputs.historicalGstAmount !== undefined) {
-    gstRate = inputs.historicalGstRate;
-    gstAmount = roundToTwo(inputs.historicalGstAmount);
+  if (inputsOrOrder.historicalGstRate !== undefined && inputsOrOrder.historicalGstAmount !== undefined) {
+    gstRate = roundToTwo(inputsOrOrder.historicalGstRate);
+    gstAmount = roundToTwo(inputsOrOrder.historicalGstAmount);
+  } else if (inputsOrOrder.gst_amount !== undefined) {
+    gstRate = roundToTwo(Number(inputsOrOrder.gst_rate || 0));
+    gstAmount = roundToTwo(Number(inputsOrOrder.gst_amount || 0));
   } else {
-    const taxConfig = inputs.taxConfig || DEFAULT_TAX_CONFIG;
+    const taxConfig = inputsOrOrder.taxConfig || DEFAULT_TAX_CONFIG;
     if (taxConfig.gstEnabled && taxConfig.gstRate > 0) {
       gstRate = roundToTwo(taxConfig.gstRate);
       gstAmount = roundToTwo((taxableAmount * gstRate) / 100);
     }
   }
 
-  // 4. Shipping Amount
-  const shippingAmount = roundToTwo(Number(inputs.shippingCharge || 0));
+  // 5. Shipping / Delivery Charges
+  const calculatedShipping = roundToTwo(
+    inputsOrOrder.calculated_delivery_charge !== undefined
+      ? Number(inputsOrOrder.calculated_delivery_charge)
+      : inputsOrOrder.shipping_snapshot?.originalCalculatedCharge !== undefined
+      ? Number(inputsOrOrder.shipping_snapshot.originalCalculatedCharge)
+      : inputsOrOrder.shipping_snapshot?.shippingCharge !== undefined
+      ? Number(inputsOrOrder.shipping_snapshot.shippingCharge)
+      : inputsOrOrder.shippingCharge !== undefined
+      ? Number(inputsOrOrder.shippingCharge)
+      : inputsOrOrder.delivery_charge !== undefined
+      ? Number(inputsOrOrder.delivery_charge)
+      : 0
+  );
 
-  // 5. Grand Total
-  const grandTotal = roundToTwo(taxableAmount + gstAmount + shippingAmount);
+  const shippingOverride =
+    inputsOrOrder.admin_shipping_override !== undefined
+      ? roundToTwo(Number(inputsOrOrder.admin_shipping_override))
+      : undefined;
 
-  // 6. Payment & Due Amounts
-  const amountPaid = roundToTwo(Number(inputs.amountPaid || 0));
-  const amountRefunded = roundToTwo(Number(inputs.amountRefunded || 0));
-  const amountDue = Math.max(0, roundToTwo(grandTotal - amountPaid));
-  const netReceived = roundToTwo(amountPaid - amountRefunded);
-  const remainingRefundable = Math.max(0, roundToTwo(amountPaid - amountRefunded));
+  const finalShipping = shippingOverride !== undefined ? shippingOverride : calculatedShipping;
+
+  // 6. Other Charges (COD Surcharges, etc.)
+  let otherCharges = 0;
+  if (inputsOrOrder.shipping_snapshot?.breakdown?.codCharge) {
+    otherCharges = roundToTwo(Number(inputsOrOrder.shipping_snapshot.breakdown.codCharge));
+  }
+
+  // 7. Grand Totals
+  const originalOrderTotal = roundToTwo(Math.max(0, originalSubtotal - totalDiscount + finalShipping + gstAmount + otherCharges));
+  const finalOrderTotal = roundToTwo(Math.max(0, adjustedSubtotal + finalShipping + gstAmount + otherCharges));
+
+  // 8. Payments & Reconciliation
+  let totalPaymentsCollected = 0;
+  if (Array.isArray(inputsOrOrder.payments) && inputsOrOrder.payments.length > 0) {
+    totalPaymentsCollected = inputsOrOrder.payments
+      .filter((p: any) => p.status === 'success')
+      .reduce((sum: number, p: any) => sum + roundToTwo(Number(p.amount || 0)), 0);
+  } else if (inputsOrOrder.amountPaid !== undefined) {
+    totalPaymentsCollected = roundToTwo(Number(inputsOrOrder.amountPaid));
+  } else if (inputsOrOrder.amount_paid !== undefined) {
+    totalPaymentsCollected = roundToTwo(Number(inputsOrOrder.amount_paid));
+  } else if (inputsOrOrder.payment_status === 'paid') {
+    totalPaymentsCollected = roundToTwo(Number(inputsOrOrder.total || finalOrderTotal));
+  }
+
+  const totalAmountReceived = roundToTwo(totalPaymentsCollected);
+
+  // 9. Refunds
+  let totalRefundsIssued = 0;
+  let totalPendingRefunds = 0;
+
+  if (Array.isArray(inputsOrOrder.refunds) && inputsOrOrder.refunds.length > 0) {
+    totalRefundsIssued = inputsOrOrder.refunds
+      .filter((r: any) => r.status === 'success')
+      .reduce((sum: number, r: any) => sum + roundToTwo(Number(r.amount || 0)), 0);
+
+    totalPendingRefunds = inputsOrOrder.refunds
+      .filter((r: any) => r.status === 'pending' || r.status === 'processing')
+      .reduce((sum: number, r: any) => sum + roundToTwo(Number(r.amount || 0)), 0);
+  } else if (inputsOrOrder.amountRefunded !== undefined) {
+    totalRefundsIssued = roundToTwo(Number(inputsOrOrder.amountRefunded));
+  } else if (inputsOrOrder.refunded_amount !== undefined) {
+    totalRefundsIssued = roundToTwo(Number(inputsOrOrder.refunded_amount));
+  }
+
+  const refundedAmount = roundToTwo(totalRefundsIssued);
+  const pendingRefundAmount = roundToTwo(totalPendingRefunds);
+
+  // Balance & Excess Calculations
+  const balanceAmount = Math.max(0, roundToTwo(finalOrderTotal - totalAmountReceived));
+  const excessAmount = Math.max(0, roundToTwo(totalAmountReceived - finalOrderTotal));
+  
+  // Overall Refund Amount Due
+  const refundAmount = excessAmount > 0 ? excessAmount : Math.max(refundedAmount, pendingRefundAmount);
+  const netReceived = Math.max(0, roundToTwo(totalAmountReceived - refundedAmount));
+  const remainingRefundable = Math.max(0, roundToTwo(totalAmountReceived - refundedAmount));
+
+  // 10. Canonical Payment Status
+  let canonicalPaymentStatus: 'unpaid' | 'partially_paid' | 'paid' | 'excess_payment' | 'refunded' | 'partially_refunded';
+  
+  const isOrderCancelled = inputsOrOrder.order_status === 'cancelled';
+
+  if (isOrderCancelled) {
+    if (refundedAmount >= totalAmountReceived && totalAmountReceived > 0) {
+      canonicalPaymentStatus = 'refunded';
+    } else if (totalAmountReceived > 0) {
+      canonicalPaymentStatus = 'partially_refunded';
+    } else {
+      canonicalPaymentStatus = 'unpaid';
+    }
+  } else {
+    if (refundedAmount >= totalAmountReceived && totalAmountReceived > 0) {
+      canonicalPaymentStatus = 'refunded';
+    } else if (refundedAmount > 0) {
+      canonicalPaymentStatus = 'partially_refunded';
+    } else if (excessAmount > 0) {
+      canonicalPaymentStatus = 'excess_payment';
+    } else if (totalAmountReceived >= finalOrderTotal && finalOrderTotal > 0) {
+      canonicalPaymentStatus = 'paid';
+    } else if (totalAmountReceived > 0) {
+      canonicalPaymentStatus = 'partially_paid';
+    } else {
+      canonicalPaymentStatus = 'unpaid';
+    }
+  }
+
+  // 11. Stored vs Calculated Reconciliation
+  const recordedTotal = inputsOrOrder.total !== undefined ? roundToTwo(Number(inputsOrOrder.total)) : undefined;
+  let hasDiscrepancy = false;
+  let discrepancyReason: string | undefined = undefined;
+
+  if (recordedTotal !== undefined && Math.abs(finalOrderTotal - recordedTotal) > 0.05) {
+    hasDiscrepancy = true;
+    if (cancelledAmount > 0 && Math.abs(originalOrderTotal - recordedTotal) <= 0.05) {
+      discrepancyReason = `Stored total (₹${recordedTotal}) does not reflect ₹${cancelledAmount} in cancelled items.`;
+    } else if (shippingOverride !== undefined && Math.abs((originalOrderTotal - shippingOverride + calculatedShipping) - recordedTotal) <= 0.05) {
+      discrepancyReason = `Stored total (₹${recordedTotal}) does not reflect shipping override adjustment.`;
+    } else {
+      discrepancyReason = `Calculation mismatch: Stored total is ₹${recordedTotal}, but authoritative calculation is ₹${finalOrderTotal} (Difference: ₹${roundToTwo(finalOrderTotal - recordedTotal)}).`;
+    }
+  }
+
+  // 12. Step-by-Step Breakdown for "View Calculation Details"
+  const breakdown: CalculationStep[] = [
+    {
+      step: '1',
+      label: 'Gross Product Subtotal',
+      amount: originalSubtotal,
+      operation: 'add',
+      description: 'Sum of unit price × quantity across all items',
+    },
+  ];
+
+  if (productDiscount > 0) {
+    breakdown.push({
+      step: '2',
+      label: 'Product Discounts',
+      amount: productDiscount,
+      operation: 'subtract',
+      description: 'Direct item-level reductions',
+    });
+  }
+
+  if (orderDiscount > 0) {
+    breakdown.push({
+      step: '3',
+      label: `Coupon / Order Discount ${inputsOrOrder.coupon_code ? `(${inputsOrOrder.coupon_code})` : ''}`,
+      amount: orderDiscount,
+      operation: 'subtract',
+      description: 'Cart-level promotional discount',
+    });
+  }
+
+  if (cancelledAmount > 0) {
+    breakdown.push({
+      step: '4',
+      label: 'Cancelled / Removed Items',
+      amount: cancelledAmount,
+      operation: 'subtract',
+      description: 'Deduction for items cancelled before dispatch',
+    });
+  }
+
+  breakdown.push({
+    step: '5',
+    label: 'Adjusted Subtotal',
+    amount: adjustedSubtotal,
+    operation: 'result',
+    description: 'Payable product value',
+  });
+
+  if (calculatedShipping > 0 || finalShipping > 0) {
+    breakdown.push({
+      step: '6',
+      label: shippingOverride !== undefined
+        ? `Shipping (Calculated: ₹${calculatedShipping}, Override: ₹${shippingOverride})`
+        : 'Delivery / Shipping Fee',
+      amount: finalShipping,
+      operation: 'add',
+      description: finalShipping === 0 ? 'Free Shipping Qualified' : 'Standard Delivery Rate',
+    });
+  }
+
+  if (gstAmount > 0) {
+    breakdown.push({
+      step: '7',
+      label: `GST Tax (${gstRate}%)`,
+      amount: gstAmount,
+      operation: 'add',
+      description: 'Goods & Services Tax',
+    });
+  }
+
+  if (otherCharges > 0) {
+    breakdown.push({
+      step: '8',
+      label: 'Other Surcharges (COD)',
+      amount: otherCharges,
+      operation: 'add',
+      description: 'Cash on delivery handling',
+    });
+  }
+
+  breakdown.push({
+    step: '9',
+    label: 'Final Order Total',
+    amount: finalOrderTotal,
+    operation: 'result',
+    description: 'Final authoritative payable amount',
+  });
+
+  breakdown.push({
+    step: '10',
+    label: 'Total Amount Received',
+    amount: totalAmountReceived,
+    operation: 'info',
+    description: `Verified payments collected (${canonicalPaymentStatus.toUpperCase().replace('_', ' ')})`,
+  });
+
+  if (balanceAmount > 0) {
+    breakdown.push({
+      step: '11',
+      label: 'Balance Amount Due',
+      amount: balanceAmount,
+      operation: 'result',
+      description: 'Outstanding balance pending payment',
+    });
+  }
+
+  if (excessAmount > 0) {
+    breakdown.push({
+      step: '11',
+      label: 'Excess Amount (Refund Due)',
+      amount: excessAmount,
+      operation: 'result',
+      description: 'Amount paid exceeds order total; refund required',
+    });
+  }
+
+  if (refundedAmount > 0) {
+    breakdown.push({
+      step: '12',
+      label: 'Refund Issued to Customer',
+      amount: refundedAmount,
+      operation: 'info',
+      description: 'Funds successfully returned to customer',
+    });
+  }
 
   return {
     originalSubtotal,
-    itemDiscount,
+    productDiscount,
+    itemDiscount: productDiscount,
     subtotalAfterItemDiscount,
-    couponDiscount,
+    orderDiscount,
+    couponDiscount: orderDiscount,
     totalDiscount,
+    cancelledAmount,
+    returnedAmount: 0,
+    adjustedSubtotal,
     taxableAmount,
     gstRate,
     gstAmount,
-    shippingAmount,
-    grandTotal,
-    amountPaid,
-    amountRefunded,
-    amountDue,
+    taxAmount: gstAmount,
+    calculatedShipping,
+    shippingOverride,
+    finalShipping,
+    shippingAmount: finalShipping,
+    shippingResult: inputsOrOrder.shippingResult,
+    otherCharges,
+    originalOrderTotal,
+    adjustedOrderTotal: finalOrderTotal,
+    finalOrderTotal,
+    grandTotal: finalOrderTotal,
+    totalAmountReceived,
+    amountPaid: totalAmountReceived,
+    balanceAmount,
+    amountDue: balanceAmount,
+    excessAmount,
+    refundAmount,
+    refundedAmount,
+    amountRefunded: refundedAmount,
+    pendingRefundAmount,
     netReceived,
     remainingRefundable,
+    paymentStatus: canonicalPaymentStatus,
+    recordedTotal,
+    hasDiscrepancy,
+    discrepancyReason,
+    breakdown,
   };
 }
 
@@ -267,5 +655,60 @@ export function validateManualPayment(
     orderTotal,
     newAmountDue,
     newPaymentStatus,
+  };
+}
+
+export interface OrderReconciliationItem {
+  orderId: string;
+  orderNumber: string;
+  customerName: string;
+  recordedTotal: number;
+  calculatedTotal: number;
+  difference: number;
+  reason: string;
+  financialSummary: OrderFinancialSummary;
+}
+
+/**
+ * Diagnostic & Reconciliation Utility (Requirement 20.16)
+ * Audits a collection of orders against the authoritative calculation engine
+ * without silently mutating historical database records.
+ */
+export function diagnoseOrderFinancials(orders: any[]): {
+  totalAudited: number;
+  matchingCount: number;
+  discrepancyCount: number;
+  discrepancies: OrderReconciliationItem[];
+} {
+  const safeOrders = Array.isArray(orders) ? orders : [];
+  const discrepancies: OrderReconciliationItem[] = [];
+  let matchingCount = 0;
+
+  for (const o of safeOrders) {
+    const fin = calculateOrderFinancials(o);
+    const recordedTotal = o.total !== undefined ? roundToTwo(Number(o.total)) : fin.finalOrderTotal;
+    const diff = roundToTwo(fin.finalOrderTotal - recordedTotal);
+
+    if (Math.abs(diff) > 0.05) {
+      discrepancies.push({
+        orderId: o.id || o.order_number,
+        orderNumber: o.order_number || o.id,
+        customerName: o.customer_name || 'Customer',
+        recordedTotal,
+        calculatedTotal: fin.finalOrderTotal,
+        difference: diff,
+        reason: fin.discrepancyReason || `Calculation discrepancy of ₹${diff}`,
+        financialSummary: fin,
+      });
+    } else {
+      matchingCount++;
+    }
+  }
+
+  return {
+    totalAudited: safeOrders.length,
+    matchingCount,
+    discrepancyCount: discrepancies.length,
+    discrepancies,
   };
 }

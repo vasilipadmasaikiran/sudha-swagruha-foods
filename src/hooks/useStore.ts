@@ -10,6 +10,7 @@ import { useSettingsStore } from './useSettingsStore';
 import { supabase, isSupabaseConfigured } from '@/services/supabase';
 import { calculateOrderFinancials, type OrderFinancialSummary } from '@/services/orderCalculationService';
 import { calculateLinePrice } from '@/services/productPricingService';
+import { calculateShipping } from '@/services/shippingService';
 
 // ─── Cart Types ───────────────────────────────────────────────
 export interface CartItem {
@@ -308,13 +309,19 @@ export const useCartStore = create<CartStore>()(
           };
         });
         const rawSubtotal = rawItems.reduce((s, it) => s + it.total_price, 0);
-        const shippingCharge = rawSubtotal >= 499 || rawSubtotal === 0 ? 0 : 60;
+        const shippingSettings = useSettingsStore.getState().settings.shipping;
+        const shippingResult = calculateShipping({
+          subtotal: rawSubtotal,
+          settings: shippingSettings,
+        });
+        const shippingCharge = shippingResult.shippingCharge;
         const taxConfig = useSettingsStore.getState().settings.tax;
 
         return calculateOrderFinancials({
           items: rawItems,
           couponDiscountPercent: get().discount,
           shippingCharge,
+          shippingResult,
           taxConfig,
         });
       },

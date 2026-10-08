@@ -169,14 +169,28 @@ export default function CartDrawer() {
             {/* Footer with totals */}
             {items.length > 0 && (
               <div className="flex-shrink-0 border-t border-gray-200 bg-white px-5 py-5">
-                {/* Free delivery note */}
+                {/* Dynamic Free delivery progress & note */}
                 {delivery === 0 ? (
                   <div className="flex items-center gap-2 mb-3 px-3 py-2 bg-green-50 rounded-lg">
                     <span className="text-green-600 text-sm">🎉</span>
-                    <p className="text-green-700 text-xs font-medium">{t.cart.freeDelivery}</p>
+                    <p className="text-green-700 text-xs font-medium">
+                      {t.cart.freeDelivery} Applied! (Order qualifies for Free Shipping)
+                    </p>
                   </div>
                 ) : (
-                  <p className="text-xs text-gray-500 mb-3 text-center">{t.cart.freeDeliveryNote}</p>
+                  <div className="mb-3 px-3 py-2 bg-amber-50/70 border border-amber-200/60 rounded-xl text-center space-y-1">
+                    <p className="text-xs text-amber-800 font-medium">
+                      Add <strong className="text-brand-green">₹{(financialSummary.shippingResult?.amountNeededForFreeShipping ?? (1000 - subtotal))}</strong> more for <strong className="text-brand-green">FREE Delivery</strong>!
+                    </p>
+                    <div className="w-full bg-amber-100 h-1.5 rounded-full overflow-hidden">
+                      <div
+                        className="bg-brand-green h-full rounded-full transition-all duration-300"
+                        style={{
+                          width: `${Math.min(100, Math.round((subtotal / (financialSummary.shippingResult?.freeShippingThreshold || 1000)) * 100))}%`,
+                        }}
+                      />
+                    </div>
+                  </div>
                 )}
 
                 <div className="space-y-2">

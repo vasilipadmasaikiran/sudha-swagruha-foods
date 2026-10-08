@@ -33,6 +33,8 @@ import {
   Check,
   CreditCard,
   CheckCircle2,
+  FileSpreadsheet,
+  Download,
 } from 'lucide-react';
 import { useOrderStore } from '@/hooks/useOrderStore';
 import { useAdminAuthStore } from '@/hooks/useAdminAuthStore';
@@ -41,6 +43,9 @@ import { EmailService } from '@/services/emailService';
 import AdminPaymentInfoSubTab from './AdminPaymentInfoSubTab';
 import { logAdminAction } from '@/services/auditLogger';
 import { calculateOrderRefundableMetrics, roundToTwoDecimals } from '@/services/refundService';
+import { calculateOrderFinancials, type OrderFinancialSummary } from '@/services/orderCalculationService';
+import { exportOrdersToCsv } from '@/services/csvExportService';
+import { OrderCalculationInspector } from './OrderCalculationInspector';
 import type { DbOrder, OrderItem, OrderRefundRecord, OrderPaymentRecord } from '@/services/supabase';
 import toast from 'react-hot-toast';
 
@@ -82,6 +87,7 @@ export default function AdminOrdersTab({ initialSubFilter }: { initialSubFilter?
   const {
     orders,
     updateOrderDetails,
+    updateOrderShipping,
     deleteOrder,
     cancelOrder,
     approveCancellationRequest,
@@ -107,6 +113,12 @@ export default function AdminOrdersTab({ initialSubFilter }: { initialSubFilter?
       setStatusFilter(initialSubFilter);
     }
   }, [initialSubFilter]);
+
+  // Shipping Override Modal State (Requirements 1.4, 1.5, 1.7)
+  const [shippingOverrideModalOrder, setShippingOverrideModalOrder] = useState<DbOrder | null>(null);
+  const [shippingOverrideAmount, setShippingOverrideAmount] = useState<string>('0');
+  const [shippingOverrideReason, setShippingOverrideReason] = useState<string>('');
+  const [isUpdatingShipping, setIsUpdatingShipping] = useState<boolean>(false);
 
   // Dispatch / Tracking Modal State (Requirement 11)
   const [dispatchModalOrder, setDispatchModalOrder] = useState<DbOrder | null>(null);
@@ -344,6 +356,58 @@ export default function AdminOrdersTab({ initialSubFilter }: { initialSubFilter?
       }
     } catch {
       toast.error('Failed to update status');
+    }
+  };
+
+  // Open Shipping Override Modal (Requirements 1.4, 1.5, 1.7)
+  const handleOpenShippingOverride = (order: DbOrder) => {
+    setShippingOverrideModalOrder(order);
+    const currentCharge = order.admin_shipping_override !== undefined
+      ? order.admin_shipping_override
+      : (order.delivery_charge || 0);
+    setShippingOverrideAmount(String(currentCharge));
+    setShippingOverrideReason(order.shipping_override_reason || '');
+  };
+
+  // Submit Shipping Override (Requirements 1.4, 1.5, 1.7)
+  const handleSaveShippingOverride = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!shippingOverrideModalOrder || isUpdatingShipping) return;
+
+    const chargeNum = Number(shippingOverrideAmount);
+    if (isNaN(chargeNum) || chargeNum < 0) {
+      toast.error('Shipping charge must be 0 or a positive number');
+      return;
+    }
+
+    if (!shippingOverrideReason.trim()) {
+      toast.error('A reason for modifying the shipping charge is mandatory for audit records');
+      return;
+    }
+
+    setIsUpdatingShipping(true);
+    try {
+      const res = await updateOrderShipping(
+        shippingOverrideModalOrder.id,
+        chargeNum,
+        shippingOverrideReason.trim(),
+        currentUser?.full_name || 'Admin',
+        currentUser?.role || 'Store Owner'
+      );
+
+      if (res.success && res.order) {
+        toast.success(`Shipping updated to ₹${chargeNum}! Grand Total recalculated to ₹${res.order.total}.`);
+        if (selectedOrder && selectedOrder.id === res.order.id) {
+          setSelectedOrder(res.order);
+        }
+        setShippingOverrideModalOrder(null);
+      } else {
+        toast.error(res.error || 'Failed to update shipping charge');
+      }
+    } catch (err: any) {
+      toast.error(err?.message || 'Error updating shipping charge');
+    } finally {
+      setIsUpdatingShipping(false);
     }
   };
 
@@ -873,7 +937,7 @@ export default function AdminOrdersTab({ initialSubFilter }: { initialSubFilter?
         {/* Dedicated Ledger: Refund Transactions */}
         <button
           onClick={() => setStatusFilter('refund_ledger')}
-          className={`px-3.5 py-1.5 rounded-xl font-medium transition-all flex items-center gap-1.5 flex-shrink-0 cursor-pointer ml-auto ${
+          className={`px-3.5 py-1.5 rounded-xl font-medium transition-all flex items-center gap-1.5 flex-shrink-0 cursor-pointer ${
             statusFilter === 'refund_ledger'
               ? 'bg-gradient-to-r from-cyan-600 to-blue-600 text-white font-bold shadow-md'
               : 'bg-slate-900 text-slate-300 hover:text-white border border-slate-700'
@@ -883,6 +947,27 @@ export default function AdminOrdersTab({ initialSubFilter }: { initialSubFilter?
           <span>Refunds Ledger</span>
           <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-black/40 font-mono">
             {allRefundsLedger.length}
+          </span>
+        </button>
+
+        {/* Authoritative Excel-Compatible CSV Export Button (Requirements 20.9, 20.10, 20.11) */}
+        <button
+          type="button"
+          onClick={() => {
+            if (filteredOrders.length === 0) {
+              toast.error('No orders available to export in the current filter');
+              return;
+            }
+            exportOrdersToCsv(filteredOrders, `SudhaSwagruha_Orders_${statusFilter}`);
+            toast.success(`Exported ${filteredOrders.length} orders with 100% authoritative financial calculations!`);
+          }}
+          className="px-3.5 py-1.5 rounded-xl font-medium transition-all flex items-center gap-1.5 flex-shrink-0 cursor-pointer ml-auto bg-slate-900 hover:bg-slate-800 text-amber-300 hover:text-amber-200 border border-amber-500/40 shadow-sm"
+          title="Export orders to Excel-compatible CSV with full financial breakdown matching Admin Console"
+        >
+          <FileSpreadsheet className="w-3.5 h-3.5 text-amber-400" />
+          <span>Export CSV</span>
+          <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-black/40 font-mono text-white">
+            {filteredOrders.length}
           </span>
         </button>
       </div>
@@ -1672,6 +1757,95 @@ export default function AdminOrdersTab({ initialSubFilter }: { initialSubFilter?
                 </p>
               </div>
 
+              {/* Delivery & Shipping Charge Management (Requirements 1.4, 1.5, 1.7) */}
+              <div className="bg-slate-950/70 p-4 rounded-2xl border border-slate-800 space-y-3">
+                <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+                  <div className="flex items-center gap-2">
+                    <Truck className="w-4 h-4 text-amber-400" />
+                    <span className="text-xs font-bold text-white uppercase tracking-wider">
+                      Delivery / Shipping Charges
+                    </span>
+                  </div>
+                  {selectedOrder.order_status !== 'shipped' &&
+                    selectedOrder.order_status !== 'delivered' &&
+                    selectedOrder.order_status !== 'cancelled' && (
+                      <button
+                        type="button"
+                        onClick={() => handleOpenShippingOverride(selectedOrder)}
+                        className="px-2.5 py-1 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/30 text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer"
+                      >
+                        <RotateCcw className="w-3.5 h-3.5" />
+                        <span>Override Delivery Charge</span>
+                      </button>
+                    )}
+                </div>
+
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-xs">
+                  <div className="bg-slate-900/60 p-2.5 rounded-xl border border-slate-800/80">
+                    <span className="text-slate-400 text-[10px] block uppercase font-medium">Calculated Shipping</span>
+                    <span className="font-bold font-mono text-white text-sm">
+                      {selectedOrder.calculated_delivery_charge !== undefined
+                        ? `₹${selectedOrder.calculated_delivery_charge}`
+                        : selectedOrder.shipping_snapshot?.originalCalculatedCharge !== undefined
+                        ? `₹${selectedOrder.shipping_snapshot.originalCalculatedCharge}`
+                        : selectedOrder.shipping_snapshot?.shippingCharge !== undefined
+                        ? `₹${selectedOrder.shipping_snapshot.shippingCharge}`
+                        : `₹${selectedOrder.delivery_charge || 0}`}
+                    </span>
+                  </div>
+
+                  <div className="bg-slate-900/60 p-2.5 rounded-xl border border-slate-800/80">
+                    <span className="text-slate-400 text-[10px] block uppercase font-medium">Admin Override</span>
+                    <span className="font-bold font-mono text-amber-300 text-sm">
+                      {selectedOrder.admin_shipping_override !== undefined
+                        ? `₹${selectedOrder.admin_shipping_override}`
+                        : 'None'}
+                    </span>
+                  </div>
+
+                  <div className="bg-slate-900/60 p-2.5 rounded-xl border border-slate-800/80">
+                    <span className="text-slate-400 text-[10px] block uppercase font-medium">Final Shipping</span>
+                    <span className="font-bold font-mono text-emerald-400 text-sm">
+                      {Number(selectedOrder.delivery_charge || 0) === 0 ? 'FREE (₹0)' : `₹${selectedOrder.delivery_charge}`}
+                    </span>
+                  </div>
+                </div>
+
+                {selectedOrder.shipping_override_reason && (
+                  <div className="p-2 rounded-xl bg-amber-500/10 border border-amber-500/20 text-[11px] text-amber-300 flex items-start gap-1.5">
+                    <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5 text-amber-400" />
+                    <span>
+                      <strong>Override Reason:</strong> {selectedOrder.shipping_override_reason}
+                    </span>
+                  </div>
+                )}
+
+                {/* Shipping Audit Trail (Requirement 1.7) */}
+                {Array.isArray(selectedOrder.shipping_audit_trail) && selectedOrder.shipping_audit_trail.length > 0 && (
+                  <div className="pt-2 border-t border-slate-800/60 space-y-1.5">
+                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
+                      Shipping Audit Trail:
+                    </span>
+                    {selectedOrder.shipping_audit_trail.map((audit, aIdx) => (
+                      <div
+                        key={aIdx}
+                        className="text-[11px] bg-slate-900/80 p-2 rounded-lg border border-slate-800 text-slate-300 flex flex-col sm:flex-row justify-between gap-1"
+                      >
+                        <div>
+                          <span className="text-slate-400">Previous: ₹{audit.previousShipping}</span>
+                          <span className="mx-1 text-slate-500">→</span>
+                          <span className="font-bold text-emerald-400">New: ₹{audit.newShipping}</span>
+                          <span className="text-slate-400 ml-2">({audit.reason})</span>
+                        </div>
+                        <span className="text-slate-500 text-[10px]">
+                          By {audit.changedBy} on {new Date(audit.changedAt).toLocaleString()}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
               {/* Ordered Items with Item-Level Cancellation Action */}
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
@@ -1749,28 +1923,15 @@ export default function AdminOrdersTab({ initialSubFilter }: { initialSubFilter?
                 </div>
               </div>
 
-              {/* Authoritative Financial Breakdown & Payment Reconciliation Card (Requirements 15, 16, 17, 18, 33) */}
+              {/* Authoritative Financial Breakdown & Payment Reconciliation Card (Requirements 20.2, 20.7, 20.8) */}
               {(() => {
-                const metrics = calculateOrderRefundableMetrics(selectedOrder);
-                const subtotal = selectedOrder.subtotal || selectedOrder.total;
-                const itemDiscount = selectedOrder.item_discount || 0;
-                const couponDiscount = selectedOrder.coupon_discount || selectedOrder.discount || 0;
-                const totalDiscount = itemDiscount + couponDiscount;
-                const taxableAmount = selectedOrder.taxable_amount || Math.max(0, subtotal - totalDiscount);
-                const gstRate = selectedOrder.gst_rate || 0;
-                const gstAmount = selectedOrder.gst_amount || 0;
-                const shippingAmount = selectedOrder.delivery_charge || 0;
-                const amountPaid = selectedOrder.amount_paid !== undefined
-                  ? selectedOrder.amount_paid
-                  : (selectedOrder.payment_status === 'paid' ? selectedOrder.total : metrics.paidAmount);
-                const amountDue = selectedOrder.amount_due !== undefined
-                  ? selectedOrder.amount_due
-                  : Math.max(0, selectedOrder.total - amountPaid);
-                const totalRefunded = selectedOrder.refunded_amount || metrics.alreadyRefunded;
-                const netReceived = Math.max(0, amountPaid - totalRefunded);
-                const remainingRefundable = Math.max(0, amountPaid - totalRefunded);
-
-                // Build payment history list (from order payments or synthesized from payment_id)
+                const fin = calculateOrderFinancials(selectedOrder);
+                const amountDue = fin.balanceAmount;
+                const amountPaid = fin.totalAmountReceived;
+                const totalRefunded = fin.refundedAmount;
+                const remainingRefundable = fin.excessAmount > 0
+                  ? fin.excessAmount
+                  : Math.max(0, fin.totalAmountReceived - fin.refundedAmount);
                 const paymentRecords: OrderPaymentRecord[] = Array.isArray(selectedOrder.payments) && selectedOrder.payments.length > 0
                   ? selectedOrder.payments
                   : selectedOrder.payment_id
@@ -1780,7 +1941,7 @@ export default function AdminOrdersTab({ initialSubFilter }: { initialSubFilter?
                         order_id: selectedOrder.id,
                         order_number: selectedOrder.order_number,
                         transaction_id: selectedOrder.payment_id,
-                        amount: amountPaid,
+                        amount: fin.totalAmountReceived,
                         status: selectedOrder.payment_status === 'paid' ? 'success' : 'pending',
                         provider: selectedOrder.payment_id.startsWith('pay_') ? 'razorpay' : 'manual',
                         payment_method: 'online',
@@ -1801,76 +1962,96 @@ export default function AdminOrdersTab({ initialSubFilter }: { initialSubFilter?
                         </span>
                         <span
                           className={`text-[10px] font-bold px-2 py-0.5 rounded-full border uppercase ${
-                            selectedOrder.payment_status === 'paid'
+                            fin.paymentStatus === 'paid'
                               ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30'
-                              : selectedOrder.payment_status === 'partially_refunded'
+                              : fin.paymentStatus === 'excess_payment'
+                              ? 'bg-purple-500/20 text-purple-300 border-purple-500/40 animate-pulse'
+                              : fin.paymentStatus === 'partially_refunded'
                               ? 'bg-amber-500/20 text-amber-400 border-amber-500/30'
-                              : selectedOrder.payment_status === 'refunded'
+                              : fin.paymentStatus === 'refunded'
                               ? 'bg-purple-500/20 text-purple-400 border-purple-500/30'
-                              : selectedOrder.payment_status === 'partially_paid'
+                              : fin.paymentStatus === 'partially_paid'
                               ? 'bg-blue-500/20 text-blue-400 border-blue-500/30'
                               : 'bg-slate-800 text-slate-300 border-slate-700'
                           }`}
                         >
-                          Payment: {selectedOrder.payment_status.toUpperCase()}
+                          Payment: {fin.paymentStatus.replace('_', ' ').toUpperCase()}
                         </span>
                       </div>
 
                       <div className="space-y-1.5 text-xs font-mono">
                         <div className="flex justify-between text-slate-300">
-                          <span className="font-sans">Subtotal</span>
-                          <span>₹{subtotal}</span>
+                          <span className="font-sans">Product Subtotal</span>
+                          <span>₹{fin.originalSubtotal}</span>
                         </div>
-                        {itemDiscount > 0 && (
+                        {fin.productDiscount > 0 && (
                           <div className="flex justify-between text-emerald-400">
                             <span className="font-sans">Product Discount</span>
-                            <span>-₹{itemDiscount}</span>
+                            <span>-₹{fin.productDiscount}</span>
                           </div>
                         )}
-                        {couponDiscount > 0 && (
+                        {fin.orderDiscount > 0 && (
                           <div className="flex justify-between text-emerald-400">
                             <span className="font-sans">Coupon Discount {selectedOrder.coupon_code ? `(${selectedOrder.coupon_code})` : ''}</span>
-                            <span>-₹{couponDiscount}</span>
+                            <span>-₹{fin.orderDiscount}</span>
                           </div>
                         )}
-                        <div className="flex justify-between text-slate-400 text-[11px]">
-                          <span className="font-sans">Taxable Amount</span>
-                          <span>₹{taxableAmount}</span>
+                        {fin.cancelledAmount > 0 && (
+                          <div className="flex justify-between text-rose-400 font-semibold">
+                            <span className="font-sans">Cancelled Items</span>
+                            <span>-₹{fin.cancelledAmount}</span>
+                          </div>
+                        )}
+                        <div className="flex justify-between text-slate-400 text-[11px] pt-1 border-t border-slate-800/60">
+                          <span className="font-sans">Adjusted Subtotal</span>
+                          <span>₹{fin.adjustedSubtotal}</span>
                         </div>
-                        {gstAmount > 0 && (
+                        {fin.gstAmount > 0 && (
                           <div className="flex justify-between text-slate-300">
-                            <span className="font-sans">GST ({gstRate}%)</span>
-                            <span>+₹{gstAmount}</span>
+                            <span className="font-sans">GST ({fin.gstRate}%)</span>
+                            <span>+₹{fin.gstAmount}</span>
                           </div>
                         )}
                         <div className="flex justify-between text-slate-300">
-                          <span className="font-sans">Shipping Charge</span>
-                          <span>{shippingAmount === 0 ? 'FREE' : `+₹${shippingAmount}`}</span>
+                          <span className="font-sans">
+                            Final Shipping Charge
+                            {fin.shippingOverride !== undefined ? ' (Admin Override)' : ''}
+                          </span>
+                          <span>{fin.finalShipping === 0 ? 'FREE' : `+₹${fin.finalShipping}`}</span>
                         </div>
                         <div className="flex justify-between pt-2 border-t border-slate-700 text-sm font-bold text-white">
-                          <span className="font-sans">Order Total</span>
-                          <span className="text-emerald-400">₹{selectedOrder.total}</span>
+                          <span className="font-sans">Final Order Total</span>
+                          <span className="text-emerald-400">₹{fin.finalOrderTotal}</span>
                         </div>
                       </div>
 
-                      {/* Payment Status Metric Cards (Requirement 16) */}
+                      {/* Payment Status Metric Cards (Requirement 20.7) */}
                       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-2 text-center text-xs">
                         <div className="p-2.5 bg-slate-900 rounded-xl border border-slate-800">
-                          <p className="text-[10px] text-slate-400 uppercase">Order Total</p>
-                          <p className="text-sm font-bold font-mono text-white mt-0.5">₹{selectedOrder.total}</p>
+                          <p className="text-[10px] text-slate-400 uppercase">Final Order Total</p>
+                          <p className="text-sm font-bold font-mono text-white mt-0.5">₹{fin.finalOrderTotal}</p>
                         </div>
                         <div className="p-2.5 bg-slate-900 rounded-xl border border-slate-800">
-                          <p className="text-[10px] text-emerald-400 uppercase font-semibold">Amount Received</p>
-                          <p className="text-sm font-bold font-mono text-emerald-400 mt-0.5">₹{amountPaid}</p>
+                          <p className="text-[10px] text-emerald-400 uppercase font-semibold">Total Received</p>
+                          <p className="text-sm font-bold font-mono text-emerald-400 mt-0.5">₹{fin.totalAmountReceived}</p>
                         </div>
                         <div className="p-2.5 bg-slate-900 rounded-xl border border-slate-800">
-                          <p className="text-[10px] text-amber-400 uppercase font-semibold">Amount Due</p>
-                          <p className="text-sm font-bold font-mono text-amber-400 mt-0.5">₹{amountDue}</p>
+                          <p className="text-[10px] text-amber-400 uppercase font-semibold">Balance Due</p>
+                          <p className="text-sm font-bold font-mono text-amber-400 mt-0.5">₹{fin.balanceAmount}</p>
                         </div>
                         <div className="p-2.5 bg-slate-900 rounded-xl border border-slate-800">
-                          <p className="text-[10px] text-cyan-400 uppercase font-semibold">Net Received</p>
-                          <p className="text-sm font-bold font-mono text-cyan-400 mt-0.5">₹{netReceived}</p>
+                          <p className="text-[10px] text-purple-400 uppercase font-semibold">
+                            {fin.excessAmount > 0 ? 'Excess (Refund Due)' : 'Refund Processed'}
+                          </p>
+                          <p className="text-sm font-bold font-mono text-purple-400 mt-0.5">
+                            {fin.excessAmount > 0 ? `₹${fin.excessAmount}` : `₹${fin.refundedAmount}`}
+                          </p>
                         </div>
+                      </div>
+
+                      {/* Expandable Step-by-Step Calculation Details (Requirements 20.8, 20.17) */}
+                      <div className="pt-2 border-t border-slate-800/80">
+                        <OrderCalculationInspector order={selectedOrder} defaultExpanded={false} />
                       </div>
 
                       {/* Action Buttons */}
@@ -3025,6 +3206,187 @@ export default function AdminOrdersTab({ initialSubFilter }: { initialSubFilter?
                   Delete
                 </button>
               </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* ─── MODAL: SHIPPING CHARGE OVERRIDE (Requirements 1.4, 1.5, 1.7) ─── */}
+      <AnimatePresence>
+        {shippingOverrideModalOrder && (
+          <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4">
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-slate-900 border border-slate-800 rounded-3xl max-w-md w-full p-6 text-slate-100 space-y-4 shadow-2xl"
+            >
+              <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+                <div className="flex items-center gap-2">
+                  <div className="w-8 h-8 rounded-xl bg-amber-500/20 text-amber-400 border border-amber-500/30 flex items-center justify-center">
+                    <Truck className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-white text-base">Override Delivery Charge</h3>
+                    <p className="text-xs text-amber-400 font-mono">
+                      {shippingOverrideModalOrder.order_number}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setShippingOverrideModalOrder(null)}
+                  className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {(() => {
+                const curSubtotal = Number(shippingOverrideModalOrder.subtotal || 0);
+                const curDiscount = Number(shippingOverrideModalOrder.discount || 0);
+                const parsedNewShipping = Math.max(0, Number(shippingOverrideAmount) || 0);
+                const projectedGrandTotal = Math.max(0, curSubtotal + parsedNewShipping - curDiscount);
+                const amountPaid = Number(shippingOverrideModalOrder.amount_paid || (shippingOverrideModalOrder.payment_status === 'paid' ? shippingOverrideModalOrder.total : 0));
+                const excess = Math.max(0, amountPaid - projectedGrandTotal);
+
+                return (
+                  <form onSubmit={handleSaveShippingOverride} className="space-y-4">
+                    <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 grid grid-cols-2 gap-3 text-xs">
+                      <div>
+                        <span className="text-slate-400 block text-[10px] uppercase font-semibold">Current Shipping:</span>
+                        <span className="text-white font-mono font-bold">
+                          ₹{shippingOverrideModalOrder.delivery_charge || 0}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-slate-400 block text-[10px] uppercase font-semibold">Calculated Base:</span>
+                        <span className="text-slate-300 font-mono">
+                          ₹{shippingOverrideModalOrder.calculated_delivery_charge !== undefined
+                            ? shippingOverrideModalOrder.calculated_delivery_charge
+                            : (shippingOverrideModalOrder.shipping_snapshot?.originalCalculatedCharge !== undefined
+                              ? shippingOverrideModalOrder.shipping_snapshot.originalCalculatedCharge
+                              : shippingOverrideModalOrder.shipping_snapshot?.shippingCharge !== undefined
+                              ? shippingOverrideModalOrder.shipping_snapshot.shippingCharge
+                              : shippingOverrideModalOrder.delivery_charge || 0)}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold uppercase tracking-wider text-slate-300 mb-1.5">
+                        New Delivery Charge (₹) *
+                      </label>
+                      <input
+                        type="number"
+                        min="0"
+                        step="1"
+                        required
+                        value={shippingOverrideAmount}
+                        onChange={(e) => setShippingOverrideAmount(e.target.value)}
+                        className="w-full px-4 py-2.5 bg-slate-800 border border-slate-700 rounded-xl text-white font-mono text-base font-bold focus:outline-none focus:border-amber-400"
+                      />
+                      {/* Quick Chips */}
+                      <div className="flex gap-2 mt-2">
+                        <button
+                          type="button"
+                          onClick={() => setShippingOverrideAmount('0')}
+                          className="px-2.5 py-1 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 text-[11px] font-bold rounded-lg transition"
+                        >
+                          ₹0 (FREE Delivery)
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setShippingOverrideAmount('40')}
+                          className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 text-[11px] font-semibold rounded-lg transition"
+                        >
+                          ₹40
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setShippingOverrideAmount('60')}
+                          className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 text-[11px] font-semibold rounded-lg transition"
+                        >
+                          ₹60 (Standard)
+                        </button>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold uppercase tracking-wider text-slate-300 mb-1.5">
+                        Reason for Modification (Mandatory for Audit Trail) *
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        placeholder="e.g. Promotional free delivery / Customer courtesy / Local zone discount"
+                        value={shippingOverrideReason}
+                        onChange={(e) => setShippingOverrideReason(e.target.value)}
+                        className="w-full px-3.5 py-2.5 bg-slate-800 border border-slate-700 rounded-xl text-white text-xs focus:outline-none focus:border-amber-400"
+                      />
+                    </div>
+
+                    {/* Live Recalculation Impact Box */}
+                    <div className="p-3 bg-slate-950/80 rounded-xl border border-slate-800 text-xs space-y-1.5 font-mono">
+                      <div className="flex justify-between text-slate-400 font-sans text-[11px] font-bold uppercase">
+                        <span>Recalculation Summary</span>
+                        <span>Preview</span>
+                      </div>
+                      <div className="flex justify-between text-slate-300">
+                        <span className="font-sans">Subtotal</span>
+                        <span>₹{curSubtotal}</span>
+                      </div>
+                      <div className="flex justify-between text-amber-300">
+                        <span className="font-sans">New Shipping</span>
+                        <span>{parsedNewShipping === 0 ? 'FREE' : `+₹${parsedNewShipping}`}</span>
+                      </div>
+                      {curDiscount > 0 && (
+                        <div className="flex justify-between text-emerald-400">
+                          <span className="font-sans">Discounts</span>
+                          <span>-₹{curDiscount}</span>
+                        </div>
+                      )}
+                      <div className="flex justify-between pt-1.5 border-t border-slate-800 font-bold text-white text-sm">
+                        <span className="font-sans">Adjusted Grand Total</span>
+                        <span className="text-emerald-400">₹{projectedGrandTotal}</span>
+                      </div>
+
+                      {excess > 0 && (
+                        <div className="mt-2 p-2 rounded-lg bg-purple-950/40 border border-purple-500/30 text-purple-300 flex items-center justify-between text-xs">
+                          <span className="font-sans font-semibold">Excess Paid (Refund Required):</span>
+                          <span className="font-bold font-mono">₹{excess}</span>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="flex gap-2 pt-2">
+                      <button
+                        type="button"
+                        onClick={() => setShippingOverrideModalOrder(null)}
+                        className="flex-1 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold rounded-xl transition cursor-pointer"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="submit"
+                        disabled={isUpdatingShipping}
+                        className="flex-1 py-2.5 bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold rounded-xl transition shadow-lg shadow-amber-500/20 flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
+                      >
+                        {isUpdatingShipping ? (
+                          <>
+                            <div className="w-3.5 h-3.5 border-2 border-slate-900 border-t-transparent rounded-full animate-spin" />
+                            <span>Updating...</span>
+                          </>
+                        ) : (
+                          <>
+                            <Check className="w-3.5 h-3.5" />
+                            <span>Save & Recalculate</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  </form>
+                );
+              })()}
             </motion.div>
           </div>
         )}

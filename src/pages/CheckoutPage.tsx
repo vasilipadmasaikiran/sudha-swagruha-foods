@@ -30,6 +30,7 @@ import { useOrderStore } from '@/hooks/useOrderStore';
 import { translations } from '@/i18n/translations';
 import type { DbOrder, OrderPaymentRecord } from '@/services/supabase';
 import { sendOrderConfirmationEmail } from '@/services/emailService';
+import { createShippingSnapshot } from '@/services/shippingService';
 import AppImage from '@/components/common/AppImage';
 
 // Razorpay type declaration
@@ -229,6 +230,9 @@ export default function CheckoutPage() {
       })),
       subtotal,
       delivery_charge: delivery,
+      calculated_delivery_charge: delivery,
+      shipping_snapshot: summary.shippingResult ? createShippingSnapshot(summary.shippingResult) : undefined,
+      shipping_audit_trail: [],
       discount: discountAmount,
       total,
       // Authoritative Order Financial Snapshot

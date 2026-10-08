@@ -6,6 +6,15 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { supabase, isSupabaseConfigured } from '@/services/supabase';
 import { logAdminAction } from '@/services/auditLogger';
+import { type ShippingSettings, defaultShippingSettings } from '@/services/shippingService';
+import {
+  type WebsiteAppearanceSettings,
+  defaultAppearanceSettings,
+  type CustomerAuthSettings,
+  defaultCustomerAuthSettings,
+  type WebsiteContentSettings,
+  defaultWebsiteContentSettings,
+} from '@/services/websiteSettingsTypes';
 
 export interface NotificationEventToggles {
   orderConfirmed: boolean;
@@ -97,6 +106,18 @@ export interface StoreSettings {
 
   // Business GST & Tax Configuration (Issues #2, #5, #8)
   tax: TaxSettings;
+
+  // Central Authoritative Shipping & Delivery Settings
+  shipping: ShippingSettings;
+
+  // Website Appearance & Live Theme Settings
+  appearance: WebsiteAppearanceSettings;
+
+  // Customer Authentication Settings (OTP, Google, Guest)
+  customerAuth: CustomerAuthSettings;
+
+  // Website Content Management Settings (Hero, policies, text)
+  content: WebsiteContentSettings;
 }
 
 export interface TaxSettings {
@@ -119,6 +140,10 @@ interface SettingsStore {
   updateSmtpSettings: (updates: Partial<SmtpSettings>) => void;
   updateSmsSettings: (updates: Partial<SmsSettings>) => void;
   updateTaxSettings: (updates: Partial<TaxSettings>) => void;
+  updateShippingSettings: (updates: Partial<ShippingSettings>) => void;
+  updateAppearanceSettings: (updates: Partial<WebsiteAppearanceSettings>) => void;
+  updateCustomerAuthSettings: (updates: Partial<CustomerAuthSettings>) => void;
+  updateContentSettings: (updates: Partial<WebsiteContentSettings>) => void;
   resetSettings: () => void;
   fetchSettings: () => Promise<void>;
   subscribeToSettings: () => () => void;
@@ -177,6 +202,10 @@ export const defaultSettings: StoreSettings = {
   smtp: defaultSmtpSettings,
   sms: defaultSmsSettings,
   tax: defaultTaxSettings,
+  shipping: defaultShippingSettings,
+  appearance: defaultAppearanceSettings,
+  customerAuth: defaultCustomerAuthSettings,
+  content: defaultWebsiteContentSettings,
 };
 
 const syncDocTitle = (settings: StoreSettings) => {
@@ -231,6 +260,26 @@ export const useSettingsStore = create<SettingsStore>()(
                     ...(remoteVal.sms?.events || {}),
                   },
                 },
+                shipping: {
+                  ...defaultShippingSettings,
+                  ...(state.settings.shipping || {}),
+                  ...(remoteVal.shipping || {}),
+                },
+                appearance: {
+                  ...defaultAppearanceSettings,
+                  ...(state.settings.appearance || {}),
+                  ...(remoteVal.appearance || {}),
+                },
+                customerAuth: {
+                  ...defaultCustomerAuthSettings,
+                  ...(state.settings.customerAuth || {}),
+                  ...(remoteVal.customerAuth || {}),
+                },
+                content: {
+                  ...defaultWebsiteContentSettings,
+                  ...(state.settings.content || {}),
+                  ...(remoteVal.content || {}),
+                },
               };
               syncDocTitle(merged);
               return { settings: merged };
@@ -282,6 +331,26 @@ export const useSettingsStore = create<SettingsStore>()(
                           ...(state.settings.sms?.events || {}),
                           ...(remoteVal.sms?.events || {}),
                         },
+                      },
+                      shipping: {
+                        ...defaultShippingSettings,
+                        ...(state.settings.shipping || {}),
+                        ...(remoteVal.shipping || {}),
+                      },
+                      appearance: {
+                        ...defaultAppearanceSettings,
+                        ...(state.settings.appearance || {}),
+                        ...(remoteVal.appearance || {}),
+                      },
+                      customerAuth: {
+                        ...defaultCustomerAuthSettings,
+                        ...(state.settings.customerAuth || {}),
+                        ...(remoteVal.customerAuth || {}),
+                      },
+                      content: {
+                        ...defaultWebsiteContentSettings,
+                        ...(state.settings.content || {}),
+                        ...(remoteVal.content || {}),
                       },
                     };
                     syncDocTitle(merged);
@@ -418,6 +487,125 @@ export const useSettingsStore = create<SettingsStore>()(
             .then(({ error }) => {
               if (error) console.warn('Supabase SMS settings update notice:', error.message);
               else console.log('Synced SMS settings to Supabase cloud DB');
+            });
+        }
+      },
+
+      // ─── Update Central Shipping Settings ──────────────────────────
+      updateShippingSettings: (shippingUpdates) => {
+        const current = get().settings;
+        const nextShipping: ShippingSettings = {
+          ...(current.shipping || defaultShippingSettings),
+          ...shippingUpdates,
+        };
+        const nextSettings: StoreSettings = { ...current, shipping: nextShipping };
+        set({ settings: nextSettings });
+
+        logAdminAction('Admin', 'ROOT_ADMIN', 'SHIPPING_CONFIGURATION_UPDATED', 'SETTINGS', 'shipping_delivery', {
+          enabled: nextShipping.enabled,
+          defaultCharge: nextShipping.defaultCharge,
+          freeShippingThreshold: nextShipping.freeShippingThreshold,
+          localDeliveryCharge: nextShipping.localDeliveryCharge,
+        }).catch((e) => console.warn('Audit log notice:', e));
+
+        if (isSupabaseConfigured()) {
+          supabase
+            .from('store_settings')
+            .upsert({
+              key: 'store_contact',
+              value: nextSettings,
+              updated_at: new Date().toISOString(),
+            })
+            .then(({ error }) => {
+              if (error) console.warn('Supabase Shipping settings update notice:', error.message);
+              else console.log('Synced Shipping settings to Supabase cloud DB');
+            });
+        }
+      },
+
+      // ─── Update Website Appearance / Theme ────────────────────────
+      updateAppearanceSettings: (appearanceUpdates) => {
+        const current = get().settings;
+        const nextAppearance: WebsiteAppearanceSettings = {
+          ...(current.appearance || defaultAppearanceSettings),
+          ...appearanceUpdates,
+        };
+        const nextSettings: StoreSettings = { ...current, appearance: nextAppearance };
+        set({ settings: nextSettings });
+
+        logAdminAction('Admin', 'ROOT_ADMIN', 'APPEARANCE_UPDATED', 'SETTINGS', 'website_appearance', {
+          publishedVersion: nextAppearance.publishedVersion,
+          isDraft: nextAppearance.isDraft,
+        }).catch((e) => console.warn('Audit log notice:', e));
+
+        if (isSupabaseConfigured()) {
+          supabase
+            .from('store_settings')
+            .upsert({
+              key: 'store_contact',
+              value: nextSettings,
+              updated_at: new Date().toISOString(),
+            })
+            .then(({ error }) => {
+              if (error) console.warn('Supabase Appearance settings update notice:', error.message);
+              else console.log('Synced Appearance settings to Supabase cloud DB');
+            });
+        }
+      },
+
+      // ─── Update Customer Auth Settings ────────────────────────────
+      updateCustomerAuthSettings: (authUpdates) => {
+        const current = get().settings;
+        const nextAuth: CustomerAuthSettings = {
+          ...(current.customerAuth || defaultCustomerAuthSettings),
+          ...authUpdates,
+        };
+        const nextSettings: StoreSettings = { ...current, customerAuth: nextAuth };
+        set({ settings: nextSettings });
+
+        logAdminAction('Admin', 'ROOT_ADMIN', 'CUSTOMER_AUTH_SETTINGS_UPDATED', 'SETTINGS', 'customer_auth', {
+          customerLoginEnabled: nextAuth.customerLoginEnabled,
+          mobileOtpEnabled: nextAuth.mobileOtpEnabled,
+          googleLoginEnabled: nextAuth.googleLoginEnabled,
+          allowGuestCheckout: nextAuth.allowGuestCheckout,
+        }).catch((e) => console.warn('Audit log notice:', e));
+
+        if (isSupabaseConfigured()) {
+          supabase
+            .from('store_settings')
+            .upsert({
+              key: 'store_contact',
+              value: nextSettings,
+              updated_at: new Date().toISOString(),
+            })
+            .then(({ error }) => {
+              if (error) console.warn('Supabase Customer Auth settings update notice:', error.message);
+              else console.log('Synced Customer Auth settings to Supabase cloud DB');
+            });
+        }
+      },
+
+      // ─── Update Website Content Settings ──────────────────────────
+      updateContentSettings: (contentUpdates) => {
+        const current = get().settings;
+        const nextContent: WebsiteContentSettings = {
+          ...(current.content || defaultWebsiteContentSettings),
+          ...contentUpdates,
+        };
+        const nextSettings: StoreSettings = { ...current, content: nextContent };
+        set({ settings: nextSettings });
+
+        if (isSupabaseConfigured()) {
+          supabase
+            .from('store_settings')
+            .upsert({
+              key: 'store_contact',
+              value: nextSettings,
+              updated_at: new Date().toISOString(),
+            })
+            .then(({ error }) => {
+              if (error) console.warn('Supabase Content settings update notice:', error.message);
+              else console.log('Synced Content settings to Supabase cloud DB');
             });
         }
       },
