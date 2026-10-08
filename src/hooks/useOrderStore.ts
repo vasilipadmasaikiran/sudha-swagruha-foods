@@ -459,10 +459,29 @@ export const useOrderStore = create<OrderStore>()(
         }
 
         const newStatus = payload.order_status || existing.order_status;
-        const newTrackingId = payload.tracking_id !== undefined ? payload.tracking_id : (existing.tracking_id || null);
+        const newTrackingId = payload.tracking_id !== undefined ? (payload.tracking_id ? payload.tracking_id.trim().toUpperCase() : null) : (existing.tracking_id || null);
         const newCourier = payload.courier_name !== undefined ? payload.courier_name : (existing.courier_name || null);
-        const newTrackingUrl = payload.tracking_url !== undefined ? payload.tracking_url : (existing.tracking_url || null);
+        let newTrackingUrl = payload.tracking_url !== undefined ? payload.tracking_url : (existing.tracking_url || null);
         const newNotes = payload.notes !== undefined ? payload.notes : (existing.notes || '');
+
+        // Auto-generate courier portal tracking link if courier is recognized
+        if (newTrackingId && !newTrackingUrl) {
+          const trk = newTrackingId.trim();
+          const cName = (newCourier || '').toLowerCase();
+          if (cName.includes('delhivery')) {
+            newTrackingUrl = `https://www.delhivery.com/track/package/${trk}`;
+          } else if (cName.includes('dtdc')) {
+            newTrackingUrl = `https://www.dtdc.in/tracking.asp?strCnno=${trk}`;
+          } else if (cName.includes('bluedart')) {
+            newTrackingUrl = `https://www.bluedart.com/tracking?numbers=${trk}`;
+          } else if (cName.includes('indiapost') || cName.includes('speed post')) {
+            newTrackingUrl = `https://www.indiapost.gov.in/_layouts/15/dpt.cept.tracking/trackconsignment.aspx`;
+          } else if (cName.includes('shadowfax')) {
+            newTrackingUrl = `https://tracker.shadowfax.in/#/track/${trk}`;
+          } else if (cName.includes('professional')) {
+            newTrackingUrl = `https://www.tpcindia.com/`;
+          }
+        }
 
         // Generate updated status history
         const existingHistory = Array.isArray(existing.order_status_history) ? [...existing.order_status_history] : [];

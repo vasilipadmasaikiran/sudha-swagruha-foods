@@ -226,6 +226,39 @@ export default function TrackOrderPage() {
     return () => clearInterval(interval);
   }, [activeOrder?.order_number, fetchAuthoritativeOrder]);
 
+  // ─── Instant Reactive Store Synchronization ──────────────────────
+  // When an admin updates an order (or status/tracking changes) in useOrderStore,
+  // immediately sync activeOrder without requiring a refresh or waiting for polling.
+  useEffect(() => {
+    if (!activeOrder?.order_number) return;
+    const cleanNum = activeOrder.order_number.trim().toUpperCase();
+    const storeOrder = orders.find(
+      (o) => o.order_number.trim().toUpperCase() === cleanNum
+    );
+    if (storeOrder) {
+      setActiveOrder((prev) => {
+        if (!prev) return storeOrder;
+        const trackingChanged = prev.tracking_id !== storeOrder.tracking_id;
+        const courierChanged = prev.courier_name !== storeOrder.courier_name;
+        const statusChanged = prev.order_status !== storeOrder.order_status;
+        const historyChanged =
+          JSON.stringify(prev.order_status_history) !== JSON.stringify(storeOrder.order_status_history);
+        const urlChanged = prev.tracking_url !== storeOrder.tracking_url;
+
+        if (trackingChanged || courierChanged || statusChanged || historyChanged || urlChanged) {
+          return {
+            ...prev,
+            ...storeOrder,
+            tracking_id: storeOrder.tracking_id || prev.tracking_id,
+            courier_name: storeOrder.courier_name || prev.courier_name,
+            tracking_url: storeOrder.tracking_url || prev.tracking_url,
+          };
+        }
+        return prev;
+      });
+    }
+  }, [orders, activeOrder?.order_number]);
+
   const onTrack = (data: TrackForm) => {
     fetchAuthoritativeOrder(data.orderNumber, data.mobile);
   };
@@ -420,7 +453,7 @@ export default function TrackOrderPage() {
                 </div>
 
                 {/* Order ID & Status Header */}
-                <div className="flex flex-wrap justify-between items-start gap-4 mb-6">
+                <div className="flex flex-wrap justify-between items-start gap-4 mb-4">
                   <div>
                     <p className="text-xs uppercase font-bold text-gray-400 tracking-wider">
                       Authoritative Order ID
@@ -428,10 +461,21 @@ export default function TrackOrderPage() {
                     <p className="font-mono text-2xl md:text-3xl font-extrabold text-brand-green tracking-tight">
                       {activeOrder.order_number}
                     </p>
-                    <p className="text-xs text-gray-500 mt-1 flex items-center gap-1.5">
-                      <Clock className="w-3.5 h-3.5 text-gray-400" />
-                      <span>Placed on {new Date(activeOrder.created_at).toLocaleString()}</span>
-                    </p>
+                    <div className="flex flex-wrap items-center gap-2 mt-1">
+                      <p className="text-xs text-gray-500 flex items-center gap-1.5">
+                        <Clock className="w-3.5 h-3.5 text-gray-400" />
+                        <span>Placed on {new Date(activeOrder.created_at).toLocaleString()}</span>
+                      </p>
+                      {activeOrder.tracking_id && (
+                        <span className="inline-flex items-center gap-1.5 text-xs bg-purple-100 text-purple-800 font-bold px-2.5 py-0.5 rounded-full border border-purple-200">
+                          <Truck className="w-3.5 h-3.5 text-purple-600" />
+                          <span>AWB: {activeOrder.tracking_id}</span>
+                          {activeOrder.courier_name && (
+                            <span className="text-[11px] font-medium text-purple-600">({activeOrder.courier_name})</span>
+                          )}
+                        </span>
+                      )}
+                    </div>
                   </div>
 
                   <div className="text-right">
@@ -453,6 +497,56 @@ export default function TrackOrderPage() {
                     </p>
                   </div>
                 </div>
+
+                {/* Top Logistics & Real-Time Tracking Card */}
+                {activeOrder.tracking_id && (
+                  <motion.div
+                    initial={{ opacity: 0, y: -6 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="mb-6 p-4 rounded-2xl bg-gradient-to-r from-purple-50 via-indigo-50/50 to-purple-50 border-2 border-purple-200/90 shadow-sm flex flex-wrap items-center justify-between gap-3"
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-2xl bg-purple-600 text-white flex items-center justify-center shadow-md shadow-purple-600/30 flex-shrink-0">
+                        <Truck className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-[11px] font-bold uppercase tracking-wider text-purple-700">
+                            Courier Tracking ID / AWB
+                          </span>
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-purple-200 text-purple-800">
+                            {activeOrder.courier_name || 'Express Courier'}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-2 mt-0.5">
+                          <span className="font-mono text-base sm:text-lg font-black text-gray-900 tracking-wide">
+                            {activeOrder.tracking_id}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => handleCopyTracking(activeOrder.tracking_id || '')}
+                            className="p-1 text-purple-600 hover:text-purple-800 hover:bg-purple-100 rounded-md transition"
+                            title="Copy Tracking ID"
+                          >
+                            {copiedTracking ? <Check className="w-4 h-4 text-emerald-600" /> : <Copy className="w-4 h-4" />}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+
+                    {activeOrder.tracking_url && (
+                      <a
+                        href={activeOrder.tracking_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white text-xs font-extrabold rounded-xl shadow-md shadow-purple-600/20 flex items-center gap-1.5 transition ml-auto sm:ml-0"
+                      >
+                        <span>Track on Courier Portal</span>
+                        <ExternalLink className="w-3.5 h-3.5" />
+                      </a>
+                    )}
+                  </motion.div>
+                )}
 
                 {/* ─── CUSTOMER CANCELLATION ACTIONS & STATUS (Requirements 3, 4, 5, 34, 35) ─── */}
                 {activeOrder.order_status !== 'cancelled' && (
@@ -723,10 +817,12 @@ export default function TrackOrderPage() {
                     const isCurrent = idx === currentStatusIdx;
                     const isUpcoming = idx > currentStatusIdx;
 
-                    // Match history record for this milestone if available
-                    const historyRecord = activeOrder.order_status_history?.find(
-                      (h) => h.status === status.key
-                    );
+                    // Match history record for this milestone if available (take the latest entry)
+                    const historyRecord = [...(activeOrder.order_status_history || [])]
+                      .reverse()
+                      .find((h) => h.status === status.key);
+
+                    const hasTrackingDetails = Boolean(activeOrder.tracking_id || historyRecord?.tracking_id);
 
                     return (
                       <div key={status.key} className="flex gap-4 mb-6 last:mb-0 relative group">
@@ -800,7 +896,7 @@ export default function TrackOrderPage() {
                           )}
 
                           {/* Dedicated Tracking Information attached directly to Dispatched Event (Requirement 3.1) */}
-                          {status.key === 'shipped' && isCompleted && (
+                          {status.key === 'shipped' && (isCompleted || hasTrackingDetails) && (
                             <div className="mt-2.5 p-3.5 bg-gradient-to-r from-purple-50 via-indigo-50/50 to-white rounded-2xl border border-purple-200/90 shadow-sm space-y-2">
                               <div className="flex items-center justify-between text-xs font-semibold text-purple-950">
                                 <span className="flex items-center gap-1.5 font-bold uppercase tracking-wider text-[11px] text-purple-700">
@@ -808,7 +904,7 @@ export default function TrackOrderPage() {
                                   <span>Dispatch Logistics Details</span>
                                 </span>
                                 <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-purple-200/60 text-purple-800">
-                                  In Transit
+                                  {isCompleted ? (currentStatusIdx === 5 ? 'Delivered' : 'In Transit') : 'Pre-Dispatched / AWB Assigned'}
                                 </span>
                               </div>
 
@@ -863,7 +959,7 @@ export default function TrackOrderPage() {
 
                           {historyRecord?.notes && (
                             <p className="text-xs text-amber-800 bg-amber-50/80 px-2.5 py-1 rounded-lg border border-amber-200/60 mt-1.5 inline-block">
-                              📝 {historyRecord.notes}
+                              📝 {historyRecord.notes.replace(/\[SSF_TRACKING:[\s\S]*?\]/g, '').trim()}
                             </p>
                           )}
                         </div>

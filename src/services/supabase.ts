@@ -387,17 +387,36 @@ export function normalizeOrderTracking(rawOrder: DbOrder): DbOrder {
     }
   }
 
+  // Fallback extraction from order status history if not in top level or notes
+  if (!extractedTrackingId && Array.isArray(extractedHistory)) {
+    const itemWithTracking = [...extractedHistory].reverse().find((h) => h && h.tracking_id);
+    if (itemWithTracking) {
+      extractedTrackingId = itemWithTracking.tracking_id || '';
+      if (!extractedCourier && itemWithTracking.courier_name) {
+        extractedCourier = itemWithTracking.courier_name;
+      }
+      if (!extractedUrl && itemWithTracking.tracking_url) {
+        extractedUrl = itemWithTracking.tracking_url;
+      }
+    }
+  }
+
   // Auto-generate standard tracking URL if courier is specified
   if (extractedTrackingId && !extractedUrl) {
     const trk = extractedTrackingId.trim();
-    if (extractedCourier.toLowerCase().includes('delhivery')) {
+    const cName = (extractedCourier || '').toLowerCase();
+    if (cName.includes('delhivery')) {
       extractedUrl = `https://www.delhivery.com/track/package/${trk}`;
-    } else if (extractedCourier.toLowerCase().includes('dtdc')) {
+    } else if (cName.includes('dtdc')) {
       extractedUrl = `https://www.dtdc.in/tracking.asp?strCnno=${trk}`;
-    } else if (extractedCourier.toLowerCase().includes('bluedart')) {
+    } else if (cName.includes('bluedart')) {
       extractedUrl = `https://www.bluedart.com/tracking?numbers=${trk}`;
-    } else if (extractedCourier.toLowerCase().includes('indiapost') || extractedCourier.toLowerCase().includes('speed post')) {
+    } else if (cName.includes('indiapost') || cName.includes('speed post')) {
       extractedUrl = `https://www.indiapost.gov.in/_layouts/15/dpt.cept.tracking/trackconsignment.aspx`;
+    } else if (cName.includes('shadowfax')) {
+      extractedUrl = `https://tracker.shadowfax.in/#/track/${trk}`;
+    } else if (cName.includes('professional')) {
+      extractedUrl = `https://www.tpcindia.com/`;
     }
   }
 
@@ -563,9 +582,10 @@ export const orderService = {
         }
         const { data, error } = await query.maybeSingle();
         if (!error && data) {
-          const normalized = normalizeOrderTracking(data as DbOrder);
+          let normalized = normalizeOrderTracking(data as DbOrder);
 
-          // Update local storage store so local cache reflects the latest cloud truth
+          // Update local storage store so local cache reflects the latest cloud truth,
+          // while defensively preserving tracking details if local store has newer tracking
           try {
             if (typeof window !== 'undefined') {
               const stored = localStorage.getItem('ssf-orders');
@@ -576,6 +596,15 @@ export const orderService = {
                     (o: DbOrder) => o.order_number.trim().toUpperCase() === cleanNum
                   );
                   if (existingIdx >= 0) {
+                    const localOrder = parsed.state.orders[existingIdx];
+                    if (!normalized.tracking_id && localOrder?.tracking_id) {
+                      normalized = {
+                        ...normalized,
+                        tracking_id: localOrder.tracking_id,
+                        courier_name: normalized.courier_name || localOrder.courier_name,
+                        tracking_url: normalized.tracking_url || localOrder.tracking_url,
+                      };
+                    }
                     parsed.state.orders[existingIdx] = normalized;
                   } else {
                     parsed.state.orders.unshift(normalized);

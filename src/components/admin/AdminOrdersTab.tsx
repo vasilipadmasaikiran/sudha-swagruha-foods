@@ -326,7 +326,7 @@ export default function AdminOrdersTab({ initialSubFilter }: { initialSubFilter?
       setDispatchModalOrder(order);
       setDispatchTrackingId(order.tracking_id || '');
       setDispatchCourier(order.courier_name || 'Delhivery');
-      setDispatchNotes(order.notes || '');
+      setDispatchNotes((order.notes || '').replace(/\[SSF_TRACKING:[\s\S]*?\]/g, '').trim());
       return;
     }
 
@@ -434,8 +434,15 @@ export default function AdminOrdersTab({ initialSubFilter }: { initialSubFilter?
 
     setIsSavingDispatch(true);
     try {
+      const isAlreadyShippedOrDelivered =
+        dispatchModalOrder.order_status === 'shipped' ||
+        dispatchModalOrder.order_status === 'delivered';
+      const targetStatus = isAlreadyShippedOrDelivered
+        ? dispatchModalOrder.order_status
+        : 'shipped';
+
       const updated = await updateOrderDetails(dispatchModalOrder.id, {
-        order_status: 'shipped',
+        order_status: targetStatus,
         tracking_id: dispatchTrackingId.trim().toUpperCase(),
         courier_name: dispatchCourier,
         notes: dispatchNotes.trim(),
@@ -458,7 +465,7 @@ export default function AdminOrdersTab({ initialSubFilter }: { initialSubFilter?
       }
 
       toast.success(
-        `Order ${dispatchModalOrder.order_number} Dispatched! Tracking ID: ${dispatchTrackingId.toUpperCase()}`
+        `Order ${dispatchModalOrder.order_number} Tracking Updated! AWB: ${dispatchTrackingId.trim().toUpperCase()}`
       );
 
       if (selectedOrder && selectedOrder.order_number === dispatchModalOrder.order_number) {
@@ -1315,22 +1322,39 @@ export default function AdminOrdersTab({ initialSubFilter }: { initialSubFilter?
                             <ChevronDown className="w-3.5 h-3.5 absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none opacity-70" />
                           </div>
 
-                          {/* Tracking ID Badge */}
+                          {/* Tracking ID Badge & Quick Editor */}
                           {o.tracking_id ? (
-                            <div className="flex items-center gap-1.5 text-[11px] text-purple-300 bg-purple-950/60 border border-purple-500/30 px-2 py-0.5 rounded-lg font-mono">
-                              <Truck className="w-3 h-3 text-purple-400" />
-                              <span>{o.tracking_id}</span>
-                            </div>
-                          ) : o.order_status === 'shipped' ? (
                             <button
+                              type="button"
+                              onClick={() => {
+                                setDispatchModalOrder(o);
+                                setDispatchTrackingId(o.tracking_id || '');
+                                setDispatchCourier(o.courier_name || 'Delhivery');
+                                setDispatchNotes((o.notes || '').replace(/\[SSF_TRACKING:[\s\S]*?\]/g, '').trim());
+                              }}
+                              className="flex items-center gap-1.5 text-[11px] text-purple-200 bg-purple-950/80 hover:bg-purple-900 border border-purple-500/40 px-2.5 py-1 rounded-lg font-mono transition group cursor-pointer text-left"
+                              title="Click to edit Tracking ID / Courier Partner"
+                            >
+                              <Truck className="w-3.5 h-3.5 text-purple-400 group-hover:scale-110 transition-transform" />
+                              <span className="font-bold">{o.tracking_id}</span>
+                              {o.courier_name && (
+                                <span className="text-[10px] text-purple-300 font-sans font-medium">({o.courier_name})</span>
+                              )}
+                            </button>
+                          ) : o.order_status !== 'cancelled' ? (
+                            <button
+                              type="button"
                               onClick={() => {
                                 setDispatchModalOrder(o);
                                 setDispatchTrackingId('');
-                                setDispatchCourier('Delhivery');
+                                setDispatchCourier(o.courier_name || 'Delhivery');
+                                setDispatchNotes((o.notes || '').replace(/\[SSF_TRACKING:[\s\S]*?\]/g, '').trim());
                               }}
-                              className="text-[10px] text-purple-400 hover:text-purple-300 underline font-semibold cursor-pointer block"
+                              className="text-[11px] text-purple-400 hover:text-purple-300 hover:bg-purple-950/40 px-2 py-1 rounded-lg border border-dashed border-purple-500/30 font-semibold cursor-pointer flex items-center gap-1 transition"
+                              title="Assign Tracking ID / Courier Partner"
                             >
-                              + Add Tracking ID
+                              <Truck className="w-3 h-3" />
+                              <span>+ Add Tracking</span>
                             </button>
                           ) : null}
                         </td>
@@ -1435,7 +1459,9 @@ export default function AdminOrdersTab({ initialSubFilter }: { initialSubFilter?
                     <Truck className="w-4 h-4" />
                   </div>
                   <div>
-                    <h3 className="font-bold text-white text-base">Dispatch Order</h3>
+                    <h3 className="font-bold text-white text-base">
+                      {dispatchModalOrder.tracking_id ? 'Update Tracking Details' : 'Dispatch Order & Assign Tracking'}
+                    </h3>
                     <p className="text-xs text-purple-300 font-mono">
                       {dispatchModalOrder.order_number}
                     </p>
@@ -1511,7 +1537,7 @@ export default function AdminOrdersTab({ initialSubFilter }: { initialSubFilter?
                     className="flex-1 py-3 bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold rounded-xl transition-colors shadow-lg shadow-purple-600/30 flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60"
                   >
                     <Send className="w-3.5 h-3.5" />
-                    <span>{isSavingDispatch ? 'Dispatching...' : 'Save & Dispatch'}</span>
+                    <span>{isSavingDispatch ? 'Saving...' : (dispatchModalOrder?.tracking_id ? 'Update Tracking Details' : 'Save & Dispatch')}</span>
                   </button>
                 </div>
               </form>
@@ -1737,26 +1763,54 @@ export default function AdminOrdersTab({ initialSubFilter }: { initialSubFilter?
                 </div>
               )}
 
-              {/* Tracking Information Box */}
-              {selectedOrder.tracking_id && (
-                <div className="p-4 bg-purple-950/40 rounded-2xl border border-purple-500/30 flex items-center justify-between">
+              {/* Tracking & Logistics Information Box */}
+              {selectedOrder.order_status !== 'cancelled' && (
+                <div className="p-4 bg-purple-950/40 rounded-2xl border border-purple-500/30 flex flex-wrap items-center justify-between gap-3">
                   <div>
-                    <p className="text-xs text-purple-300 font-bold uppercase">Courier Tracking</p>
-                    <p className="text-sm font-mono font-bold text-purple-100 mt-0.5">
-                      {selectedOrder.tracking_id} ({selectedOrder.courier_name || 'Courier'})
+                    <p className="text-xs text-purple-300 font-bold uppercase flex items-center gap-1.5">
+                      <Truck className="w-3.5 h-3.5 text-purple-400" />
+                      <span>Courier Logistics & Tracking</span>
                     </p>
+                    {selectedOrder.tracking_id ? (
+                      <div className="flex items-center gap-2 mt-1">
+                        <span className="text-base font-mono font-extrabold text-white">
+                          {selectedOrder.tracking_id}
+                        </span>
+                        <span className="text-xs px-2 py-0.5 rounded-md bg-purple-800/60 text-purple-200 font-semibold">
+                          {selectedOrder.courier_name || 'Courier Partner'}
+                        </span>
+                      </div>
+                    ) : (
+                      <p className="text-xs text-slate-400 mt-1 italic">
+                        No tracking ID assigned yet
+                      </p>
+                    )}
                   </div>
-                  {selectedOrder.tracking_url && (
-                    <a
-                      href={selectedOrder.tracking_url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="px-3 py-1.5 bg-purple-700 hover:bg-purple-600 text-white rounded-xl text-xs font-semibold flex items-center gap-1"
+                  <div className="flex items-center gap-2">
+                    {selectedOrder.tracking_url && (
+                      <a
+                        href={selectedOrder.tracking_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="px-3 py-1.5 bg-purple-700 hover:bg-purple-600 text-white rounded-xl text-xs font-semibold flex items-center gap-1 transition"
+                      >
+                        <span>Track Portal</span>
+                        <ExternalLink className="w-3 h-3" />
+                      </a>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDispatchModalOrder(selectedOrder);
+                        setDispatchTrackingId(selectedOrder.tracking_id || '');
+                        setDispatchCourier(selectedOrder.courier_name || 'Delhivery');
+                        setDispatchNotes((selectedOrder.notes || '').replace(/\[SSF_TRACKING:[\s\S]*?\]/g, '').trim());
+                      }}
+                      className="px-3 py-1.5 bg-purple-500/20 hover:bg-purple-500/30 text-purple-200 border border-purple-500/40 rounded-xl text-xs font-bold transition cursor-pointer"
                     >
-                      <span>Track</span>
-                      <ExternalLink className="w-3 h-3" />
-                    </a>
-                  )}
+                      {selectedOrder.tracking_id ? 'Update Tracking' : 'Assign Tracking ID'}
+                    </button>
+                  </div>
                 </div>
               )}
 
