@@ -11,6 +11,7 @@
 import type { DbOrder, CustomerCancellationRequest } from '@/services/supabase';
 import type { SmtpSettings, StoreSettings } from '@/hooks/useSettingsStore';
 import { supabase } from '@/services/supabase';
+import { calculateOrderFinancials } from './orderCalculationService';
 
 export interface EmailSendResult {
   success: boolean;
@@ -467,7 +468,7 @@ export function generateStatusUpdateHtml(
  */
 export function generateItemRemovedHtml(
   order: DbOrder,
-  item: { product_name_en: string; quantity: number; weight: string; total_price: number },
+  item: { product_name_en: string; quantity: number; weight: string; total_price: number; allocated_discount?: number; refundable_amount?: number },
   refundAmount: number,
   reason: string,
   settings: (Partial<StoreSettings> & { businessName?: string; businessPhone?: string; businessAddress?: string }) | null = {}
@@ -475,6 +476,16 @@ export function generateItemRemovedHtml(
   const brand = settings?.businessName || 'Sudha Swagruha Foods';
   const origin = typeof window !== 'undefined' ? window.location.origin : 'https://sudhaswagruhafoods.com';
   const trackingUrl = `${origin}/track-order?order=${encodeURIComponent(order.order_number)}`;
+
+  // Calculate authoritative order financials
+  const fin = calculateOrderFinancials(order);
+  const itemGross = Number(item.total_price || 0);
+  const allocatedDiscount = item.allocated_discount !== undefined
+    ? Number(item.allocated_discount)
+    : fin.cancelledAllocatedDiscount;
+  const refundableItemAmount = refundAmount > 0
+    ? refundAmount
+    : Math.max(0, itemGross - allocatedDiscount);
 
   return `
 <!DOCTYPE html>
@@ -484,53 +495,102 @@ export function generateItemRemovedHtml(
   <div style="max-width: 600px; margin: 0 auto; background: #ffffff; border-radius: 16px; overflow: hidden; border: 1px solid #e2e8f0;">
     <div style="background: linear-gradient(135deg, #b45309 0%, #d97706 100%); padding: 28px; text-align: center; color: #fff;">
       <h2 style="margin: 0;">🌿 ${brand}</h2>
-      <p style="margin: 6px 0 0 0; opacity: 0.95; font-size: 14px;">Update Regarding Order #${order.order_number}</p>
+      <p style="margin: 6px 0 0 0; opacity: 0.95; font-size: 14px;">Cancellation & Refund Update: Order #${order.order_number}</p>
     </div>
     <div style="padding: 24px;">
       <p style="font-size: 15px;">Namaskaram <strong>${order.customer_name}</strong>,</p>
       <p style="font-size: 14px; line-height: 1.6; color: #475569;">
-        We are writing to inform you of an update regarding your order <strong>#${order.order_number}</strong>.
-        Due to kitchen preparation availability, the following item has been removed from your consignment:
+        We are writing to inform you that an item in your order <strong>#${order.order_number}</strong> has been cancelled.
       </p>
 
+      <!-- Cancelled Item Card (Requirement 7.1) -->
       <div style="background: #fffbeb; border: 1px solid #fde68a; border-radius: 12px; padding: 16px; margin: 16px 0;">
-        <table style="width: 100%; font-size: 13px;">
+        <h4 style="margin: 0 0 10px 0; font-size: 13px; color: #92400e; text-transform: uppercase; letter-spacing: 0.5px;">Cancelled Item Details</h4>
+        <table style="width: 100%; font-size: 13px; border-collapse: collapse;">
           <tr>
-            <td style="color: #92400e;"><strong>Removed Item:</strong></td>
-            <td style="text-align: right; font-weight: bold; color: #78350f;">${item.product_name_en} (${item.weight}) x ${item.quantity}</td>
+            <td style="color: #92400e; padding: 4px 0;"><strong>Product:</strong></td>
+            <td style="text-align: right; font-weight: bold; color: #78350f; padding: 4px 0;">${item.product_name_en} (${item.weight}) × ${item.quantity}</td>
           </tr>
           <tr>
-            <td style="color: #92400e; padding-top: 6px;"><strong>Reason:</strong></td>
-            <td style="text-align: right; color: #78350f; padding-top: 6px;">${reason}</td>
+            <td style="color: #92400e; padding: 4px 0;"><strong>Original Price:</strong></td>
+            <td style="text-align: right; color: #78350f; padding: 4px 0;">₹${itemGross}</td>
+          </tr>
+          ${allocatedDiscount > 0 ? `
+          <tr>
+            <td style="color: #047857; padding: 4px 0;"><strong>Allocated Coupon Discount:</strong></td>
+            <td style="text-align: right; color: #047857; padding: 4px 0;">-₹${allocatedDiscount}</td>
+          </tr>
+          ` : ''}
+          <tr style="border-top: 1px dashed #fde68a;">
+            <td style="color: #92400e; padding: 6px 0 4px 0;"><strong>Refundable Item Amount:</strong></td>
+            <td style="text-align: right; font-weight: bold; color: #047857; font-size: 14px; padding: 6px 0 4px 0;">₹${refundableItemAmount}</td>
           </tr>
           <tr>
-            <td style="color: #92400e; padding-top: 6px;"><strong>Refund Amount:</strong></td>
-            <td style="text-align: right; font-weight: bold; color: #047857; padding-top: 6px; font-size: 15px;">₹${refundAmount}</td>
+            <td style="color: #92400e; padding: 4px 0;"><strong>Cancellation Reason:</strong></td>
+            <td style="text-align: right; color: #78350f; padding: 4px 0;">${reason}</td>
+          </tr>
+        </table>
+      </div>
+
+      <!-- Financial Reconciliation Summary (Requirements 7.1 & 7.2) -->
+      <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 16px; margin: 16px 0;">
+        <h4 style="margin: 0 0 10px 0; font-size: 13px; color: #1e293b; text-transform: uppercase; letter-spacing: 0.5px;">Updated Order Financial Summary</h4>
+        <table style="width: 100%; font-size: 13px; border-collapse: collapse;">
+          <tr>
+            <td style="color: #64748b; padding: 4px 0;">Original Order Total:</td>
+            <td style="text-align: right; font-weight: bold; color: #334155; padding: 4px 0;">₹${fin.originalOrderTotal}</td>
           </tr>
           <tr>
-            <td style="color: #92400e; padding-top: 6px;"><strong>Refund Status:</strong></td>
-            <td style="text-align: right; font-weight: bold; color: #0284c7; padding-top: 6px; text-transform: uppercase;">Processing</td>
+            <td style="color: #dc2626; padding: 4px 0;">Cancelled Item Value:</td>
+            <td style="text-align: right; font-weight: bold; color: #dc2626; padding: 4px 0;">-₹${fin.cancelledGrossAmount || itemGross}</td>
+          </tr>
+          ${allocatedDiscount > 0 ? `
+          <tr>
+            <td style="color: #047857; padding: 4px 0;">Discount Adjustment:</td>
+            <td style="text-align: right; font-weight: bold; color: #047857; padding: 4px 0;">+₹${allocatedDiscount}</td>
+          </tr>
+          ` : ''}
+          <tr style="border-top: 1px solid #cbd5e1;">
+            <td style="color: #1e293b; font-weight: bold; padding: 6px 0 4px 0;">Adjusted Order Total:</td>
+            <td style="text-align: right; font-weight: bold; color: #047857; font-size: 14px; padding: 6px 0 4px 0;">₹${fin.finalOrderTotal}</td>
+          </tr>
+          <tr>
+            <td style="color: #64748b; padding: 4px 0;">Amount Already Paid:</td>
+            <td style="text-align: right; color: #334155; padding: 4px 0;">₹${fin.totalAmountReceived}</td>
+          </tr>
+          <tr style="border-top: 1px dashed #cbd5e1;">
+            <td style="color: #047857; font-weight: bold; padding: 6px 0 4px 0;">Refund Due / Processing:</td>
+            <td style="text-align: right; font-weight: bold; color: #047857; font-size: 15px; padding: 6px 0 4px 0;">₹${refundableItemAmount}</td>
+          </tr>
+          ${fin.balanceAmount > 0 ? `
+          <tr>
+            <td style="color: #d97706; padding: 4px 0;">Remaining Balance Due:</td>
+            <td style="text-align: right; color: #d97706; font-weight: bold; padding: 4px 0;">₹${fin.balanceAmount}</td>
+          </tr>
+          ` : ''}
+          <tr>
+            <td style="color: #64748b; padding: 4px 0;">Payment Status:</td>
+            <td style="text-align: right; font-weight: bold; text-transform: uppercase; color: #334155; padding: 4px 0;">${fin.paymentStatus.replace('_', ' ')}</td>
           </tr>
         </table>
       </div>
 
       <p style="font-size: 13px; color: #475569; line-height: 1.5;">
         The remaining items in your order are being prepared with care and will be dispatched on schedule.
-        You can inspect your live order timeline and refund status directly:
+        You can inspect your live order timeline and refund status directly at any time:
       </p>
 
       <div style="text-align: center; margin: 24px 0;">
         <a href="${trackingUrl}" style="background: #047857; color: #fff; padding: 12px 28px; text-decoration: none; border-radius: 10px; font-weight: bold; font-size: 14px; display: inline-block;">
-          Track Order & Refund
+          Track Live Order & Refund
         </a>
       </div>
 
       <p style="font-size: 12px; color: #94a3b8; text-align: center;">
-        Have questions? Reply to this email or chat with our team on WhatsApp.
+        Have questions? Reply directly to this email or chat with our store team on WhatsApp.
       </p>
     </div>
     ${renderEmailBusinessFooter(settings)}
-  </div>
 </body>
 </html>
   `;

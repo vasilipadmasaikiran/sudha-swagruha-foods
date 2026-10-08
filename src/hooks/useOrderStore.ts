@@ -1130,11 +1130,23 @@ export const useOrderStore = create<OrderStore>()(
         const unitPrice = Number(targetItem.unit_price || (targetItem.total_price / targetItem.quantity));
         const cancelledLineValue = roundToTwoDecimals(unitPrice * requestedCancelQty);
 
+        // Proportional discount allocation (Requirements 1.1 - 1.7)
+        const orderOriginalSubtotal = (order.items || []).reduce(
+          (sum, it) => sum + Number(it.unit_price || 0) * Number(it.quantity || 1),
+          0
+        );
+        const orderTotalDiscount = Number(order.coupon_discount || order.discount || order.order_discount || 0);
+        const itemDiscountRate = orderOriginalSubtotal > 0 && orderTotalDiscount > 0
+          ? orderTotalDiscount / orderOriginalSubtotal
+          : 0;
+        const allocatedItemDiscount = roundToTwoDecimals(cancelledLineValue * itemDiscountRate);
+        const netRefundableCancelledAmount = Math.max(0, roundToTwoDecimals(cancelledLineValue - allocatedItemDiscount));
+
         // Calculate item refundable amount
         const customAmt = options?.customRefundAmount !== undefined ? Number(options.customRefundAmount) : undefined;
         const maxRefundableForThis = customAmt !== undefined && !isNaN(customAmt)
           ? customAmt
-          : cancelledLineValue;
+          : netRefundableCancelledAmount;
         const itemRefundAmount = Math.min(roundToTwoDecimals(maxRefundableForThis), metrics.remainingRefundableAmount);
 
         let refundRecord: OrderRefundRecord | undefined;
@@ -1179,7 +1191,8 @@ export const useOrderStore = create<OrderStore>()(
             removed_by: removedBy,
             removed_at: now,
             customization: options?.customizationNotes || targetItem.customization,
-            refundable_amount: cancelledLineValue,
+            refundable_amount: netRefundableCancelledAmount,
+            allocated_discount: allocatedItemDiscount,
             refund_amount: refundRecord?.amount || 0,
             refund_id: refundRecord?.id,
           };
@@ -1200,7 +1213,8 @@ export const useOrderStore = create<OrderStore>()(
                 removed_by: removedBy,
                 removed_at: now,
                 customization: options?.customizationNotes || it.customization,
-                refundable_amount: cancelledLineValue,
+                refundable_amount: netRefundableCancelledAmount,
+                allocated_discount: allocatedItemDiscount,
                 refund_amount: refundRecord?.amount || 0,
                 refund_id: refundRecord?.id,
               };

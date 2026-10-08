@@ -54,9 +54,14 @@ export interface OrderFinancialSummary {
   totalDiscount: number; // productDiscount + orderDiscount
   
   // Cancellations & Returns
-  cancelledAmount: number; // Value of cancelled / removed items
+  cancelledAmount: number; // Value of cancelled / removed items (gross)
+  cancelledGrossAmount: number; // Gross value of cancelled items
+  cancelledAllocatedDiscount: number; // Proportional discount attributable to cancelled items
+  refundableCancelledAmount: number; // Net customer amount refundable for cancelled items
+  adjustedProductTotal: number; // Gross items remaining (originalSubtotal - cancelledGrossAmount)
+  adjustedDiscount: number; // Active coupon/order discount remaining on uncancelled items
   returnedAmount: number; // Value of returned items
-  adjustedSubtotal: number; // Max(0, originalSubtotal - totalDiscount - cancelledAmount)
+  adjustedSubtotal: number; // Authoritative payable product subtotal
   taxableAmount: number; // Base taxable amount (adjustedSubtotal)
   
   // Taxes / GST
@@ -149,6 +154,11 @@ export function calculateOrderFinancials(inputsOrOrder: any): OrderFinancialSumm
       orderDiscount: 0,
       couponDiscount: 0,
       totalDiscount: 0,
+      cancelledGrossAmount: 0,
+      cancelledAllocatedDiscount: 0,
+      refundableCancelledAmount: 0,
+      adjustedProductTotal: 0,
+      adjustedDiscount: 0,
       cancelledAmount: 0,
       returnedAmount: 0,
       adjustedSubtotal: 0,
@@ -184,9 +194,9 @@ export function calculateOrderFinancials(inputsOrOrder: any): OrderFinancialSumm
   
   // 1. Calculate Gross Subtotal, Cancelled Items & Item Discounts
   let grossSubtotal = 0;
-  let activeSubtotal = 0;
   let cancelledItemsVal = 0;
   let itemDiscountVal = 0;
+  let cancelledItemDiscountVal = 0;
 
   for (const it of items) {
     const unitPrice = roundToTwo(Number(it.unit_price || 0));
@@ -196,50 +206,85 @@ export function calculateOrderFinancials(inputsOrOrder: any): OrderFinancialSumm
     grossSubtotal += lineTotal;
     
     const isCancelled = it.status === 'removed' || it.status === 'cancelled';
+    const cancelledQty = Math.max(0, Number(it.cancelled_quantity || 0));
+
     if (isCancelled) {
       cancelledItemsVal += lineTotal;
-    } else if (it.cancelled_quantity && it.cancelled_quantity > 0) {
-      const cancelledPart = roundToTwo(unitPrice * it.cancelled_quantity);
+      if (it.discount_amount || it.item_discount) {
+        cancelledItemDiscountVal += roundToTwo(Number(it.discount_amount || it.item_discount || 0));
+      }
+    } else if (cancelledQty > 0) {
+      const cancelledPart = roundToTwo(unitPrice * cancelledQty);
       cancelledItemsVal += cancelledPart;
-      activeSubtotal += Math.max(0, lineTotal - cancelledPart);
-      itemDiscountVal += roundToTwo(Number(it.item_discount || 0));
+      if (it.discount_amount || it.item_discount) {
+        const itemDisc = Number(it.discount_amount || it.item_discount || 0);
+        const proportionalDisc = qty > 0 ? roundToTwo((itemDisc / qty) * cancelledQty) : 0;
+        cancelledItemDiscountVal += proportionalDisc;
+        itemDiscountVal += roundToTwo(itemDisc - proportionalDisc);
+      }
     } else {
-      activeSubtotal += lineTotal;
-      itemDiscountVal += roundToTwo(Number(it.item_discount || 0));
+      if (it.discount_amount || it.item_discount) {
+        itemDiscountVal += roundToTwo(Number(it.discount_amount || it.item_discount || 0));
+      }
     }
   }
 
   // Fallback if order has top-level subtotal but no items array populated
   if (items.length === 0 && inputsOrOrder.subtotal !== undefined) {
     grossSubtotal = roundToTwo(Number(inputsOrOrder.subtotal));
-    activeSubtotal = grossSubtotal;
   }
 
   const originalSubtotal = roundToTwo(grossSubtotal);
-  const cancelledAmount = roundToTwo(cancelledItemsVal);
+  const cancelledGrossAmount = roundToTwo(cancelledItemsVal);
   const productDiscount = roundToTwo(itemDiscountVal);
-  const subtotalAfterItemDiscount = Math.max(0, roundToTwo(originalSubtotal - productDiscount - cancelledAmount));
 
-  // 2. Order / Coupon Discount
-  let couponDiscountVal = 0;
+  // 2. Order / Coupon Discount (Original Order Level)
+  let originalOrderDiscount = 0;
   if (inputsOrOrder.fixedCouponDiscount && inputsOrOrder.fixedCouponDiscount > 0) {
-    couponDiscountVal = roundToTwo(inputsOrOrder.fixedCouponDiscount);
+    originalOrderDiscount = roundToTwo(inputsOrOrder.fixedCouponDiscount);
   } else if (inputsOrOrder.couponDiscountPercent && inputsOrOrder.couponDiscountPercent > 0) {
-    couponDiscountVal = roundToTwo((subtotalAfterItemDiscount * inputsOrOrder.couponDiscountPercent) / 100);
+    originalOrderDiscount = roundToTwo((originalSubtotal * inputsOrOrder.couponDiscountPercent) / 100);
   } else if (inputsOrOrder.coupon_discount !== undefined) {
-    couponDiscountVal = roundToTwo(Number(inputsOrOrder.coupon_discount));
+    originalOrderDiscount = roundToTwo(Number(inputsOrOrder.coupon_discount));
   } else if (inputsOrOrder.discount !== undefined) {
-    couponDiscountVal = roundToTwo(Number(inputsOrOrder.discount));
+    originalOrderDiscount = roundToTwo(Number(inputsOrOrder.discount));
   } else if (inputsOrOrder.order_discount !== undefined) {
-    couponDiscountVal = roundToTwo(Number(inputsOrOrder.order_discount));
+    originalOrderDiscount = roundToTwo(Number(inputsOrOrder.order_discount));
   }
-  
-  // Cap coupon discount so it never exceeds subtotal
-  const orderDiscount = Math.min(couponDiscountVal, subtotalAfterItemDiscount);
-  const totalDiscount = roundToTwo(productDiscount + orderDiscount);
 
-  // 3. Adjusted Subtotal
-  const adjustedSubtotal = Math.max(0, roundToTwo(originalSubtotal - totalDiscount - cancelledAmount));
+  // 3. Proportional Discount Allocation on Cancelled Items (Requirements 1.1 - 1.7)
+  let cancelledAllocatedDiscount = 0;
+  const isOrderCancelled = inputsOrOrder.order_status === 'cancelled';
+
+  if (isOrderCancelled) {
+    cancelledAllocatedDiscount = originalOrderDiscount;
+  } else if (originalSubtotal > 0 && originalOrderDiscount > 0 && cancelledGrossAmount > 0) {
+    // Proportional order-level discount attributable to cancelled items
+    const effectiveDiscountRate = originalOrderDiscount / originalSubtotal;
+    const allocatedOrderDiscount = roundToTwo(cancelledGrossAmount * effectiveDiscountRate);
+    cancelledAllocatedDiscount = Math.min(originalOrderDiscount, roundToTwo(allocatedOrderDiscount + cancelledItemDiscountVal));
+  } else if (cancelledItemDiscountVal > 0) {
+    cancelledAllocatedDiscount = roundToTwo(cancelledItemDiscountVal);
+  }
+
+  // Net customer amount refundable for cancelled items
+  const refundableCancelledAmount = Math.max(0, roundToTwo(cancelledGrossAmount - cancelledAllocatedDiscount));
+
+  // Adjusted active discount remaining on uncancelled items
+  const adjustedDiscount = Math.max(0, roundToTwo(originalOrderDiscount - cancelledAllocatedDiscount));
+
+  // Adjusted product gross remaining
+  const adjustedProductTotal = Math.max(0, roundToTwo(originalSubtotal - cancelledGrossAmount));
+
+  // Adjusted Subtotal (Authoritative payable product subtotal)
+  const adjustedSubtotal = isOrderCancelled
+    ? 0
+    : Math.max(0, roundToTwo(adjustedProductTotal - adjustedDiscount - productDiscount));
+
+  const cancelledAmount = cancelledGrossAmount;
+  const subtotalAfterItemDiscount = Math.max(0, roundToTwo(originalSubtotal - productDiscount));
+  const orderDiscount = adjustedDiscount;
+  const totalDiscount = roundToTwo(productDiscount + orderDiscount);
   const taxableAmount = adjustedSubtotal;
 
   // 4. GST Tax Calculation
@@ -340,8 +385,6 @@ export function calculateOrderFinancials(inputsOrOrder: any): OrderFinancialSumm
 
   // 10. Canonical Payment Status
   let canonicalPaymentStatus: 'unpaid' | 'partially_paid' | 'paid' | 'excess_payment' | 'refunded' | 'partially_refunded';
-  
-  const isOrderCancelled = inputsOrOrder.order_status === 'cancelled';
 
   if (isOrderCancelled) {
     if (refundedAmount >= totalAmountReceived && totalAmountReceived > 0) {
@@ -417,10 +460,26 @@ export function calculateOrderFinancials(inputsOrOrder: any): OrderFinancialSumm
   if (cancelledAmount > 0) {
     breakdown.push({
       step: '4',
-      label: 'Cancelled / Removed Items',
+      label: 'Cancelled Items (Gross)',
       amount: cancelledAmount,
       operation: 'subtract',
-      description: 'Deduction for items cancelled before dispatch',
+      description: 'Sum of list prices for cancelled items',
+    });
+    if (cancelledAllocatedDiscount > 0) {
+      breakdown.push({
+        step: '4b',
+        label: 'Discount Adjustment on Cancelled Items',
+        amount: cancelledAllocatedDiscount,
+        operation: 'add',
+        description: 'Reversal of discount proportionally attributed to cancelled items',
+      });
+    }
+    breakdown.push({
+      step: '4c',
+      label: 'Net Customer Deduction for Cancelled Items',
+      amount: refundableCancelledAmount,
+      operation: 'info',
+      description: `Actual customer payable amount removed (₹${cancelledAmount} - ₹${cancelledAllocatedDiscount})`,
     });
   }
 
@@ -519,6 +578,11 @@ export function calculateOrderFinancials(inputsOrOrder: any): OrderFinancialSumm
     couponDiscount: orderDiscount,
     totalDiscount,
     cancelledAmount,
+    cancelledGrossAmount,
+    cancelledAllocatedDiscount,
+    refundableCancelledAmount,
+    adjustedProductTotal,
+    adjustedDiscount,
     returnedAmount: 0,
     adjustedSubtotal,
     taxableAmount,

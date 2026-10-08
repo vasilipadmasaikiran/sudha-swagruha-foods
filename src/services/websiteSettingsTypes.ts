@@ -98,6 +98,14 @@ export interface CustomerAuthSettings {
   maxOtpRetries: number; // e.g. 3
   rateLimitMaxRequestsPer15Min: number; // e.g. 5
   forceLoginToBrowse: boolean;
+  // Section 4 Dedicated Configuration
+  otpProvider?: 'fast2sms' | 'twilio' | 'custom' | 'mock';
+  otpLength?: 4 | 6;
+  smsTemplate?: string;
+  googleClientId?: string;
+  googleClientSecret?: string;
+  googleRedirectUrl?: string;
+  googleAllowedDomains?: string;
 }
 
 export const defaultCustomerAuthSettings: CustomerAuthSettings = {
@@ -110,6 +118,13 @@ export const defaultCustomerAuthSettings: CustomerAuthSettings = {
   maxOtpRetries: 3,
   rateLimitMaxRequestsPer15Min: 5,
   forceLoginToBrowse: false,
+  otpProvider: 'fast2sms',
+  otpLength: 6,
+  smsTemplate: 'Your Sudha Swagruha Foods verification code is {#var#}. Valid for 5 minutes. Do not share this OTP.',
+  googleClientId: '',
+  googleClientSecret: '',
+  googleRedirectUrl: '/auth/google/callback',
+  googleAllowedDomains: '',
 };
 
 export interface PolicyContent {

@@ -7,6 +7,7 @@ import type { DbOrder, OrderRefundRecord, OrderItem } from '@/services/supabase'
 import type { StoreSettings } from '@/hooks/useSettingsStore';
 import { supabase, isSupabaseConfigured } from '@/services/supabase';
 import { logAdminAction } from '@/services/auditLogger';
+import { calculateOrderFinancials } from './orderCalculationService';
 
 export interface RefundCalculation {
   originalPaidAmount: number;
@@ -38,25 +39,32 @@ export function roundToTwoDecimals(num: number): number {
  * Calculates current refundable amounts for an order
  */
 export function calculateOrderRefundableMetrics(order: DbOrder): RefundCalculation {
-  const isPaid = order.payment_status === 'paid' || order.payment_status === 'partially_refunded';
-  const originalPaidAmount = isPaid ? roundToTwoDecimals(Number(order.total || 0)) : 0;
-  const totalAlreadyRefunded = roundToTwoDecimals(Number(order.refunded_amount || 0));
-  const remainingRefundableAmount = Math.max(0, roundToTwoDecimals(originalPaidAmount - totalAlreadyRefunded));
+  if (!order) {
+    return {
+      originalPaidAmount: 0,
+      totalAlreadyRefunded: 0,
+      remainingRefundableAmount: 0,
+      remainingOrderValue: 0,
+      isRefundable: false,
+      isPaid: false,
+      paidAmount: 0,
+      alreadyRefunded: 0,
+      refundableAmount: 0,
+    };
+  }
 
-  // Active items sum
-  const activeItemsSum = (order.items || [])
-    .filter((it) => it.status !== 'removed' && it.status !== 'cancelled')
-    .reduce((sum, it) => sum + Number(it.total_price || 0), 0);
-
-  const remainingOrderValue = roundToTwoDecimals(
-    activeItemsSum + Number(order.delivery_charge || 0) - Number(order.discount || 0)
-  );
+  const fin = calculateOrderFinancials(order);
+  const isPaid = fin.totalAmountReceived > 0;
+  const originalPaidAmount = fin.totalAmountReceived;
+  const totalAlreadyRefunded = fin.refundedAmount;
+  const remainingRefundableAmount = fin.remainingRefundable;
+  const remainingOrderValue = fin.finalOrderTotal;
 
   return {
     originalPaidAmount,
     totalAlreadyRefunded,
     remainingRefundableAmount,
-    remainingOrderValue: Math.max(0, remainingOrderValue),
+    remainingOrderValue,
     isRefundable: isPaid && remainingRefundableAmount > 0,
     isPaid,
     paidAmount: originalPaidAmount,

@@ -53,10 +53,10 @@ const STATUS_CONFIG: Record<
   DbOrder['order_status'],
   { label: string; bg: string; text: string; icon: any }
 > = {
-  placed: { label: 'Placed', bg: 'bg-blue-500/20', text: 'text-blue-400', icon: ShoppingBag },
+  placed: { label: 'New Orders', bg: 'bg-blue-500/20', text: 'text-blue-400', icon: ShoppingBag },
   confirmed: { label: 'Confirmed', bg: 'bg-cyan-500/20', text: 'text-cyan-400', icon: CheckCircle },
-  preparing: { label: 'Preparing', bg: 'bg-yellow-500/20', text: 'text-yellow-400', icon: ChefHat },
-  packed: { label: 'Packed', bg: 'bg-orange-500/20', text: 'text-orange-400', icon: Package },
+  preparing: { label: 'Processing', bg: 'bg-yellow-500/20', text: 'text-yellow-400', icon: ChefHat },
+  packed: { label: 'Ready to Dispatch', bg: 'bg-orange-500/20', text: 'text-orange-400', icon: Package },
   shipped: { label: 'Dispatched', bg: 'bg-purple-500/20', text: 'text-purple-400', icon: Truck },
   delivered: { label: 'Delivered', bg: 'bg-emerald-500/20', text: 'text-emerald-400', icon: Home },
   cancelled: { label: 'Cancelled', bg: 'bg-red-500/20', text: 'text-red-400', icon: AlertCircle },
@@ -163,6 +163,17 @@ export default function AdminOrdersTab({ initialSubFilter }: { initialSubFilter?
   const [refundCustomAmount, setRefundCustomAmount] = useState<string>('');
   const [refundReason, setRefundReason] = useState('Administrative compensation / partial refund');
   const [isProcessingRefund, setIsProcessingRefund] = useState(false);
+
+  // Section 5.3: Dedicated Refund Detail View Modal State
+  const [selectedRefundDetail, setSelectedRefundDetail] = useState<{
+    orderNumber: string;
+    customerName: string;
+    customerMobile: string;
+    orderId: string;
+    refund: OrderRefundRecord;
+    cancelledItems?: OrderItem[];
+    order?: DbOrder;
+  } | null>(null);
 
   // Manual / Offline Payment Recording State (Requirements 1-9)
   const [isRecordingPayment, setIsRecordingPayment] = useState(false);
@@ -608,7 +619,7 @@ export default function AdminOrdersTab({ initialSubFilter }: { initialSubFilter?
     }
   };
 
-  // Open Product & Customisation Cancellation Modal
+  // Open Product & Customisation Cancellation Modal (Section 1.1–1.7 Authoritative Discount Allocation)
   const openItemCancellationModal = (order: DbOrder, item: OrderItem) => {
     setItemCancelOrder(order);
     setItemCancelTarget(item);
@@ -616,7 +627,16 @@ export default function AdminOrdersTab({ initialSubFilter }: { initialSubFilter?
     setItemCancelReason('Product customisation / spice level cannot be prepared');
     setItemCancelCustomReason('');
     setItemCancelCustomNotes('');
-    setItemCancelRefundAmount(String(item.total_price));
+
+    // Authoritative Section 1.1-1.5: Proportional discount allocation
+    const itemGross = item.unit_price ? (item.unit_price * item.quantity) : item.total_price;
+    const orderDisc = order.discount || order.discount_amount || 0;
+    const discountRate = (order.subtotal && order.subtotal > 0 && orderDisc > 0)
+      ? (orderDisc / order.subtotal)
+      : 0;
+    const allocatedDiscount = roundToTwoDecimals(itemGross * discountRate);
+    const netRefundable = roundToTwoDecimals(Math.max(0, itemGross - allocatedDiscount));
+    setItemCancelRefundAmount(String(netRefundable));
     setItemCancelInitiateRefund(true);
   };
 
@@ -1066,16 +1086,37 @@ export default function AdminOrdersTab({ initialSubFilter }: { initialSubFilter?
                           {new Date(rf.requested_at).toLocaleString()}
                         </td>
                         <td className="px-4 py-3.5 align-middle text-right">
-                          <button
-                            onClick={() => {
-                              const found = orders.find((o) => o.id === row.orderId);
-                              if (found) setSelectedOrder(found);
-                            }}
-                            className="p-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded-lg transition-colors cursor-pointer"
-                            title="View Full Order"
-                          >
-                            <Eye className="w-3.5 h-3.5" />
-                          </button>
+                          <div className="flex items-center justify-end gap-1.5">
+                            <button
+                              onClick={() => {
+                                const found = orders.find((o) => o.id === row.orderId);
+                                setSelectedRefundDetail({
+                                  orderNumber: row.orderNumber,
+                                  customerName: row.customerName,
+                                  customerMobile: row.customerMobile,
+                                  orderId: row.orderId,
+                                  refund: row.refund,
+                                  cancelledItems: found?.cancelled_items,
+                                  order: found,
+                                });
+                              }}
+                              className="px-2.5 py-1 bg-cyan-950/70 hover:bg-cyan-900/70 text-cyan-300 hover:text-white border border-cyan-500/30 rounded-lg transition-colors cursor-pointer flex items-center gap-1 text-[11px] font-semibold"
+                              title="View Transparent Refund Breakdown (Section 5.3)"
+                            >
+                              <Receipt className="w-3.5 h-3.5 text-cyan-400" />
+                              <span className="hidden sm:inline">Details</span>
+                            </button>
+                            <button
+                              onClick={() => {
+                                const found = orders.find((o) => o.id === row.orderId);
+                                if (found) setSelectedOrder(found);
+                              }}
+                              className="p-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded-lg transition-colors cursor-pointer"
+                              title="View Full Order"
+                            >
+                              <Eye className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     );
@@ -2713,7 +2754,14 @@ export default function AdminOrdersTab({ initialSubFilter }: { initialSubFilter?
                         const q = Number(e.target.value);
                         setItemCancelQty(q);
                         const unitPrice = itemCancelTarget.unit_price || (itemCancelTarget.total_price / itemCancelTarget.quantity);
-                        setItemCancelRefundAmount(String(roundToTwoDecimals(unitPrice * q)));
+                        const itemGross = unitPrice * q;
+                        const orderDisc = itemCancelOrder?.discount || itemCancelOrder?.discount_amount || 0;
+                        const discountRate = (itemCancelOrder && itemCancelOrder.subtotal && itemCancelOrder.subtotal > 0 && orderDisc > 0)
+                          ? (orderDisc / itemCancelOrder.subtotal)
+                          : 0;
+                        const allocatedDiscount = roundToTwoDecimals(itemGross * discountRate);
+                        const netRefundable = roundToTwoDecimals(Math.max(0, itemGross - allocatedDiscount));
+                        setItemCancelRefundAmount(String(netRefundable));
                       }}
                       className="w-full px-3 py-2.5 bg-slate-800 border border-slate-700 rounded-xl text-white text-xs font-mono focus:outline-none focus:border-amber-500"
                     >
@@ -2725,6 +2773,45 @@ export default function AdminOrdersTab({ initialSubFilter }: { initialSubFilter?
                     </select>
                   </div>
                 )}
+
+                {/* Authoritative Section 1.1-1.5: Proportional Discount & Net Refund Reconciliation */}
+                {(() => {
+                  const unitPrice = itemCancelTarget.unit_price || (itemCancelTarget.total_price / itemCancelTarget.quantity);
+                  const itemGross = unitPrice * itemCancelQty;
+                  const orderDisc = itemCancelOrder?.discount || itemCancelOrder?.discount_amount || 0;
+                  const discountRate = (itemCancelOrder && itemCancelOrder.subtotal && itemCancelOrder.subtotal > 0 && orderDisc > 0)
+                    ? (orderDisc / itemCancelOrder.subtotal)
+                    : 0;
+                  const allocatedDiscount = roundToTwoDecimals(itemGross * discountRate);
+                  const netRefundable = roundToTwoDecimals(Math.max(0, itemGross - allocatedDiscount));
+
+                  return (
+                    <div className="p-3.5 bg-slate-950 rounded-xl border border-slate-800 space-y-1.5 text-xs">
+                      <div className="flex items-center justify-between text-slate-400">
+                        <span>Gross Price ({itemCancelQty} {itemCancelQty > 1 ? 'units' : 'unit'}):</span>
+                        <span className="font-mono font-semibold text-white">₹{itemGross.toFixed(2)}</span>
+                      </div>
+                      {allocatedDiscount > 0 ? (
+                        <div className="flex items-center justify-between text-amber-300">
+                          <span>Allocated Coupon Discount ({(discountRate * 100).toFixed(2)}%):</span>
+                          <span className="font-mono font-semibold">-₹{allocatedDiscount.toFixed(2)}</span>
+                        </div>
+                      ) : (
+                        <div className="flex items-center justify-between text-slate-500 text-[11px]">
+                          <span>Order Coupon Discount:</span>
+                          <span className="font-mono">₹0.00</span>
+                        </div>
+                      )}
+                      <div className="flex items-center justify-between pt-1.5 border-t border-slate-800/80 font-bold text-sm text-emerald-400">
+                        <span>Net Refundable Amount:</span>
+                        <span className="font-mono">₹{netRefundable.toFixed(2)}</span>
+                      </div>
+                      <p className="text-[10px] text-slate-500 pt-0.5">
+                        Proportionally adjusted using original coupon discount rules. Preserves historical order totals.
+                      </p>
+                    </div>
+                  );
+                })()}
 
                 <div>
                   <label className="block text-xs font-bold uppercase tracking-wider text-slate-300 mb-1.5">
@@ -3387,6 +3474,164 @@ export default function AdminOrdersTab({ initialSubFilter }: { initialSubFilter?
                   </form>
                 );
               })()}
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* ─── MODAL 6: SECTION 5.3 DEDICATED REFUND DETAIL VIEW MODAL ─── */}
+      <AnimatePresence>
+        {selectedRefundDetail && (
+          <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4">
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-slate-900 border border-slate-800 rounded-3xl max-w-lg w-full p-6 text-slate-100 space-y-4 shadow-2xl"
+            >
+              <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-9 h-9 rounded-xl bg-cyan-600/30 text-cyan-400 border border-cyan-500/40 flex items-center justify-center">
+                    <Receipt className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-white text-base">Refund Details</h3>
+                    <p className="text-xs text-cyan-300 font-mono">
+                      Order: #{selectedRefundDetail.orderNumber}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setSelectedRefundDetail(null)}
+                  className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="space-y-3.5 text-xs">
+                {/* Customer & Status Header */}
+                <div className="p-3.5 bg-slate-950 rounded-2xl border border-slate-800 flex items-center justify-between">
+                  <div>
+                    <p className="font-bold text-white text-sm">{selectedRefundDetail.customerName}</p>
+                    <p className="text-slate-400 font-mono text-xs">{selectedRefundDetail.customerMobile}</p>
+                  </div>
+                  <span
+                    className={`px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${
+                      selectedRefundDetail.refund.status === 'success'
+                        ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40'
+                        : selectedRefundDetail.refund.status === 'processing'
+                        ? 'bg-amber-500/20 text-amber-400 border border-amber-500/40'
+                        : 'bg-red-500/20 text-red-400 border border-red-500/40'
+                    }`}
+                  >
+                    {selectedRefundDetail.refund.status === 'success'
+                      ? 'REFUNDED'
+                      : selectedRefundDetail.refund.status === 'processing'
+                      ? 'REFUND PROCESSING'
+                      : 'REFUND FAILED'}
+                  </span>
+                </div>
+
+                {/* Cancelled Item(s) breakdown (Section 5.3) */}
+                {selectedRefundDetail.cancelledItems && selectedRefundDetail.cancelledItems.length > 0 ? (
+                  <div className="space-y-2">
+                    <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
+                      Cancelled Product(s):
+                    </span>
+                    <div className="space-y-2">
+                      {selectedRefundDetail.cancelledItems.map((cItem, i) => {
+                        const grossVal = cItem.total_price;
+                        const allocDisc = cItem.allocated_discount ?? 0;
+                        const netRef = cItem.refundable_amount ?? Math.max(0, grossVal - allocDisc);
+                        return (
+                          <div key={i} className="p-3 bg-slate-950/80 rounded-xl border border-slate-800 space-y-1">
+                            <div className="flex justify-between font-bold text-white">
+                              <span>
+                                {cItem.quantity}x {cItem.product_name_en}
+                              </span>
+                              <span className="font-mono text-emerald-400">₹{grossVal}</span>
+                            </div>
+                            <div className="flex justify-between text-slate-400 text-[11px]">
+                              <span>Original Price:</span>
+                              <span className="font-mono">₹{grossVal.toFixed(2)}</span>
+                            </div>
+                            {allocDisc > 0 && (
+                              <div className="flex justify-between text-amber-300 text-[11px]">
+                                <span>Allocated Discount:</span>
+                                <span className="font-mono">-₹{allocDisc.toFixed(2)}</span>
+                              </div>
+                            )}
+                            <div className="flex justify-between text-emerald-400 font-bold border-t border-slate-800/80 pt-1 text-[11px]">
+                              <span>Refundable Amount:</span>
+                              <span className="font-mono">₹{netRef.toFixed(2)}</span>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="p-3 bg-slate-950/60 rounded-xl border border-slate-800 text-slate-400 text-[11px]">
+                    Refund Reason: {selectedRefundDetail.refund.reason}
+                  </div>
+                )}
+
+                {/* Refund Transaction Overview Table */}
+                <div className="p-3.5 bg-cyan-950/20 border border-cyan-500/30 rounded-xl space-y-2">
+                  <div className="flex justify-between text-slate-300">
+                    <span>Refund Amount:</span>
+                    <span className="font-mono font-bold text-cyan-400 text-base">
+                      ₹{selectedRefundDetail.refund.amount.toFixed(2)}
+                    </span>
+                  </div>
+                  <div className="flex justify-between text-slate-400 text-[11px]">
+                    <span>Refund Method:</span>
+                    <span className="font-semibold text-slate-200">
+                      Original Payment Method (Razorpay / Gateway)
+                    </span>
+                  </div>
+                  <div className="flex justify-between text-slate-400 text-[11px]">
+                    <span>Refund Reference:</span>
+                    <span className="font-mono text-slate-300">
+                      {selectedRefundDetail.refund.provider_refund_id || selectedRefundDetail.refund.id}
+                    </span>
+                  </div>
+                  <div className="flex justify-between text-slate-400 text-[11px]">
+                    <span>Requested Date:</span>
+                    <span>{new Date(selectedRefundDetail.refund.requested_at).toLocaleString()}</span>
+                  </div>
+                  {(selectedRefundDetail.refund.completed_at || (selectedRefundDetail.refund as any).processed_at) && (
+                    <div className="flex justify-between text-slate-400 text-[11px]">
+                      <span>Processed Date:</span>
+                      <span>
+                        {new Date(
+                          selectedRefundDetail.refund.completed_at ||
+                            (selectedRefundDetail.refund as any).processed_at
+                        ).toLocaleString()}
+                      </span>
+                    </div>
+                  )}
+                  <div className="flex justify-between text-slate-400 text-[11px]">
+                    <span>Processed By:</span>
+                    <span className="text-slate-300">
+                      {selectedRefundDetail.refund.requested_by ||
+                        (selectedRefundDetail.refund as any).initiated_by ||
+                        'Store Admin'}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="pt-2">
+                <button
+                  type="button"
+                  onClick={() => setSelectedRefundDetail(null)}
+                  className="w-full py-2.5 bg-slate-800 hover:bg-slate-700 text-white rounded-xl text-xs font-bold transition cursor-pointer"
+                >
+                  Close Details
+                </button>
+              </div>
             </motion.div>
           </div>
         )}

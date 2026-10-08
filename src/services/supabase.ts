@@ -182,8 +182,10 @@ export interface OrderRefundRecord {
   provider_refund_id?: string | null;
   item_id?: string | null;
   requested_by: string;
+  initiated_by?: string | null;
   requested_at: string;
   completed_at?: string | null;
+  processed_at?: string | null;
   failure_reason?: string | null;
 }
 
@@ -262,6 +264,7 @@ export interface DbOrder {
   gst_amount?: number;
   coupon_code?: string | null;
   coupon_discount?: number;
+  discount_amount?: number;
   item_discount?: number;
   order_discount?: number;
   amount_paid?: number;
@@ -275,7 +278,9 @@ export interface DbOrder {
   shipping_audit_trail?: ShippingAuditItem[];
   // Tracking & Timeline Extensions
   tracking_id?: string | null;
+  tracking_number?: string | null;
   courier_name?: string | null;
+  delivery_partner?: string | null;
   tracking_url?: string | null;
   dispatched_at?: string | null;
   order_status_history?: OrderStatusHistoryItem[];
@@ -283,6 +288,7 @@ export interface DbOrder {
   cancellation_reason?: string | null;
   cancelled_at?: string | null;
   cancelled_by?: string | null;
+  cancelled_items?: OrderItem[];
   cancellation_request?: CustomerCancellationRequest | null;
   refunded_amount?: number;
   refunds?: OrderRefundRecord[];
@@ -478,6 +484,7 @@ export interface OrderItem {
   removed_by?: string | null;
   removed_at?: string | null;
   refundable_amount?: number;
+  allocated_discount?: number;
   refund_amount?: number;
   refund_id?: string | null;
   customization?: string | null;

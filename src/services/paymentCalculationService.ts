@@ -9,7 +9,7 @@
 // ============================================================
 
 import type { DbOrder, OrderItem, OrderPaymentRecord, OrderRefundRecord } from './supabase';
-import { roundToTwo } from './orderCalculationService';
+import { roundToTwo, calculateOrderFinancials } from './orderCalculationService';
 
 export type AuthoritativePaymentStatus =
   | 'FULLY PAID'
@@ -46,12 +46,11 @@ export interface OrderPaymentBreakdown {
  */
 export function calculateCancelledItemsAmount(order: Partial<DbOrder>): number {
   if (!order) return 0;
-
-  const originalTotal = roundToTwo(Number(order.total || order.total_amount || 0));
-
-  // If the whole order was cancelled and no specific items were itemized as cancelled,
-  // the entire order amount is considered cancelled.
-  if (order.order_status === 'cancelled') {
+  try {
+    const fin = calculateOrderFinancials(order as DbOrder);
+    return fin.refundableCancelledAmount > 0 ? fin.refundableCancelledAmount : fin.cancelledAmount;
+  } catch {
+    const originalTotal = roundToTwo(Number(order.total || order.total_amount || 0));
     let itemLevelCancelled = 0;
     if (Array.isArray(order.items)) {
       for (const it of order.items) {
@@ -62,23 +61,8 @@ export function calculateCancelledItemsAmount(order: Partial<DbOrder>): number {
         }
       }
     }
-    // If items were marked individually, use that; otherwise all items/total is cancelled
-    return itemLevelCancelled > 0 ? roundToTwo(itemLevelCancelled) : originalTotal;
+    return itemLevelCancelled > 0 ? roundToTwo(Math.min(itemLevelCancelled, originalTotal)) : originalTotal;
   }
-
-  // Active or partially cancelled order: sum up explicitly cancelled items
-  let cancelledTotal = 0;
-  if (Array.isArray(order.items)) {
-    for (const it of order.items) {
-      if (it.status === 'cancelled' || it.status === 'removed') {
-        const unitPrice = roundToTwo(Number(it.unit_price || 0));
-        const qty = Number(it.cancelled_quantity !== undefined ? it.cancelled_quantity : it.quantity || 0);
-        cancelledTotal += roundToTwo(unitPrice * qty);
-      }
-    }
-  }
-
-  return roundToTwo(Math.min(cancelledTotal, originalTotal));
 }
 
 /**
@@ -143,9 +127,16 @@ export function calculateTotalAmountRefunded(order: Partial<DbOrder>): number {
  *    - When excess > 0: REFUND PENDING until processed, then REFUNDED
  */
 export function calculateOrderPaymentBreakdown(order: Partial<DbOrder>): OrderPaymentBreakdown {
-  const originalOrderTotal = roundToTwo(Number(order.total || order.total_amount || 0));
-  const cancelledItemsTotal = calculateCancelledItemsAmount(order);
-  const adjustedOrderTotal = Math.max(0, roundToTwo(originalOrderTotal - cancelledItemsTotal));
+  let fin: any = null;
+  try {
+    fin = calculateOrderFinancials(order as DbOrder);
+  } catch {}
+
+  const originalOrderTotal = fin ? fin.originalOrderTotal : roundToTwo(Number(order.total || order.total_amount || 0));
+  const cancelledItemsTotal = fin
+    ? (fin.refundableCancelledAmount > 0 ? fin.refundableCancelledAmount : fin.cancelledAmount)
+    : calculateCancelledItemsAmount(order);
+  const adjustedOrderTotal = fin ? fin.finalOrderTotal : Math.max(0, roundToTwo(originalOrderTotal - cancelledItemsTotal));
 
   const totalAmountReceived = calculateTotalAmountReceived(order);
   const totalRefundedAmount = calculateTotalAmountRefunded(order);

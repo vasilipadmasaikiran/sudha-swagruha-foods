@@ -48,6 +48,7 @@ import {
   FileText,
   Lock,
   Scale,
+  RotateCcw,
 } from 'lucide-react';
 import { useProductStore, type DiscountAnnouncement, type CouponItem } from '@/hooks/useProductStore';
 import { useAuthStore } from '@/hooks/useStore';
@@ -482,15 +483,17 @@ export default function AdminConsolePage() {
 
                 {/* Sub-menu for Orders (Section 11) */}
                 {isOrders && ordersSubMenuOpen && !sidebarCollapsed && (
-                  <div className="pl-6 pr-1 py-1 space-y-1 border-l-2 border-slate-800 ml-4">
+                  <div className="ml-7 mt-1 space-y-0.5 border-l border-slate-800 pl-2">
                     {[
                       { id: 'all', label: 'All Orders' },
-                      { id: 'placed', label: 'Pending' },
-                      { id: 'active_processing', label: 'Processing' },
-                      { id: 'shipped', label: 'Shipped' },
+                      { id: 'placed', label: 'New Orders' },
+                      { id: 'preparing', label: 'Processing' },
+                      { id: 'packed', label: 'Ready to Dispatch' },
+                      { id: 'shipped', label: 'Dispatched' },
                       { id: 'delivered', label: 'Delivered' },
                       { id: 'cancelled', label: 'Cancelled' },
                       { id: 'payment_info', label: 'Payment Info', isHighlight: true },
+                      { id: 'refund_ledger', label: 'Refunds', isHighlight: true },
                     ].map((sub) => {
                       const isSubActive = activeTab === 'orders' && ordersSubFilter === sub.id;
                       return (
@@ -504,12 +507,15 @@ export default function AdminConsolePage() {
                             isSubActive
                               ? 'bg-emerald-500/20 text-emerald-300 font-bold border border-emerald-500/30'
                               : sub.isHighlight
-                              ? 'text-emerald-400 hover:text-emerald-300 hover:bg-slate-800/60'
+                              ? sub.id === 'refund_ledger'
+                                ? 'text-cyan-400 hover:text-cyan-300 hover:bg-slate-800/60'
+                                : 'text-emerald-400 hover:text-emerald-300 hover:bg-slate-800/60'
                               : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
                           }`}
                         >
                           <span className="flex items-center gap-1.5">
-                            {sub.isHighlight && <IndianRupee className="w-3 h-3 text-emerald-400" />}
+                            {sub.id === 'payment_info' && <IndianRupee className="w-3 h-3 text-emerald-400" />}
+                            {sub.id === 'refund_ledger' && <RotateCcw className="w-3 h-3 text-cyan-400" />}
                             <span>{sub.label}</span>
                           </span>
                         </button>
@@ -623,12 +629,14 @@ export default function AdminConsolePage() {
                         <div className="pl-6 space-y-1 border-l-2 border-slate-800 ml-4 py-1">
                           {[
                             { id: 'all', label: 'All Orders' },
-                            { id: 'placed', label: 'Pending' },
-                            { id: 'active_processing', label: 'Processing' },
-                            { id: 'shipped', label: 'Shipped' },
+                            { id: 'placed', label: 'New Orders' },
+                            { id: 'preparing', label: 'Processing' },
+                            { id: 'packed', label: 'Ready to Dispatch' },
+                            { id: 'shipped', label: 'Dispatched' },
                             { id: 'delivered', label: 'Delivered' },
                             { id: 'cancelled', label: 'Cancelled' },
                             { id: 'payment_info', label: 'Payment Info', isHighlight: true },
+                            { id: 'refund_ledger', label: 'Refunds', isHighlight: true },
                           ].map((sub) => (
                             <button
                               key={sub.id}

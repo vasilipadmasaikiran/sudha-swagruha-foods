@@ -799,11 +799,65 @@ export default function TrackOrderPage() {
                             </p>
                           )}
 
-                          {/* Tracking ID in Shipped Step */}
-                          {status.key === 'shipped' && isCompleted && activeOrder.tracking_id && (
-                            <div className="mt-2 inline-flex items-center gap-2 bg-purple-50 text-purple-900 px-3 py-1.5 rounded-xl border border-purple-200 text-xs font-mono font-bold">
-                              <span>Tracking ID: {activeOrder.tracking_id}</span>
-                              <span className="text-purple-600 font-sans">({activeOrder.courier_name || 'Courier'})</span>
+                          {/* Dedicated Tracking Information attached directly to Dispatched Event (Requirement 3.1) */}
+                          {status.key === 'shipped' && isCompleted && (
+                            <div className="mt-2.5 p-3.5 bg-gradient-to-r from-purple-50 via-indigo-50/50 to-white rounded-2xl border border-purple-200/90 shadow-sm space-y-2">
+                              <div className="flex items-center justify-between text-xs font-semibold text-purple-950">
+                                <span className="flex items-center gap-1.5 font-bold uppercase tracking-wider text-[11px] text-purple-700">
+                                  <Truck className="w-3.5 h-3.5 text-purple-600" />
+                                  <span>Dispatch Logistics Details</span>
+                                </span>
+                                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-purple-200/60 text-purple-800">
+                                  In Transit
+                                </span>
+                              </div>
+
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs pt-1 border-t border-purple-200/60">
+                                <div>
+                                  <span className="text-[11px] text-purple-700 block">Tracking ID / AWB:</span>
+                                  <div className="flex items-center gap-2 mt-0.5">
+                                    <span className="font-mono font-bold text-gray-900 text-sm">
+                                      {activeOrder.tracking_id || historyRecord?.tracking_id || 'Pending Assignment'}
+                                    </span>
+                                    {(activeOrder.tracking_id || historyRecord?.tracking_id) && (
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          navigator.clipboard.writeText(
+                                            activeOrder.tracking_id || historyRecord?.tracking_id || ''
+                                          );
+                                          toast.success('Tracking ID copied to clipboard');
+                                        }}
+                                        className="p-1 text-purple-600 hover:text-purple-800 hover:bg-purple-100 rounded-md transition"
+                                        title="Copy Tracking ID"
+                                      >
+                                        <Copy className="w-3.5 h-3.5" />
+                                      </button>
+                                    )}
+                                  </div>
+                                </div>
+
+                                <div>
+                                  <span className="text-[11px] text-purple-700 block">Delivery Partner:</span>
+                                  <span className="font-semibold text-gray-800 text-xs mt-0.5 block">
+                                    {activeOrder.courier_name || historyRecord?.courier_name || 'Delhivery Express'}
+                                  </span>
+                                </div>
+                              </div>
+
+                              {(activeOrder.tracking_url || historyRecord?.tracking_url) && (
+                                <div className="pt-1.5 border-t border-purple-200/60">
+                                  <a
+                                    href={activeOrder.tracking_url || historyRecord?.tracking_url || '#'}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="inline-flex items-center gap-1.5 text-xs text-purple-700 hover:text-purple-900 font-bold underline"
+                                  >
+                                    <span>Track on Courier Partner Portal</span>
+                                    <ExternalLink className="w-3 h-3" />
+                                  </a>
+                                </div>
+                              )}
                             </div>
                           )}
 
