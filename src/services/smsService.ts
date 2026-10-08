@@ -357,23 +357,41 @@ export const SmsService = {
       // ── Provider 1: Fast2SMS (Indian Gateway) ─────────────────────
       if (sms.provider === 'fast2sms') {
         const cleanTenDigits = mobileNumber.replace(/\D/g, '').slice(-10);
-        const response = await fetch('https://www.fast2sms.com/dev/bulkV2', {
-          method: 'POST',
-          headers: {
-            authorization: sms.apiKey,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            route: 'q', // quick transactional
-            message,
-            language: 'english',
-            flash: 0,
-            numbers: cleanTenDigits,
-          }),
+        const queryParams = new URLSearchParams({
+          authorization: sms.apiKey?.trim() || '',
+          route: 'q', // quick transactional
+          message,
+          language: 'english',
+          flash: '0',
+          numbers: cleanTenDigits,
         });
 
-        const data = await response.json();
-        if (data.return === true || response.ok) {
+        // Fast2SMS supports GET with query params, avoiding browser CORS preflight header blockage
+        let response: Response;
+        try {
+          response = await fetch(`https://www.fast2sms.com/dev/bulkV2?${queryParams.toString()}`, {
+            method: 'GET',
+          });
+        } catch (fetchErr: any) {
+          // Fallback to POST if GET fails
+          response = await fetch('https://www.fast2sms.com/dev/bulkV2', {
+            method: 'POST',
+            headers: {
+              authorization: sms.apiKey?.trim() || '',
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              route: 'q',
+              message,
+              language: 'english',
+              flash: 0,
+              numbers: cleanTenDigits,
+            }),
+          });
+        }
+
+        const data = await response.json().catch(() => ({}));
+        if (data.return === true || (response.ok && data.status_code === 200)) {
           return {
             success: true,
             message: `SMS delivered to ${mobileNumber} via Fast2SMS`,
@@ -381,11 +399,12 @@ export const SmsService = {
             providerMessageId: data.request_id || `f2s_${Date.now()}`,
           };
         } else {
+          const rawMessage = Array.isArray(data.message) ? data.message[0] : (data.message || 'Fast2SMS dispatch failed');
           return {
             success: false,
-            message: data.message?.[0] || 'Fast2SMS dispatch failed',
+            message: rawMessage,
             provider: 'fast2sms',
-            technicalError: JSON.stringify(data),
+            technicalError: data.status_code ? `Status ${data.status_code}: ${rawMessage}` : JSON.stringify(data),
           };
         }
       }
@@ -478,9 +497,13 @@ export const SmsService = {
       };
     } catch (err: any) {
       console.warn('SMS dispatch exception (non-blocking):', err);
+      let errMsg = err?.message || 'Network error transmitting SMS';
+      if (errMsg === 'Failed to fetch') {
+        errMsg = 'Connection blocked by browser security (CORS) or network disconnect. Please check your internet connection or use a backend proxy.';
+      }
       return {
         success: false,
-        message: err?.message || 'Network error transmitting SMS',
+        message: errMsg,
         provider: sms.provider,
         technicalError: err?.message,
       };
