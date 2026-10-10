@@ -6,7 +6,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { DbOrder, OrderStatusHistoryItem, OrderRefundRecord, OrderPaymentRecord, OrderItem, CustomerCancellationRequest, ShippingSnapshot, ShippingAuditItem } from '@/services/supabase';
-import { supabase, isSupabaseConfigured, normalizeOrderTracking } from '@/services/supabase';
+import { supabase, isSupabaseConfigured, normalizeOrderTracking, cleanOrderNotes } from '@/services/supabase';
 import { RefundService, calculateOrderRefundableMetrics, roundToTwoDecimals } from '@/services/refundService';
 import { NotificationService } from '@/services/notificationService';
 import { useSettingsStore } from '@/hooks/useSettingsStore';
@@ -311,13 +311,26 @@ export const useOrderStore = create<OrderStore>()(
           if (data) {
             const normalizedData = (data as DbOrder[]).map(normalizeOrderTracking);
             if (normalizedData.length > 0) {
-              const supabaseOrderNumbers = new Set(normalizedData.map((o) => o.order_number));
-              const localOnly = get().orders.filter(
+              const currentOrders = get().orders;
+              const merged = normalizedData.map((remote) => {
+                const local = currentOrders.find((lo) => lo.order_number === remote.order_number);
+                if (local && !remote.tracking_id && local.tracking_id) {
+                  return {
+                    ...remote,
+                    tracking_id: local.tracking_id,
+                    courier_name: remote.courier_name || local.courier_name,
+                    tracking_url: remote.tracking_url || local.tracking_url,
+                  };
+                }
+                return remote;
+              });
+              const supabaseOrderNumbers = new Set(merged.map((o) => o.order_number));
+              const localOnly = currentOrders.filter(
                 (o) =>
                   !supabaseOrderNumbers.has(o.order_number) &&
                   !o.id.startsWith('order-10')
               );
-              set({ orders: [...normalizedData, ...localOnly] });
+              set({ orders: [...merged, ...localOnly] });
             } else {
               const nonDemo = get().orders.filter((o) => !o.id.startsWith('order-10'));
               if (nonDemo.length > 0) {
@@ -501,7 +514,7 @@ export const useOrderStore = create<OrderStore>()(
         }
 
         // Encode complete metadata seamlessly into notes so that tracking, history, and financial snapshots are 100% saved
-        const cleanUserNotes = (newNotes || '').replace(/\[SSF_TRACKING:[\s\S]*?\]/g, '').trim();
+        const cleanUserNotes = cleanOrderNotes(newNotes);
         const trackingMetadata = {
           tracking_id: newTrackingId,
           courier_name: newCourier,
@@ -574,32 +587,28 @@ export const useOrderStore = create<OrderStore>()(
         // 2. Synchronize to Supabase Cloud Database (AUTHORITATIVE TRUTH)
         if (isSupabaseConfigured()) {
           try {
-            // First attempt: Try updating with dedicated columns
+            // First attempt: Update matching exact active columns in public.orders
             const fullPayload: Record<string, unknown> = {
               order_status: newStatus,
               payment_status: newPaymentStatus,
               delivery_charge: newDeliveryCharge,
               total: newTotal,
-              total_amount: newTotal,
               notes: encodedNotes,
               updated_at: now,
               tracking_id: newTrackingId,
               courier_name: newCourier,
               tracking_url: newTrackingUrl,
+              dispatched_at: trackingMetadata.dispatched_at || null,
+              order_status_history: existingHistory,
               amount_paid: newAmountPaid,
               amount_due: newAmountDue,
               payments: trackingMetadata.payments,
               refunds: trackingMetadata.refunds,
               refunded_amount: trackingMetadata.refunded_amount,
-              taxable_amount: existing.taxable_amount,
-              gst_rate: existing.gst_rate,
-              gst_amount: existing.gst_amount,
-              coupon_discount: existing.coupon_discount,
-              calculated_delivery_charge: trackingMetadata.calculated_delivery_charge,
-              admin_shipping_override: trackingMetadata.admin_shipping_override,
-              shipping_override_reason: trackingMetadata.shipping_override_reason,
-              shipping_audit_trail: trackingMetadata.shipping_audit_trail,
-              shipping_snapshot: trackingMetadata.shipping_snapshot,
+              taxable_amount: existing.taxable_amount !== undefined ? existing.taxable_amount : null,
+              gst_rate: existing.gst_rate !== undefined ? existing.gst_rate : null,
+              gst_amount: existing.gst_amount !== undefined ? existing.gst_amount : null,
+              coupon_discount: existing.coupon_discount !== undefined ? existing.coupon_discount : null,
             };
 
             let { error: fullError } = await supabase
@@ -625,8 +634,8 @@ export const useOrderStore = create<OrderStore>()(
             }
 
             if (fullError) {
-              // If column does not exist yet (pre-migration), fallback safely to standard columns + encoded notes
-              console.warn('Dedicated tracking columns not yet in DB schema cache; updating via standard schema fallback:', fullError.message);
+              // Fallback: safely update standard columns while preserving tracking_id and courier details
+              console.warn('Dedicated column update notice; updating via fallback preserving tracking columns:', fullError.message);
               const safeDbStatus =
                 newPaymentStatus === 'partially_paid' || newPaymentStatus === 'unpaid'
                   ? 'pending'
@@ -639,11 +648,27 @@ export const useOrderStore = create<OrderStore>()(
                 total: newTotal,
                 notes: encodedNotes,
                 updated_at: now,
+                tracking_id: newTrackingId,
+                courier_name: newCourier,
+                tracking_url: newTrackingUrl,
+                dispatched_at: trackingMetadata.dispatched_at || null,
+                order_status_history: existingHistory,
               };
-              const { error: fallbackError } = await supabase
+              let { error: fallbackError } = await supabase
                 .from('orders')
                 .update(fallbackPayload)
                 .eq('order_number', existing.order_number);
+
+              if (fallbackError && (fallbackError.code === 'PGRST204' || fallbackError.message?.includes('column'))) {
+                // If any extended column failed, strip and retry with guaranteed minimal columns
+                delete fallbackPayload.dispatched_at;
+                delete fallbackPayload.order_status_history;
+                const minRetry = await supabase
+                  .from('orders')
+                  .update(fallbackPayload)
+                  .eq('order_number', existing.order_number);
+                fallbackError = minRetry.error;
+              }
 
               if (fallbackError) {
                 console.error('Supabase fallback status update error:', fallbackError);
@@ -1975,11 +2000,18 @@ export const useOrderStore = create<OrderStore>()(
                 } else if (payload.eventType === 'UPDATE') {
                   const updatedRow = normalizeOrderTracking(payload.new as DbOrder);
                   set((state) => ({
-                    orders: state.orders.map((o) =>
-                      o.order_number === updatedRow.order_number || o.id === updatedRow.id
-                        ? updatedRow
-                        : o
-                    ),
+                    orders: state.orders.map((o) => {
+                      if (o.order_number === updatedRow.order_number || o.id === updatedRow.id) {
+                        return {
+                          ...o,
+                          ...updatedRow,
+                          tracking_id: updatedRow.tracking_id || o.tracking_id || null,
+                          courier_name: updatedRow.courier_name || o.courier_name || null,
+                          tracking_url: updatedRow.tracking_url || o.tracking_url || null,
+                        };
+                      }
+                      return o;
+                    }),
                   }));
                 } else if (payload.eventType === 'DELETE') {
                   const oldRow = payload.old as { id?: string; order_number?: string };

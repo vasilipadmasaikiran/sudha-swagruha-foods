@@ -46,7 +46,7 @@ import { calculateOrderRefundableMetrics, roundToTwoDecimals } from '@/services/
 import { calculateOrderFinancials, type OrderFinancialSummary } from '@/services/orderCalculationService';
 import { exportOrdersToCsv } from '@/services/csvExportService';
 import { OrderCalculationInspector } from './OrderCalculationInspector';
-import type { DbOrder, OrderItem, OrderRefundRecord, OrderPaymentRecord } from '@/services/supabase';
+import { cleanOrderNotes, type DbOrder, type OrderItem, type OrderRefundRecord, type OrderPaymentRecord } from '@/services/supabase';
 import toast from 'react-hot-toast';
 
 const STATUS_CONFIG: Record<
@@ -323,10 +323,12 @@ export default function AdminOrdersTab({ initialSubFilter }: { initialSubFilter?
   // Handle direct status change with Interceptions for Dispatch & Cancellation
   const handleStatusChange = async (order: DbOrder, newStatus: DbOrder['order_status']) => {
     if (newStatus === 'shipped') {
+      const effTrk = order.tracking_id || order.order_status_history?.slice().reverse().find((h) => h && h.tracking_id)?.tracking_id || '';
+      const effCr = order.courier_name || order.order_status_history?.slice().reverse().find((h) => h && h.courier_name)?.courier_name || 'Delhivery';
       setDispatchModalOrder(order);
-      setDispatchTrackingId(order.tracking_id || '');
-      setDispatchCourier(order.courier_name || 'Delhivery');
-      setDispatchNotes((order.notes || '').replace(/\[SSF_TRACKING:[\s\S]*?\]/g, '').trim());
+      setDispatchTrackingId(effTrk);
+      setDispatchCourier(effCr);
+      setDispatchNotes(cleanOrderNotes(order.notes));
       return;
     }
 
@@ -1323,40 +1325,45 @@ export default function AdminOrdersTab({ initialSubFilter }: { initialSubFilter?
                           </div>
 
                           {/* Tracking ID Badge & Quick Editor */}
-                          {o.tracking_id ? (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setDispatchModalOrder(o);
-                                setDispatchTrackingId(o.tracking_id || '');
-                                setDispatchCourier(o.courier_name || 'Delhivery');
-                                setDispatchNotes((o.notes || '').replace(/\[SSF_TRACKING:[\s\S]*?\]/g, '').trim());
-                              }}
-                              className="flex items-center gap-1.5 text-[11px] text-purple-200 bg-purple-950/80 hover:bg-purple-900 border border-purple-500/40 px-2.5 py-1 rounded-lg font-mono transition group cursor-pointer text-left"
-                              title="Click to edit Tracking ID / Courier Partner"
-                            >
-                              <Truck className="w-3.5 h-3.5 text-purple-400 group-hover:scale-110 transition-transform" />
-                              <span className="font-bold">{o.tracking_id}</span>
-                              {o.courier_name && (
-                                <span className="text-[10px] text-purple-300 font-sans font-medium">({o.courier_name})</span>
-                              )}
-                            </button>
-                          ) : o.order_status !== 'cancelled' ? (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setDispatchModalOrder(o);
-                                setDispatchTrackingId('');
-                                setDispatchCourier(o.courier_name || 'Delhivery');
-                                setDispatchNotes((o.notes || '').replace(/\[SSF_TRACKING:[\s\S]*?\]/g, '').trim());
-                              }}
-                              className="text-[11px] text-purple-400 hover:text-purple-300 hover:bg-purple-950/40 px-2 py-1 rounded-lg border border-dashed border-purple-500/30 font-semibold cursor-pointer flex items-center gap-1 transition"
-                              title="Assign Tracking ID / Courier Partner"
-                            >
-                              <Truck className="w-3 h-3" />
-                              <span>+ Add Tracking</span>
-                            </button>
-                          ) : null}
+                          {(() => {
+                            const effectiveTrackingId = o.tracking_id || o.order_status_history?.slice().reverse().find((h) => h && h.tracking_id)?.tracking_id;
+                            const effectiveCourier = o.courier_name || o.order_status_history?.slice().reverse().find((h) => h && h.courier_name)?.courier_name || 'Delhivery';
+
+                            return effectiveTrackingId ? (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setDispatchModalOrder(o);
+                                  setDispatchTrackingId(effectiveTrackingId);
+                                  setDispatchCourier(effectiveCourier);
+                                  setDispatchNotes(cleanOrderNotes(o.notes));
+                                }}
+                                className="flex items-center gap-1.5 text-[11px] text-purple-200 bg-purple-950/80 hover:bg-purple-900 border border-purple-500/40 px-2.5 py-1 rounded-lg font-mono transition group cursor-pointer text-left"
+                                title="Click to edit Tracking ID / Courier Partner"
+                              >
+                                <Truck className="w-3.5 h-3.5 text-purple-400 group-hover:scale-110 transition-transform" />
+                                <span className="font-bold">{effectiveTrackingId}</span>
+                                {effectiveCourier && (
+                                  <span className="text-[10px] text-purple-300 font-sans font-medium">({effectiveCourier})</span>
+                                )}
+                              </button>
+                            ) : o.order_status !== 'cancelled' ? (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setDispatchModalOrder(o);
+                                  setDispatchTrackingId(effectiveTrackingId || '');
+                                  setDispatchCourier(effectiveCourier);
+                                  setDispatchNotes(cleanOrderNotes(o.notes));
+                                }}
+                                className="text-[11px] text-purple-400 hover:text-purple-300 hover:bg-purple-950/40 px-2 py-1 rounded-lg border border-dashed border-purple-500/30 font-semibold cursor-pointer flex items-center gap-1 transition"
+                                title="Assign Tracking ID / Courier Partner"
+                              >
+                                <Truck className="w-3 h-3" />
+                                <span>+ Add Tracking</span>
+                              </button>
+                            ) : null;
+                          })()}
                         </td>
 
                         {/* Fulfillment Actions (Cancel, Refund, View, Delete) */}
@@ -1771,45 +1778,56 @@ export default function AdminOrdersTab({ initialSubFilter }: { initialSubFilter?
                       <Truck className="w-3.5 h-3.5 text-purple-400" />
                       <span>Courier Logistics & Tracking</span>
                     </p>
-                    {selectedOrder.tracking_id ? (
-                      <div className="flex items-center gap-2 mt-1">
-                        <span className="text-base font-mono font-extrabold text-white">
-                          {selectedOrder.tracking_id}
-                        </span>
-                        <span className="text-xs px-2 py-0.5 rounded-md bg-purple-800/60 text-purple-200 font-semibold">
-                          {selectedOrder.courier_name || 'Courier Partner'}
-                        </span>
-                      </div>
-                    ) : (
-                      <p className="text-xs text-slate-400 mt-1 italic">
-                        No tracking ID assigned yet
-                      </p>
-                    )}
-                  </div>
-                  <div className="flex items-center gap-2">
-                    {selectedOrder.tracking_url && (
-                      <a
-                        href={selectedOrder.tracking_url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="px-3 py-1.5 bg-purple-700 hover:bg-purple-600 text-white rounded-xl text-xs font-semibold flex items-center gap-1 transition"
-                      >
-                        <span>Track Portal</span>
-                        <ExternalLink className="w-3 h-3" />
-                      </a>
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setDispatchModalOrder(selectedOrder);
-                        setDispatchTrackingId(selectedOrder.tracking_id || '');
-                        setDispatchCourier(selectedOrder.courier_name || 'Delhivery');
-                        setDispatchNotes((selectedOrder.notes || '').replace(/\[SSF_TRACKING:[\s\S]*?\]/g, '').trim());
-                      }}
-                      className="px-3 py-1.5 bg-purple-500/20 hover:bg-purple-500/30 text-purple-200 border border-purple-500/40 rounded-xl text-xs font-bold transition cursor-pointer"
-                    >
-                      {selectedOrder.tracking_id ? 'Update Tracking' : 'Assign Tracking ID'}
-                    </button>
+                    {(() => {
+                      const selTrackingId = selectedOrder.tracking_id || selectedOrder.order_status_history?.slice().reverse().find((h) => h && h.tracking_id)?.tracking_id;
+                      const selCourier = selectedOrder.courier_name || selectedOrder.order_status_history?.slice().reverse().find((h) => h && h.courier_name)?.courier_name || 'Delhivery';
+
+                      return (
+                        <>
+                          <div>
+                            {selTrackingId ? (
+                              <div className="flex items-center gap-2 mt-1">
+                                <span className="text-base font-mono font-extrabold text-white">
+                                  {selTrackingId}
+                                </span>
+                                <span className="text-xs px-2 py-0.5 rounded-md bg-purple-800/60 text-purple-200 font-semibold">
+                                  {selCourier}
+                                </span>
+                              </div>
+                            ) : (
+                              <p className="text-xs text-slate-400 mt-1 italic">
+                                No tracking ID assigned yet
+                              </p>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-2">
+                            {selectedOrder.tracking_url && (
+                              <a
+                                href={selectedOrder.tracking_url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="px-3 py-1.5 bg-purple-700 hover:bg-purple-600 text-white rounded-xl text-xs font-semibold flex items-center gap-1 transition"
+                              >
+                                <span>Track Portal</span>
+                                <ExternalLink className="w-3 h-3" />
+                              </a>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setDispatchModalOrder(selectedOrder);
+                                setDispatchTrackingId(selTrackingId || '');
+                                setDispatchCourier(selCourier);
+                                setDispatchNotes(cleanOrderNotes(selectedOrder.notes));
+                              }}
+                              className="px-3 py-1.5 bg-purple-500/20 hover:bg-purple-500/30 text-purple-200 border border-purple-500/40 rounded-xl text-xs font-bold transition cursor-pointer"
+                            >
+                              {selTrackingId ? 'Update Tracking' : 'Assign Tracking ID'}
+                            </button>
+                          </div>
+                        </>
+                      );
+                    })()}
                   </div>
                 </div>
               )}

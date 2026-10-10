@@ -297,6 +297,49 @@ export interface DbOrder {
 }
 
 /**
+/**
+ * Strips all internal metadata tags and legacy JSON fragments from user-facing notes
+ */
+export function cleanOrderNotes(notes: string | null | undefined): string {
+  if (!notes || typeof notes !== 'string') return '';
+  let cleaned = notes;
+
+  const tagIdx = cleaned.indexOf('[SSF_TRACKING:');
+  if (tagIdx !== -1) {
+    const startBrace = cleaned.indexOf('{', tagIdx);
+    if (startBrace !== -1) {
+      let depth = 0;
+      let endIdx = -1;
+      for (let i = startBrace; i < cleaned.length; i++) {
+        if (cleaned[i] === '{') depth++;
+        else if (cleaned[i] === '}') {
+          depth--;
+          if (depth === 0) {
+            const closeBracket = cleaned.indexOf(']', i);
+            endIdx = closeBracket !== -1 ? closeBracket + 1 : i + 1;
+            break;
+          }
+        }
+      }
+      if (endIdx !== -1) {
+        cleaned = (cleaned.slice(0, tagIdx) + cleaned.slice(endIdx)).trim();
+      } else {
+        cleaned = cleaned.slice(0, tagIdx).trim();
+      }
+    } else {
+      cleaned = cleaned.slice(0, tagIdx).trim();
+    }
+  }
+
+  // Remove any legacy orphaned JSON fragments left behind
+  cleaned = cleaned.replace(/,\s*"cancellation_reason"[\s\S]*$/g, '');
+  cleaned = cleaned.replace(/\[SSF_TRACKING:[\s\S]*/g, '');
+  cleaned = cleaned.replace(/,\s*"(?:refunds|payments|taxable_amount|history)"[\s\S]*/g, '');
+
+  return cleaned.trim();
+}
+
+/**
  * Extracts tracking details and history, handling both dedicated DB columns
  * and encoded notes fallback for seamless backward compatibility.
  * Defensively ensures financial snapshot integrity and null-safety so pages never crash.
@@ -328,40 +371,59 @@ export function normalizeOrderTracking(rawOrder: DbOrder): DbOrder {
   let extractedAmountPaid = order.amount_paid;
   let extractedAmountDue = order.amount_due;
 
-  // Check for metadata encoded in notes: [SSF_TRACKING:{...}]
+  // Check for metadata encoded in notes: [SSF_TRACKING:{...}] using balanced-brace JSON parsing
   if (order.notes && order.notes.includes('[SSF_TRACKING:')) {
     try {
-      const match = order.notes.match(/\[SSF_TRACKING:([\s\S]*?)\]/);
-      if (match && match[1]) {
-        const meta = JSON.parse(match[1]);
-        if (meta.tracking_id && !extractedTrackingId) extractedTrackingId = meta.tracking_id;
-        if (meta.courier_name && !extractedCourier) extractedCourier = meta.courier_name;
-        if (meta.tracking_url && !extractedUrl) extractedUrl = meta.tracking_url;
-        if (meta.dispatched_at && !extractedDispatchedAt) extractedDispatchedAt = meta.dispatched_at;
-        if (meta.cancellation_reason && !extractedCancellationReason) extractedCancellationReason = meta.cancellation_reason;
-        if (meta.cancelled_at && !extractedCancelledAt) extractedCancelledAt = meta.cancelled_at;
-        if (meta.cancellation_request && !extractedCancellationRequest) extractedCancellationRequest = meta.cancellation_request;
-        if (meta.refunded_amount !== undefined && !extractedRefundedAmount) extractedRefundedAmount = Number(meta.refunded_amount);
-        if (Array.isArray(meta.refunds) && extractedRefunds.length === 0) extractedRefunds = meta.refunds;
-        if (Array.isArray(meta.payments) && extractedPayments.length === 0) extractedPayments = meta.payments;
-        if (Array.isArray(meta.history) && extractedHistory.length === 0) {
-          extractedHistory = meta.history;
+      const tag = '[SSF_TRACKING:';
+      const tagIdx = order.notes.lastIndexOf(tag);
+      if (tagIdx !== -1) {
+        const startBrace = order.notes.indexOf('{', tagIdx + tag.length);
+        if (startBrace !== -1) {
+          let depth = 0;
+          let endBrace = -1;
+          for (let i = startBrace; i < order.notes.length; i++) {
+            if (order.notes[i] === '{') depth++;
+            else if (order.notes[i] === '}') {
+              depth--;
+              if (depth === 0) {
+                endBrace = i;
+                break;
+              }
+            }
+          }
+          if (endBrace !== -1) {
+            const jsonStr = order.notes.slice(startBrace, endBrace + 1);
+            const meta = JSON.parse(jsonStr);
+            if (meta.tracking_id && !extractedTrackingId) extractedTrackingId = meta.tracking_id;
+            if (meta.courier_name && !extractedCourier) extractedCourier = meta.courier_name;
+            if (meta.tracking_url && !extractedUrl) extractedUrl = meta.tracking_url;
+            if (meta.dispatched_at && !extractedDispatchedAt) extractedDispatchedAt = meta.dispatched_at;
+            if (meta.cancellation_reason && !extractedCancellationReason) extractedCancellationReason = meta.cancellation_reason;
+            if (meta.cancelled_at && !extractedCancelledAt) extractedCancelledAt = meta.cancelled_at;
+            if (meta.cancellation_request && !extractedCancellationRequest) extractedCancellationRequest = meta.cancellation_request;
+            if (meta.refunded_amount !== undefined && !extractedRefundedAmount) extractedRefundedAmount = Number(meta.refunded_amount);
+            if (Array.isArray(meta.refunds) && extractedRefunds.length === 0) extractedRefunds = meta.refunds;
+            if (Array.isArray(meta.payments) && extractedPayments.length === 0) extractedPayments = meta.payments;
+            if (Array.isArray(meta.history) && extractedHistory.length === 0) {
+              extractedHistory = meta.history;
+            }
+            // Financial snapshots in notes
+            if (meta.taxable_amount !== undefined && extractedTaxableAmount === undefined) extractedTaxableAmount = meta.taxable_amount;
+            if (meta.gst_rate !== undefined && extractedGstRate === undefined) extractedGstRate = meta.gst_rate;
+            if (meta.gst_amount !== undefined && extractedGstAmount === undefined) extractedGstAmount = meta.gst_amount;
+            if (meta.coupon_code !== undefined && extractedCouponCode === undefined) extractedCouponCode = meta.coupon_code;
+            if (meta.coupon_discount !== undefined && extractedCouponDiscount === undefined) extractedCouponDiscount = meta.coupon_discount;
+            if (meta.item_discount !== undefined && extractedItemDiscount === undefined) extractedItemDiscount = meta.item_discount;
+            if (meta.amount_paid !== undefined && extractedAmountPaid === undefined) extractedAmountPaid = meta.amount_paid;
+            if (meta.amount_due !== undefined && extractedAmountDue === undefined) extractedAmountDue = meta.amount_due;
+            // Shipping Snapshot & Override metadata
+            if (meta.shipping_snapshot && !order.shipping_snapshot) (order as any).shipping_snapshot = meta.shipping_snapshot;
+            if (meta.calculated_delivery_charge !== undefined && order.calculated_delivery_charge === undefined) (order as any).calculated_delivery_charge = meta.calculated_delivery_charge;
+            if (meta.admin_shipping_override !== undefined && order.admin_shipping_override === undefined) (order as any).admin_shipping_override = meta.admin_shipping_override;
+            if (meta.shipping_override_reason && !order.shipping_override_reason) (order as any).shipping_override_reason = meta.shipping_override_reason;
+            if (Array.isArray(meta.shipping_audit_trail) && !order.shipping_audit_trail) (order as any).shipping_audit_trail = meta.shipping_audit_trail;
+          }
         }
-        // Financial snapshots in notes
-        if (meta.taxable_amount !== undefined && extractedTaxableAmount === undefined) extractedTaxableAmount = meta.taxable_amount;
-        if (meta.gst_rate !== undefined && extractedGstRate === undefined) extractedGstRate = meta.gst_rate;
-        if (meta.gst_amount !== undefined && extractedGstAmount === undefined) extractedGstAmount = meta.gst_amount;
-        if (meta.coupon_code !== undefined && extractedCouponCode === undefined) extractedCouponCode = meta.coupon_code;
-        if (meta.coupon_discount !== undefined && extractedCouponDiscount === undefined) extractedCouponDiscount = meta.coupon_discount;
-        if (meta.item_discount !== undefined && extractedItemDiscount === undefined) extractedItemDiscount = meta.item_discount;
-        if (meta.amount_paid !== undefined && extractedAmountPaid === undefined) extractedAmountPaid = meta.amount_paid;
-        if (meta.amount_due !== undefined && extractedAmountDue === undefined) extractedAmountDue = meta.amount_due;
-        // Shipping Snapshot & Override metadata
-        if (meta.shipping_snapshot && !order.shipping_snapshot) (order as any).shipping_snapshot = meta.shipping_snapshot;
-        if (meta.calculated_delivery_charge !== undefined && order.calculated_delivery_charge === undefined) (order as any).calculated_delivery_charge = meta.calculated_delivery_charge;
-        if (meta.admin_shipping_override !== undefined && order.admin_shipping_override === undefined) (order as any).admin_shipping_override = meta.admin_shipping_override;
-        if (meta.shipping_override_reason && !order.shipping_override_reason) (order as any).shipping_override_reason = meta.shipping_override_reason;
-        if (Array.isArray(meta.shipping_audit_trail) && !order.shipping_audit_trail) (order as any).shipping_audit_trail = meta.shipping_audit_trail;
       }
     } catch (e) {
       console.warn('Could not parse encoded tracking from notes', e);
