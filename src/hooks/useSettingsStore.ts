@@ -110,6 +110,12 @@ export interface StoreSettings {
   // Central Authoritative Shipping & Delivery Settings
   shipping: ShippingSettings;
 
+  // Official Food License & Regulatory Compliance (Section 5)
+  foodLicense: FoodLicenseSettings;
+
+  // Official GST & Business Registration (Section 5)
+  gst: GstSettings;
+
   // Website Appearance & Live Theme Settings
   appearance: WebsiteAppearanceSettings;
 
@@ -118,6 +124,44 @@ export interface StoreSettings {
 
   // Website Content Management Settings (Hero, policies, text)
   content: WebsiteContentSettings;
+}
+
+export interface FoodLicenseSettings {
+  foodBusinessName: string;
+  foodLicenseNumber: string;
+  licenseType: string;
+  licenseValidity?: string;
+  showOnCustomerSite: boolean;
+}
+
+export interface GstSettings {
+  gstRegisteredBusinessName: string;
+  gstin: string;
+  showOnCustomerSite: boolean;
+}
+
+export const defaultFoodLicenseSettings: FoodLicenseSettings = {
+  foodBusinessName: 'Sudha Swagruha Foods',
+  foodLicenseNumber: '',
+  licenseType: 'FSSAI Registration / State License',
+  licenseValidity: '',
+  showOnCustomerSite: false,
+};
+
+export const defaultGstSettings: GstSettings = {
+  gstRegisteredBusinessName: 'Sudha Swagruha Foods',
+  gstin: '',
+  showOnCustomerSite: false,
+};
+
+export function isValidGstin(gstin: string): boolean {
+  if (!gstin) return false;
+  return /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/.test(gstin.trim());
+}
+
+export function isValidFssai(fssai: string): boolean {
+  if (!fssai) return false;
+  return /^[0-9]{14}$/.test(fssai.trim());
 }
 
 export interface TaxSettings {
@@ -140,6 +184,8 @@ interface SettingsStore {
   updateSmtpSettings: (updates: Partial<SmtpSettings>) => void;
   updateSmsSettings: (updates: Partial<SmsSettings>) => void;
   updateTaxSettings: (updates: Partial<TaxSettings>) => void;
+  updateFoodLicenseSettings: (updates: Partial<FoodLicenseSettings>) => void;
+  updateGstSettings: (updates: Partial<GstSettings>) => void;
   updateShippingSettings: (updates: Partial<ShippingSettings>) => void;
   updateAppearanceSettings: (updates: Partial<WebsiteAppearanceSettings>) => void;
   updateCustomerAuthSettings: (updates: Partial<CustomerAuthSettings>) => void;
@@ -182,7 +228,7 @@ export const defaultSettings: StoreSettings = {
   businessName: 'Sudha Swagruha Foods',
   websiteTitle: 'Sudha Swagruha Foods • Authentic Andhra Delicacies',
   tagline: 'Authentic Andhra Homemade Pickles, Podis & Traditional Sweets',
-  logoUrl: (import.meta.env.BASE_URL || '/') + 'logo/logo.jpg',
+  logoUrl: ((typeof import.meta !== 'undefined' && import.meta.env?.BASE_URL) || '/') + 'logo/logo.jpg',
   footerText: 'Authentic Traditional Delicacies prepared with Amma Chethi Prema.',
   businessPhone: '8374634989',
   businessWhatsApp: '8374634989',
@@ -202,6 +248,8 @@ export const defaultSettings: StoreSettings = {
   smtp: defaultSmtpSettings,
   sms: defaultSmsSettings,
   tax: defaultTaxSettings,
+  foodLicense: defaultFoodLicenseSettings,
+  gst: defaultGstSettings,
   shipping: defaultShippingSettings,
   appearance: defaultAppearanceSettings,
   customerAuth: defaultCustomerAuthSettings,
@@ -436,6 +484,66 @@ export const useSettingsStore = create<SettingsStore>()(
             .then(({ error }) => {
               if (error) console.warn('Supabase Tax settings update notice:', error.message);
               else console.log('Synced GST Tax settings to Supabase cloud DB');
+            });
+        }
+      },
+
+      // ─── Update Food License Settings Specifically (Section 5) ──────
+      updateFoodLicenseSettings: (updates) => {
+        const current = get().settings;
+        const nextFoodLicense: FoodLicenseSettings = {
+          ...(current.foodLicense || defaultFoodLicenseSettings),
+          ...updates,
+        };
+        const nextSettings: StoreSettings = { ...current, foodLicense: nextFoodLicense };
+        set({ settings: nextSettings });
+
+        logAdminAction('Admin', 'ROOT_ADMIN', 'FOOD_LICENSE_UPDATED', 'SETTINGS', 'food_license', {
+          foodBusinessName: nextFoodLicense.foodBusinessName,
+          foodLicenseNumber: nextFoodLicense.foodLicenseNumber,
+          showOnCustomerSite: nextFoodLicense.showOnCustomerSite,
+        }).catch((e) => console.warn('Audit log notice:', e));
+
+        if (isSupabaseConfigured()) {
+          supabase
+            .from('store_settings')
+            .upsert({
+              key: 'store_contact',
+              value: nextSettings,
+              updated_at: new Date().toISOString(),
+            })
+            .then(({ error }) => {
+              if (error) console.warn('Supabase Food License update notice:', error.message);
+            });
+        }
+      },
+
+      // ─── Update GST Settings Specifically (Section 5) ──────────────
+      updateGstSettings: (updates) => {
+        const current = get().settings;
+        const nextGst: GstSettings = {
+          ...(current.gst || defaultGstSettings),
+          ...updates,
+        };
+        const nextSettings: StoreSettings = { ...current, gst: nextGst };
+        set({ settings: nextSettings });
+
+        logAdminAction('Admin', 'ROOT_ADMIN', 'GST_INFO_UPDATED', 'SETTINGS', 'gst_info', {
+          gstRegisteredBusinessName: nextGst.gstRegisteredBusinessName,
+          gstin: nextGst.gstin,
+          showOnCustomerSite: nextGst.showOnCustomerSite,
+        }).catch((e) => console.warn('Audit log notice:', e));
+
+        if (isSupabaseConfigured()) {
+          supabase
+            .from('store_settings')
+            .upsert({
+              key: 'store_contact',
+              value: nextSettings,
+              updated_at: new Date().toISOString(),
+            })
+            .then(({ error }) => {
+              if (error) console.warn('Supabase GST settings update notice:', error.message);
             });
         }
       },

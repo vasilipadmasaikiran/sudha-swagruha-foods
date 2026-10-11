@@ -380,7 +380,7 @@ export default function CheckoutPage() {
       // Live Razorpay options
       const options = {
         key: razorpayKeyId,
-        amount: total * 100, // paise
+        amount: Math.round(total * 100), // integer paise format (Requirement 1.5, 1.9)
         currency: 'INR',
         name: 'Sudha Swagruha Foods',
         description: 'Authentic Telugu Food Products',
@@ -393,6 +393,7 @@ export default function CheckoutPage() {
         modal: {
           ondismiss: () => {
             setProcessing(false);
+            toast.dismiss();
             toast.error(t.payment.cancelled);
           },
         },
@@ -414,6 +415,12 @@ export default function CheckoutPage() {
       };
 
       const rzp = new window.Razorpay(options);
+      rzp.on('payment.failed', (response: any) => {
+        setProcessing(false);
+        toast.dismiss();
+        const errorDesc = response?.error?.description || response?.error?.reason || 'Transaction declined by bank or gateway';
+        toast.error(`Payment Failed: ${errorDesc}. Order was NOT placed.`);
+      });
       rzp.open();
     } catch (err) {
       toast.dismiss();

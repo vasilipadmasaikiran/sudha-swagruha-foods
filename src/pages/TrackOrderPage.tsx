@@ -43,6 +43,7 @@ import { orderService, supabase, isSupabaseConfigured, normalizeOrderTracking } 
 import type { DbOrder } from '@/services/supabase';
 import { calculateOrderRefundableMetrics } from '@/services/refundService';
 import { calculateOrderPaymentBreakdown } from '@/services/paymentCalculationService';
+import { calculateOrderFinancials } from '@/services/orderCalculationService';
 import toast from 'react-hot-toast';
 
 interface TrackForm {
@@ -1012,19 +1013,20 @@ export default function TrackOrderPage() {
 
                 {/* Financial Reconciliation Summary Breakdown with Authoritative Calculations (Requirements 2, 21) */}
                 {(() => {
+                  const fin = calculateOrderFinancials(activeOrder);
                   const refundMetrics = calculateOrderRefundableMetrics(activeOrder);
-                  const subtotal = activeOrder.subtotal || activeOrder.total;
-                  const itemDiscount = activeOrder.item_discount || 0;
-                  const couponDiscount = activeOrder.coupon_discount || activeOrder.discount || 0;
-                  const totalDiscount = itemDiscount + couponDiscount;
-                  const taxableAmount = activeOrder.taxable_amount || Math.max(0, subtotal - totalDiscount);
-                  const gstRate = activeOrder.gst_rate || 0;
-                  const gstAmount = activeOrder.gst_amount || 0;
-                  const shippingAmount = activeOrder.delivery_charge || 0;
-                  const amountPaid = activeOrder.amount_paid !== undefined ? activeOrder.amount_paid : refundMetrics.paidAmount;
-                  const amountDue = activeOrder.amount_due !== undefined ? activeOrder.amount_due : Math.max(0, activeOrder.total - amountPaid);
-                  const totalRefunded = activeOrder.refunded_amount || refundMetrics.alreadyRefunded;
-                  const remainingRefundable = Math.max(0, amountPaid - totalRefunded);
+                  const subtotal = fin.originalSubtotal;
+                  const itemDiscount = fin.productDiscount;
+                  const couponDiscount = fin.couponDiscount;
+                  const totalDiscount = fin.totalDiscount;
+                  const taxableAmount = fin.taxableAmount;
+                  const gstRate = fin.gstRate;
+                  const gstAmount = fin.gstAmount;
+                  const shippingAmount = fin.shippingAmount;
+                  const amountPaid = fin.totalAmountReceived;
+                  const amountDue = fin.balanceAmount;
+                  const totalRefunded = fin.refundedAmount || refundMetrics.alreadyRefunded;
+                  const remainingRefundable = fin.remainingRefundable;
 
                   // Find latest refund for Current Refund display
                   const refunds = Array.isArray(activeOrder.refunds) ? activeOrder.refunds : [];

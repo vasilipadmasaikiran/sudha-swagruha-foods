@@ -27,7 +27,7 @@ export interface Product {
   name_te: string;
   description_en: string;
   description_te: string;
-  category: 'pickles' | 'karam' | 'masala' | 'podi';
+  category: string; // Dynamically managed via useCategoryStore
   images: string[];
   ingredients_en: string;
   ingredients_te: string;
@@ -62,7 +62,8 @@ export interface Category {
   color: string;
 }
 
-const getImg = (name: string) => import.meta.env.BASE_URL + 'images/' + name;
+const BASE_URL_PATH = (typeof import.meta !== 'undefined' && import.meta.env?.BASE_URL) || '/';
+const getImg = (name: string) => BASE_URL_PATH + 'images/' + name;
 
 export const categories: Category[] = [
   {

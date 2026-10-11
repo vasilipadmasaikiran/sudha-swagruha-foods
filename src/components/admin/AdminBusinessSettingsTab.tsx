@@ -18,19 +18,36 @@ import {
   Image as ImageIcon,
   CheckCircle2,
 } from 'lucide-react';
-import { useSettingsStore, defaultTaxSettings, type StoreSettings } from '@/hooks/useSettingsStore';
+import {
+  useSettingsStore,
+  defaultTaxSettings,
+  defaultFoodLicenseSettings,
+  defaultGstSettings,
+  isValidGstin,
+  isValidFssai,
+  type StoreSettings,
+} from '@/hooks/useSettingsStore';
 import { useAdminAuthStore } from '@/hooks/useAdminAuthStore';
 import { logAdminAction } from '@/services/auditLogger';
 import AppImage from '@/components/common/AppImage';
 import toast from 'react-hot-toast';
 
 export default function AdminBusinessSettingsTab() {
-  const { settings, updateSettings, updateTaxSettings, resetSettings } = useSettingsStore();
+  const {
+    settings,
+    updateSettings,
+    updateTaxSettings,
+    updateFoodLicenseSettings,
+    updateGstSettings,
+    resetSettings,
+  } = useSettingsStore();
   const { currentUser } = useAdminAuthStore();
 
   const [form, setForm] = useState<StoreSettings>({
     ...settings,
     tax: settings.tax || defaultTaxSettings,
+    foodLicense: settings.foodLicense || defaultFoodLicenseSettings,
+    gst: settings.gst || defaultGstSettings,
   });
   const [isSaving, setIsSaving] = useState(false);
 
@@ -41,11 +58,27 @@ export default function AdminBusinessSettingsTab() {
       return;
     }
 
+    if (form.gst?.gstin && !isValidGstin(form.gst.gstin)) {
+      toast.error('Invalid GSTIN format. Expected: 2 digits, 5 letters, 4 digits, 1 letter, 1 alphanumeric, "Z", 1 alphanumeric (e.g. 37AAAAA0000A1Z5)');
+      return;
+    }
+
+    if (form.foodLicense?.foodLicenseNumber && !isValidFssai(form.foodLicense.foodLicenseNumber)) {
+      toast.error('Invalid FSSAI License Number format. Expected 14 digits.');
+      return;
+    }
+
     setIsSaving(true);
     try {
       updateSettings(form);
       if (form.tax) {
         updateTaxSettings(form.tax);
+      }
+      if (form.foodLicense) {
+        updateFoodLicenseSettings(form.foodLicense);
+      }
+      if (form.gst) {
+        updateGstSettings(form.gst);
       }
 
       if (currentUser) {
@@ -55,12 +88,17 @@ export default function AdminBusinessSettingsTab() {
           'UPDATE_BUSINESS_INFO',
           'SETTINGS',
           'store_contact',
-          { businessName: form.businessName, gstRate: form.tax?.gstRate }
+          {
+            businessName: form.businessName,
+            gstRate: form.tax?.gstRate,
+            foodLicense: form.foodLicense?.foodLicenseNumber,
+            gstin: form.gst?.gstin,
+          }
         );
       }
 
       toast.success(
-        `Business branding & Tax settings saved! Storefront updated to "${form.businessName}"`,
+        `Business branding, Food License & GST settings saved! Storefront updated to "${form.businessName}"`,
         { icon: '🌿', duration: 5000 }
       );
     } catch {
@@ -561,6 +599,241 @@ export default function AdminBusinessSettingsTab() {
               )}
             </span>
             <span className="text-[10px] text-slate-500 uppercase font-sans font-bold">Live Synchronized</span>
+          </div>
+        </div>
+
+        {/* ─── SECTION 4: FOOD LICENSE & FSSAI COMPLIANCE (Prompt Section 5.1 & 5.3) ─── */}
+        <div className="bg-slate-950/70 p-6 rounded-3xl border border-slate-800 shadow-xl space-y-4">
+          <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+            <div className="flex items-center gap-2">
+              <span className="text-base">📜</span>
+              <h3 className="text-sm font-bold text-white uppercase tracking-wider">
+                4. Food License Information (FSSAI)
+              </h3>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-slate-400 font-medium mr-1">Show on Customer Site Footer:</span>
+              <button
+                type="button"
+                onClick={() =>
+                  setForm((prev) => ({
+                    ...prev,
+                    foodLicense: {
+                      ...(prev.foodLicense || defaultFoodLicenseSettings),
+                      showOnCustomerSite: !prev.foodLicense?.showOnCustomerSite,
+                    },
+                  }))
+                }
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer flex items-center gap-1.5 ${
+                  form.foodLicense?.showOnCustomerSite
+                    ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-600/30'
+                    : 'bg-slate-800 text-slate-400 border border-slate-700'
+                }`}
+              >
+                <span>{form.foodLicense?.showOnCustomerSite ? 'Footer: ON' : 'Footer: OFF'}</span>
+              </button>
+            </div>
+          </div>
+
+          <p className="text-xs text-slate-400">
+            Configure official Food Safety and Standards Authority of India (FSSAI) credentials. When enabled, details are displayed in the Customer Site footer.
+          </p>
+
+          <div className="grid sm:grid-cols-2 gap-5 pt-2">
+            <div>
+              <label className="block font-bold uppercase tracking-wider text-slate-300 mb-1.5 text-xs">
+                Food Business Name (As per License)
+              </label>
+              <input
+                type="text"
+                value={form.foodLicense?.foodBusinessName || ''}
+                onChange={(e) =>
+                  setForm((prev) => ({
+                    ...prev,
+                    foodLicense: {
+                      ...(prev.foodLicense || defaultFoodLicenseSettings),
+                      foodBusinessName: e.target.value,
+                    },
+                  }))
+                }
+                placeholder="Sudha Swagruha Foods"
+                className="w-full px-3.5 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-white text-xs focus:outline-none focus:border-emerald-500"
+              />
+            </div>
+
+            <div>
+              <label className="block font-bold uppercase tracking-wider text-slate-300 mb-1.5 text-xs flex items-center justify-between">
+                <span>Food License / Registration Number (FSSAI)</span>
+                {form.foodLicense?.foodLicenseNumber && (
+                  <span
+                    className={`text-[10px] font-mono px-2 py-0.5 rounded ${
+                      isValidFssai(form.foodLicense.foodLicenseNumber)
+                        ? 'bg-emerald-500/20 text-emerald-400'
+                        : 'bg-amber-500/20 text-amber-400'
+                    }`}
+                  >
+                    {isValidFssai(form.foodLicense.foodLicenseNumber) ? '✓ 14-digit Valid' : '14 digits required'}
+                  </span>
+                )}
+              </label>
+              <input
+                type="text"
+                maxLength={14}
+                value={form.foodLicense?.foodLicenseNumber || ''}
+                onChange={(e) =>
+                  setForm((prev) => ({
+                    ...prev,
+                    foodLicense: {
+                      ...(prev.foodLicense || defaultFoodLicenseSettings),
+                      foodLicenseNumber: e.target.value.trim(),
+                    },
+                  }))
+                }
+                placeholder="e.g. 10123999000123"
+                className="w-full px-3.5 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-white font-mono text-xs focus:outline-none focus:border-emerald-500"
+              />
+            </div>
+
+            <div>
+              <label className="block font-bold uppercase tracking-wider text-slate-300 mb-1.5 text-xs">
+                License / Registration Type
+              </label>
+              <input
+                type="text"
+                value={form.foodLicense?.licenseType || ''}
+                onChange={(e) =>
+                  setForm((prev) => ({
+                    ...prev,
+                    foodLicense: {
+                      ...(prev.foodLicense || defaultFoodLicenseSettings),
+                      licenseType: e.target.value,
+                    },
+                  }))
+                }
+                placeholder="FSSAI Registration / State License"
+                className="w-full px-3.5 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-white text-xs focus:outline-none focus:border-emerald-500"
+              />
+            </div>
+
+            <div>
+              <label className="block font-bold uppercase tracking-wider text-slate-300 mb-1.5 text-xs">
+                License Validity / Expiry Date (Optional)
+              </label>
+              <input
+                type="text"
+                value={form.foodLicense?.licenseValidity || ''}
+                onChange={(e) =>
+                  setForm((prev) => ({
+                    ...prev,
+                    foodLicense: {
+                      ...(prev.foodLicense || defaultFoodLicenseSettings),
+                      licenseValidity: e.target.value,
+                    },
+                  }))
+                }
+                placeholder="e.g. 31/12/2028 or Valid"
+                className="w-full px-3.5 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-white text-xs focus:outline-none focus:border-emerald-500"
+              />
+            </div>
+          </div>
+        </div>
+
+        {/* ─── SECTION 5: GST INFORMATION (Prompt Section 5.2 & 5.3) ─── */}
+        <div className="bg-slate-950/70 p-6 rounded-3xl border border-slate-800 shadow-xl space-y-4">
+          <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+            <div className="flex items-center gap-2">
+              <span className="text-base">💼</span>
+              <h3 className="text-sm font-bold text-white uppercase tracking-wider">
+                5. GST Business Information
+              </h3>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-slate-400 font-medium mr-1">Show on Customer Site Footer:</span>
+              <button
+                type="button"
+                onClick={() =>
+                  setForm((prev) => ({
+                    ...prev,
+                    gst: {
+                      ...(prev.gst || defaultGstSettings),
+                      showOnCustomerSite: !prev.gst?.showOnCustomerSite,
+                    },
+                  }))
+                }
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer flex items-center gap-1.5 ${
+                  form.gst?.showOnCustomerSite
+                    ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-600/30'
+                    : 'bg-slate-800 text-slate-400 border border-slate-700'
+                }`}
+              >
+                <span>{form.gst?.showOnCustomerSite ? 'Footer: ON' : 'Footer: OFF'}</span>
+              </button>
+            </div>
+          </div>
+
+          <p className="text-xs text-slate-400">
+            Configure official GST Registration information. Server-side format validation verifies the standard 15-character GSTIN structure. Independent toggle controls public display in the footer.
+          </p>
+
+          <div className="grid sm:grid-cols-2 gap-5 pt-2">
+            <div>
+              <label className="block font-bold uppercase tracking-wider text-slate-300 mb-1.5 text-xs">
+                GST Registered Business Legal Name
+              </label>
+              <input
+                type="text"
+                value={form.gst?.gstRegisteredBusinessName || ''}
+                onChange={(e) =>
+                  setForm((prev) => ({
+                    ...prev,
+                    gst: {
+                      ...(prev.gst || defaultGstSettings),
+                      gstRegisteredBusinessName: e.target.value,
+                    },
+                  }))
+                }
+                placeholder="Sudha Swagruha Foods"
+                className="w-full px-3.5 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-white text-xs focus:outline-none focus:border-emerald-500"
+              />
+            </div>
+
+            <div>
+              <label className="block font-bold uppercase tracking-wider text-slate-300 mb-1.5 text-xs flex items-center justify-between">
+                <span>GSTIN (Goods and Services Tax Identification Number)</span>
+                {form.gst?.gstin && (
+                  <span
+                    className={`text-[10px] font-mono px-2 py-0.5 rounded ${
+                      isValidGstin(form.gst.gstin)
+                        ? 'bg-emerald-500/20 text-emerald-400'
+                        : 'bg-amber-500/20 text-amber-400'
+                    }`}
+                  >
+                    {isValidGstin(form.gst.gstin) ? '✓ Valid Format' : 'Invalid Format (15 chars)'}
+                  </span>
+                )}
+              </label>
+              <input
+                type="text"
+                maxLength={15}
+                value={form.gst?.gstin || ''}
+                onChange={(e) => {
+                  const val = e.target.value.toUpperCase().trim();
+                  setForm((prev) => ({
+                    ...prev,
+                    gst: {
+                      ...(prev.gst || defaultGstSettings),
+                      gstin: val,
+                    },
+                    tax: {
+                      ...(prev.tax || defaultTaxSettings),
+                      gstNumber: val,
+                    },
+                  }));
+                }}
+                placeholder="37AAAAA0000A1Z5"
+                className="w-full px-3.5 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-white font-mono text-xs uppercase focus:outline-none focus:border-emerald-500"
+              />
+            </div>
           </div>
         </div>
 

@@ -30,7 +30,10 @@ export interface DiscountAnnouncement {
 export interface CouponItem {
   id: string;
   code: string;
-  discountPercent: number;
+  discountType?: 'percentage' | 'fixed';
+  discountAmount?: number; // Fixed discount amount in INR
+  discountPercent: number; // Percentage discount, e.g. 10 for 10%
+  maxDiscount?: number; // Maximum discount cap in INR
   description: string;
   minOrder: number;
   isActive: boolean;

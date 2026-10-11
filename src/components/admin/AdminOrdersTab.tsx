@@ -41,6 +41,7 @@ import { useAdminAuthStore } from '@/hooks/useAdminAuthStore';
 import { useSettingsStore } from '@/hooks/useSettingsStore';
 import { EmailService } from '@/services/emailService';
 import AdminPaymentInfoSubTab from './AdminPaymentInfoSubTab';
+import AdminDeliverySlipModal from './AdminDeliverySlipModal';
 import { logAdminAction } from '@/services/auditLogger';
 import { calculateOrderRefundableMetrics, roundToTwoDecimals } from '@/services/refundService';
 import { calculateOrderFinancials, type OrderFinancialSummary } from '@/services/orderCalculationService';
@@ -106,6 +107,7 @@ export default function AdminOrdersTab({ initialSubFilter }: { initialSubFilter?
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>(initialSubFilter || 'all');
   const [selectedOrder, setSelectedOrder] = useState<DbOrder | null>(null);
+  const [deliverySlipOrder, setDeliverySlipOrder] = useState<DbOrder | null>(null);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
 
   useEffect(() => {
@@ -1570,12 +1572,23 @@ export default function AdminOrdersTab({ initialSubFilter }: { initialSubFilter?
                     {selectedOrder.order_number}
                   </p>
                 </div>
-                <button
-                  onClick={() => setSelectedOrder(null)}
-                  className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 cursor-pointer"
-                >
-                  <X className="w-4 h-4" />
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setDeliverySlipOrder(selectedOrder)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded-xl border border-slate-700 transition cursor-pointer"
+                    title="Generate Printable Delivery Slip / Package Label"
+                  >
+                    <Truck className="w-3.5 h-3.5 text-emerald-400" />
+                    <span>Print Delivery Slip</span>
+                  </button>
+                  <button
+                    onClick={() => setSelectedOrder(null)}
+                    className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 cursor-pointer"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
               </div>
 
               {/* Status Updater */}
@@ -3708,6 +3721,12 @@ export default function AdminOrdersTab({ initialSubFilter }: { initialSubFilter?
           </div>
         )}
       </AnimatePresence>
+
+      {/* ─── MODAL 6: PRINTABLE DELIVERY SLIP (Section 6) ─── */}
+      <AdminDeliverySlipModal
+        order={deliverySlipOrder}
+        onClose={() => setDeliverySlipOrder(null)}
+      />
     </div>
   );
 }

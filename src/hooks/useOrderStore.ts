@@ -11,7 +11,7 @@ import { RefundService, calculateOrderRefundableMetrics, roundToTwoDecimals } fr
 import { NotificationService } from '@/services/notificationService';
 import { useSettingsStore } from '@/hooks/useSettingsStore';
 import { useProductStore } from '@/hooks/useProductStore';
-import { roundToTwo, derivePaymentStatus, validateManualPayment } from '@/services/orderCalculationService';
+import { roundToTwo, derivePaymentStatus, validateManualPayment, calculateOrderFinancials } from '@/services/orderCalculationService';
 import { logAdminAction } from '@/services/auditLogger';
 import {
   calculateOrderPaymentBreakdown,
@@ -1835,10 +1835,13 @@ export const useOrderStore = create<OrderStore>()(
 
           const now = new Date().toISOString();
 
-          // 1. Recalculate Order Total (Product Total + Final Shipping Charge - Discounts)
-          const subtotal = roundToTwo(Number(order.subtotal || 0));
-          const discount = roundToTwo(Number(order.discount || 0));
-          const newOrderTotal = Math.max(0, roundToTwo(subtotal + roundedNewShipping - discount));
+          // 1. Recalculate Order Total using Authoritative Financial Engine
+          const fin = calculateOrderFinancials({
+            ...order,
+            delivery_charge: roundedNewShipping,
+            admin_shipping_override: roundedNewShipping,
+          });
+          const newOrderTotal = fin.finalOrderTotal;
 
           // 2. Shipping Audit Trail (Requirement 1.7)
           const auditItem: ShippingAuditItem = {

@@ -8,6 +8,7 @@ import { useLanguageStore } from '@/hooks/useStore';
 import { useProductStore } from '@/hooks/useProductStore';
 import { translations } from '@/i18n/translations';
 import { getCategoryBySlug } from '@/data/products';
+import { useCategoryStore } from '@/hooks/useCategoryStore';
 import ProductCard from '@/components/ProductCard';
 import AppImage from '@/components/common/AppImage';
 
@@ -15,10 +16,11 @@ export default function CategoryPage() {
   const { slug } = useParams<{ slug: string }>();
   const { language } = useLanguageStore();
   const { products: allProducts } = useProductStore();
+  const { getCategoryBySlug: getManagedCategory } = useCategoryStore();
   const t = translations[language];
 
-  const category = getCategoryBySlug(slug ?? '');
-  const products = allProducts.filter((p) => p.category === slug && p.is_active);
+  const category = getManagedCategory(slug ?? '') || getCategoryBySlug(slug ?? '');
+  const products = allProducts.filter((p) => p.category?.toLowerCase() === slug?.toLowerCase() && p.is_active);
 
   if (!category) {
     return (

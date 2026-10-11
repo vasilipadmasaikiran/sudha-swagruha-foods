@@ -49,15 +49,20 @@ import {
   Lock,
   Scale,
   RotateCcw,
+  FolderTree,
 } from 'lucide-react';
 import { useProductStore, type DiscountAnnouncement, type CouponItem } from '@/hooks/useProductStore';
 import { useAuthStore } from '@/hooks/useStore';
 import { useOrderStore } from '@/hooks/useOrderStore';
 import { useSettingsStore } from '@/hooks/useSettingsStore';
+import { useCategoryStore } from '@/hooks/useCategoryStore';
 import { roundToTwo } from '@/services/orderCalculationService';
 import { supabase } from '@/services/supabase';
 import AdminLoginForm from '@/components/admin/AdminLoginForm';
 import AdminOrdersTab from '@/components/admin/AdminOrdersTab';
+import AdminPaymentInfoSubTab from '@/components/admin/AdminPaymentInfoSubTab';
+import AdminPaymentsModule from '@/components/admin/AdminPaymentsModule';
+import AdminCategoriesTab from '@/components/admin/AdminCategoriesTab';
 import AdminInventoryTab from '@/components/admin/AdminInventoryTab';
 import AdminUsersTab from '@/components/admin/AdminUsersTab';
 import AdminPromotionsTab from '@/components/admin/AdminPromotionsTab';
@@ -84,8 +89,10 @@ import toast from 'react-hot-toast';
 export type ActiveCategoryTab =
   | 'dashboard'
   | 'sales'
+  | 'payments'
   | 'orders'
   | 'products'
+  | 'categories'
   | 'inventory'
   | 'customers'
   | 'promotions'
@@ -135,6 +142,7 @@ export default function AdminConsolePage() {
   const { isAdmin, userEmail, logout, setAdmin } = useAuthStore();
   const { orders } = useOrderStore();
   const { settings } = useSettingsStore();
+  const { categories: dynamicCategories } = useCategoryStore();
   const { currentUser, canAccess, users, login: rbacLogin } = useAdminAuthStore();
 
   const {
@@ -335,10 +343,12 @@ export default function AdminConsolePage() {
     roleRequired?: string;
   }> = [
     { id: 'dashboard', label: 'Dashboard', icon: Sliders },
+    { id: 'payments', label: 'Payments', icon: CreditCard },
     { id: 'sales', label: 'Sales & Financials', icon: IndianRupee },
     { id: 'reconciliation', label: 'Financial Audit', icon: Scale, roleRequired: 'ROOT_ADMIN' },
     { id: 'orders', label: 'Orders', icon: ShoppingBag, badge: orders.length },
     { id: 'products', label: 'Products', icon: Package, badge: products.length },
+    { id: 'categories', label: 'Categories', icon: FolderTree },
     {
       id: 'inventory',
       label: 'Inventory',
@@ -386,6 +396,16 @@ export default function AdminConsolePage() {
       setAdmin(true, 'orders@sudhaswagruha.com');
       setActiveTab('orders');
       toast.success('Switched to Order Processor (Orders only)');
+    } else if (targetRole === 'PRODUCT_MANAGER') {
+      await rbacLogin('products@sudhaswagruha.com', 'prod123');
+      setAdmin(true, 'products@sudhaswagruha.com');
+      setActiveTab('products');
+      toast.success('Switched to Product Manager (Catalog & Categories)');
+    } else if (targetRole === 'FINANCE_MANAGER') {
+      await rbacLogin('finance@sudhaswagruha.com', 'finance123');
+      setAdmin(true, 'finance@sudhaswagruha.com');
+      setActiveTab('payments');
+      toast.success('Switched to Finance & Payment Manager (Payments & Ledger)');
     }
   };
 
@@ -820,6 +840,15 @@ export default function AdminConsolePage() {
                 <AdminDashboardTab onNavigateToTab={(tab) => setActiveTab(tab as ActiveCategoryTab)} />
               )}
               {activeTab === 'sales' && <AdminSalesTab />}
+              {activeTab === 'payments' && (
+                <AdminPaymentsModule
+                  onSelectOrder={() => {
+                    setActiveTab('orders');
+                    setOrdersSubFilter('all');
+                  }}
+                />
+              )}
+              {activeTab === 'categories' && <AdminCategoriesTab />}
               {activeTab === 'reconciliation' && <AdminReconciliationTab />}
               {activeTab === 'orders' && <AdminOrdersTab initialSubFilter={ordersSubFilter} />}
 
@@ -1211,10 +1240,11 @@ export default function AdminConsolePage() {
                   className="px-3.5 py-2 bg-slate-900 border border-slate-700/80 rounded-xl text-sm text-slate-300 focus:outline-none focus:border-emerald-500"
                 >
                   <option value="all">All Categories</option>
-                  <option value="pickles">🫙 Pickles (ఊరగాయలు)</option>
-                  <option value="karam">🌶️ Karam Powders (కారాలు)</option>
-                  <option value="masala">🌿 Masala Powders (మసాలాలు)</option>
-                  <option value="podi">🍚 Podis (పొడులు)</option>
+                  {dynamicCategories.map((c) => (
+                    <option key={c.id} value={c.slug}>
+                      {c.name}
+                    </option>
+                  ))}
                 </select>
 
                 {/* Status Filter */}
@@ -2031,10 +2061,11 @@ function ProductEditorModal({
   onSave: (data: Partial<Product>) => void;
 }) {
   const isEdit = !!product;
+  const { categories: modalCategories } = useCategoryStore();
 
   const [nameEn, setNameEn] = useState(product?.name_en || '');
   const [nameTe, setNameTe] = useState(product?.name_te || '');
-  const [category, setCategory] = useState<Product['category']>(product?.category || 'pickles');
+  const [category, setCategory] = useState<string>(product?.category || (modalCategories[0]?.slug || 'pickles'));
   const [slug, setSlug] = useState(product?.slug || '');
   const [badge, setBadge] = useState<Product['badge']>(product?.badge || undefined);
   const [descriptionEn, setDescriptionEn] = useState(product?.description_en || '');
@@ -2259,13 +2290,16 @@ function ProductEditorModal({
                 <label className="block text-xs font-semibold text-slate-300 mb-1">Category *</label>
                 <select
                   value={category}
-                  onChange={(e) => setCategory(e.target.value as Product['category'])}
+                  onChange={(e) => setCategory(e.target.value)}
                   className="w-full px-3.5 py-2 bg-slate-800 border border-slate-700 rounded-xl text-sm text-white focus:outline-none focus:border-emerald-500"
                 >
-                  <option value="pickles">🫙 Pickles (ఊరగాయలు)</option>
-                  <option value="karam">🌶️ Karam Powders (కారాలు)</option>
-                  <option value="masala">🌿 Masala Powders (మసాలాలు)</option>
-                  <option value="podi">🍚 Podis (పొడులు)</option>
+                  {modalCategories
+                    .filter((c) => c.isActive)
+                    .map((cat) => (
+                      <option key={cat.id} value={cat.slug}>
+                        {cat.name} ({cat.slug})
+                      </option>
+                    ))}
                 </select>
               </div>
 

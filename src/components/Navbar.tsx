@@ -8,6 +8,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { useCartStore, useLanguageStore, useUIStore } from '@/hooks/useStore';
 import { useSettingsStore } from '@/hooks/useSettingsStore';
 import { useCustomerAuthStore } from '@/hooks/useCustomerAuthStore';
+import { useCategoryStore } from '@/hooks/useCategoryStore';
 import { translations } from '@/i18n/translations';
 import AnnouncementBar from '@/components/AnnouncementBar';
 import AppImage from '@/components/common/AppImage';
@@ -37,12 +38,20 @@ export default function Navbar() {
     closeMobileMenu();
   }, [location.pathname, closeMobileMenu]);
 
-  const categories = [
-    { slug: 'pickles', label: t.categories.pickles, icon: '🫙' },
-    { slug: 'karam', label: t.categories.karam, icon: '🌶️' },
-    { slug: 'masala', label: t.categories.masala, icon: '🌿' },
-    { slug: 'podi', label: t.categories.podi, icon: '🍚' },
-  ];
+  const { getVisibleCustomerCategories } = useCategoryStore();
+  const visibleCategories = getVisibleCustomerCategories();
+  const categories = visibleCategories.length > 0
+    ? visibleCategories.map((c) => ({
+        slug: c.slug,
+        label: language === 'te' ? (c.name_te || c.name_en) : c.name_en,
+        icon: c.icon || '📦',
+      }))
+    : [
+        { slug: 'pickles', label: t.categories.pickles, icon: '🫙' },
+        { slug: 'karam', label: t.categories.karam, icon: '🌶️' },
+        { slug: 'masala', label: t.categories.masala, icon: '🌿' },
+        { slug: 'podi', label: t.categories.podi, icon: '🍚' },
+      ];
 
   const navLinks = [
     { href: '/', label: t.nav.home },

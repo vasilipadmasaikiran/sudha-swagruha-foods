@@ -12,7 +12,7 @@ const getEnvOrStored = (key: string, storedKey: string, fallback: string): strin
     const stored = localStorage.getItem(storedKey);
     if (stored && stored.trim()) return stored.trim();
   }
-  const envVal = import.meta.env[key] as string | undefined;
+  const envVal = (typeof import.meta !== 'undefined' && import.meta.env) ? (import.meta.env[key] as string | undefined) : undefined;
   if (envVal && !envVal.includes('placeholder') && !envVal.includes('your-project-id')) {
     return envVal.trim();
   }

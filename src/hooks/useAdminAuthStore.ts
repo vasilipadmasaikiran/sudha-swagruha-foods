@@ -9,7 +9,12 @@ import { persist } from 'zustand/middleware';
 import { supabase, isSupabaseConfigured } from '@/services/supabase';
 import { logAdminAction } from '@/services/auditLogger';
 
-export type AdminRole = 'ROOT_ADMIN' | 'STORE_KEEPER' | 'ORDER_PROCESSOR';
+export type AdminRole =
+  | 'ROOT_ADMIN'
+  | 'STORE_KEEPER'
+  | 'ORDER_PROCESSOR'
+  | 'PRODUCT_MANAGER'
+  | 'FINANCE_MANAGER';
 
 export interface AdminUser {
   id: string;
@@ -26,8 +31,10 @@ export interface AdminUser {
 export type AdminCategory =
   | 'dashboard'
   | 'sales'
+  | 'payments'
   | 'orders'
   | 'products'
+  | 'categories'
   | 'inventory'
   | 'customers'
   | 'users'
@@ -56,6 +63,8 @@ export interface RolePermissions {
   canViewRefunds: boolean;
   canManageInventory: boolean;
   canManageProducts: boolean;
+  canManageCategories?: boolean;
+  canManagePayments?: boolean;
   canViewReports: boolean;
   canManageAboutUs: boolean;
   canViewPromotions: boolean;
@@ -70,7 +79,7 @@ export const ROLE_DEFINITIONS: Record<AdminRole, RolePermissions> = {
   ROOT_ADMIN: {
     name: 'Root / Super Admin',
     description: 'Full unrestricted access to all administration modules, user roles, orders, settings, website content, and business configurations.',
-    allowedCategories: ['dashboard', 'sales', 'orders', 'products', 'inventory', 'customers', 'users', 'promotions', 'website', 'settings', 'reconciliation'],
+    allowedCategories: ['dashboard', 'sales', 'payments', 'orders', 'products', 'categories', 'inventory', 'customers', 'users', 'promotions', 'website', 'settings', 'reconciliation'],
     canManageUsers: true,
     canManageRoles: true,
     canConfigureSettings: true,
@@ -83,6 +92,8 @@ export const ROLE_DEFINITIONS: Record<AdminRole, RolePermissions> = {
     canViewRefunds: true,
     canManageInventory: true,
     canManageProducts: true,
+    canManageCategories: true,
+    canManagePayments: true,
     canViewReports: true,
     canManageAboutUs: true,
     canViewPromotions: true,
@@ -108,6 +119,8 @@ export const ROLE_DEFINITIONS: Record<AdminRole, RolePermissions> = {
     canViewRefunds: false,
     canManageInventory: true,
     canManageProducts: false,
+    canManageCategories: false,
+    canManagePayments: false,
     canViewReports: false,
     canManageAboutUs: false,
     canViewPromotions: false,
@@ -120,7 +133,7 @@ export const ROLE_DEFINITIONS: Record<AdminRole, RolePermissions> = {
   ORDER_PROCESSOR: {
     name: 'Order Processor',
     description: 'Restricted to customer order fulfillment, item removals, cancellations, refunds, courier tracking, and shipping adjustments.',
-    allowedCategories: ['orders', 'shipping'],
+    allowedCategories: ['orders', 'payments', 'shipping'],
     canManageUsers: false,
     canManageRoles: false,
     canConfigureSettings: false,
@@ -133,6 +146,8 @@ export const ROLE_DEFINITIONS: Record<AdminRole, RolePermissions> = {
     canViewRefunds: true,
     canManageInventory: false,
     canManageProducts: false,
+    canManageCategories: false,
+    canManagePayments: false,
     canViewReports: false,
     canManageAboutUs: false,
     canViewPromotions: false,
@@ -141,6 +156,60 @@ export const ROLE_DEFINITIONS: Record<AdminRole, RolePermissions> = {
     canManagePromotionTemplates: false,
     canApproveCancellationRequests: true,
     canRejectCancellationRequests: true,
+  },
+  PRODUCT_MANAGER: {
+    name: 'Product Manager',
+    description: 'Authorized to create & edit catalog products, manage categories, hierarchy, and stock levels.',
+    allowedCategories: ['products', 'categories', 'inventory'],
+    canManageUsers: false,
+    canManageRoles: false,
+    canConfigureSettings: false,
+    canConfigureEmail: false,
+    canConfigureSms: false,
+    canProcessOrders: false,
+    canCancelOrders: false,
+    canRemoveOrderItems: false,
+    canInitiateRefunds: false,
+    canViewRefunds: false,
+    canManageInventory: true,
+    canManageProducts: true,
+    canManageCategories: true,
+    canManagePayments: false,
+    canViewReports: false,
+    canManageAboutUs: false,
+    canViewPromotions: false,
+    canCreatePromotions: false,
+    canSendPromotions: false,
+    canManagePromotionTemplates: false,
+    canApproveCancellationRequests: false,
+    canRejectCancellationRequests: false,
+  },
+  FINANCE_MANAGER: {
+    name: 'Finance & Payment Manager',
+    description: 'Centralized access to payment overview, transactions ledger, refund settlements, and financial audit reconciliation.',
+    allowedCategories: ['dashboard', 'sales', 'payments', 'reconciliation'],
+    canManageUsers: false,
+    canManageRoles: false,
+    canConfigureSettings: false,
+    canConfigureEmail: false,
+    canConfigureSms: false,
+    canProcessOrders: false,
+    canCancelOrders: false,
+    canRemoveOrderItems: false,
+    canInitiateRefunds: true,
+    canViewRefunds: true,
+    canManageInventory: false,
+    canManageProducts: false,
+    canManageCategories: false,
+    canManagePayments: true,
+    canViewReports: true,
+    canManageAboutUs: false,
+    canViewPromotions: false,
+    canCreatePromotions: false,
+    canSendPromotions: false,
+    canManagePromotionTemplates: false,
+    canApproveCancellationRequests: false,
+    canRejectCancellationRequests: false,
   },
 };
 
@@ -192,6 +261,28 @@ const DEFAULT_ADMIN_USERS: AdminUser[] = [
     password_hash: '4cb4be123681e0da59d6073250033eefed8f8a2a773d3e9d06862438b9df4870',
     created_at: new Date(Date.now() - 3600000 * 24 * 10).toISOString(),
     last_login: new Date(Date.now() - 3600000 * 2).toISOString(),
+  },
+  {
+    id: 'user-prod-04',
+    username: 'productmanager',
+    email: 'products@sudhaswagruha.com',
+    full_name: 'Lakshmi Prasanna (Product Manager)',
+    role: 'PRODUCT_MANAGER',
+    status: 'active',
+    password_hash: '97f08b12c985e818cb86cd3d6f7c4dec65a586d95874ce54db426d20d383ab2a',
+    created_at: new Date(Date.now() - 3600000 * 24 * 7).toISOString(),
+    last_login: new Date(Date.now() - 3600000 * 1).toISOString(),
+  },
+  {
+    id: 'user-fin-05',
+    username: 'financemanager',
+    email: 'finance@sudhaswagruha.com',
+    full_name: 'Suresh Kumar (Finance Manager)',
+    role: 'FINANCE_MANAGER',
+    status: 'active',
+    password_hash: '48f7312924d74358e75294e3b3613f2319d99e944184b69550f528577ca082fb',
+    created_at: new Date(Date.now() - 3600000 * 24 * 5).toISOString(),
+    last_login: new Date(Date.now() - 3600000 * 1).toISOString(),
   },
 ];
 

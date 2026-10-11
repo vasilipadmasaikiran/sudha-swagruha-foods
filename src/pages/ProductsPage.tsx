@@ -7,22 +7,27 @@ import { motion } from 'framer-motion';
 import { useLanguageStore } from '@/hooks/useStore';
 import { useProductStore } from '@/hooks/useProductStore';
 import { translations } from '@/i18n/translations';
-import { categories } from '@/data/products';
+import { categories as defaultCategories } from '@/data/products';
+import { useCategoryStore } from '@/hooks/useCategoryStore';
 import ProductCard from '@/components/ProductCard';
 
 export default function ProductsPage() {
   const { language } = useLanguageStore();
   const { products } = useProductStore();
+  const { getVisibleCustomerCategories } = useCategoryStore();
   const t = translations[language];
   const [search, setSearch] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('all');
   const [sortBy, setSortBy] = useState('default');
 
+  const visibleCategories = getVisibleCustomerCategories();
+  const displayCategories = visibleCategories.length > 0 ? visibleCategories : defaultCategories;
+
   const filtered = useMemo(() => {
     let result = products.filter((p) => p.is_active);
 
     if (selectedCategory !== 'all') {
-      result = result.filter((p) => p.category === selectedCategory);
+      result = result.filter((p) => p.category?.toLowerCase() === selectedCategory.toLowerCase());
     }
 
     if (search.trim()) {
@@ -111,7 +116,7 @@ export default function ProductsPage() {
           >
             {t.common.all} ({products.length})
           </button>
-          {categories.map((cat) => (
+          {displayCategories.map((cat) => (
             <button
               key={cat.slug}
               onClick={() => setSelectedCategory(cat.slug)}
@@ -122,7 +127,7 @@ export default function ProductsPage() {
               }`}
             >
               {cat.icon}
-              {language === 'te' ? cat.name_te : cat.name_en}
+              {language === 'te' ? (cat.name_te || cat.name_en) : cat.name_en}
             </button>
           ))}
         </div>

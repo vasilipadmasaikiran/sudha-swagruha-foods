@@ -11,17 +11,35 @@ import AppImage from '@/components/common/AppImage';
 
 const defaultLogo = (import.meta.env.BASE_URL || '/') + 'logo/logo.jpg';
 
+import { useCategoryStore } from '@/hooks/useCategoryStore';
+import { ShieldCheck, Award } from 'lucide-react';
+
 export default function Footer() {
   const { language } = useLanguageStore();
   const { settings } = useSettingsStore();
+  const { getVisibleCustomerCategories } = useCategoryStore();
   const t = translations[language];
 
-  const categories = [
-    { slug: 'pickles', label: t.categories.pickles },
-    { slug: 'karam', label: t.categories.karam },
-    { slug: 'masala', label: t.categories.masala },
-    { slug: 'podi', label: t.categories.podi },
-  ];
+  const visibleCategories = getVisibleCustomerCategories();
+  const categories = visibleCategories.length > 0
+    ? visibleCategories.map((c) => ({
+        slug: c.slug,
+        label: language === 'te' ? (c.name_te || c.name_en) : c.name_en,
+      }))
+    : [
+        { slug: 'pickles', label: t.categories.pickles },
+        { slug: 'karam', label: t.categories.karam },
+        { slug: 'masala', label: t.categories.masala },
+        { slug: 'podi', label: t.categories.podi },
+      ];
+
+  const showFoodLicense =
+    Boolean(settings.foodLicense?.showOnCustomerSite) &&
+    Boolean(settings.foodLicense?.foodLicenseNumber?.trim());
+
+  const showGst =
+    Boolean(settings.gst?.showOnCustomerSite) &&
+    Boolean(settings.gst?.gstin?.trim());
 
   const quickLinks = [
     { href: '/', label: t.nav.home },
@@ -158,6 +176,53 @@ export default function Footer() {
           </ul>
         </div>
       </div>
+
+      {/* Regulatory & Business Information (Section 4 & 5) */}
+      {(showFoodLicense || showGst) && (
+        <div className="border-t border-gray-800/80 bg-gray-950/60 py-4 px-4 sm:px-6">
+          <div className="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-4 text-xs">
+            <div className="flex items-center gap-2 text-gray-400">
+              <ShieldCheck className="w-4 h-4 text-emerald-400 flex-shrink-0" />
+              <span className="font-semibold text-gray-300 uppercase tracking-wider text-[11px]">
+                Business Regulatory Information
+              </span>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-6 text-gray-300">
+              {showFoodLicense && (
+                <div className="flex items-center gap-2 bg-gray-900 px-3 py-1.5 rounded-lg border border-gray-800">
+                  <Award className="w-3.5 h-3.5 text-amber-400 flex-shrink-0" />
+                  <span className="text-gray-400">
+                    {settings.foodLicense?.licenseType || 'Food License'}:
+                  </span>
+                  <span className="font-mono font-bold text-amber-300">
+                    {settings.foodLicense?.foodLicenseNumber}
+                  </span>
+                  {settings.foodLicense?.licenseValidity && (
+                    <span className="text-[10px] text-gray-500 font-sans">
+                      (Valid: {settings.foodLicense.licenseValidity})
+                    </span>
+                  )}
+                </div>
+              )}
+
+              {showGst && (
+                <div className="flex items-center gap-2 bg-gray-900 px-3 py-1.5 rounded-lg border border-gray-800">
+                  <span className="text-gray-400">GSTIN:</span>
+                  <span className="font-mono font-bold text-emerald-400">
+                    {settings.gst?.gstin}
+                  </span>
+                  {settings.gst?.gstRegisteredBusinessName && (
+                    <span className="text-[10px] text-gray-400 font-sans">
+                      ({settings.gst.gstRegisteredBusinessName})
+                    </span>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Bottom Bar */}
       <div className="border-t border-gray-800 py-5 px-4">

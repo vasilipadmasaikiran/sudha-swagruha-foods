@@ -46,12 +46,16 @@ export interface CalculationStep {
 export interface OrderFinancialSummary {
   // Subtotals & Discounts
   originalSubtotal: number; // Gross sum of (unit_price * quantity) of all items before cancellations
+  originalAmount: number; // Alias for originalSubtotal (Total price before discounts - Requirement 1.2)
+  originalProductSubtotal: number; // Explicit authoritative alias
   productDiscount: number; // Item-level discounts
   itemDiscount: number; // Alias for productDiscount
   subtotalAfterItemDiscount: number;
   orderDiscount: number; // Order/Coupon discount
   couponDiscount: number; // Alias for orderDiscount
-  totalDiscount: number; // productDiscount + orderDiscount
+  campaignDiscount: number; // Campaign / storewide promotional discount
+  totalDiscount: number; // productDiscount + orderDiscount + campaignDiscount
+  discountAmount: number; // Alias for totalDiscount (Total eligible discount - Requirement 1.2)
   
   // Cancellations & Returns
   cancelledAmount: number; // Value of cancelled / removed items (gross)
@@ -71,6 +75,7 @@ export interface OrderFinancialSummary {
 
   // Delivery / Shipping
   calculatedShipping: number; // Original calculated delivery fee
+  shippingCharge: number; // Alias for calculatedShipping
   shippingOverride?: number; // Admin override delivery fee if set
   finalShipping: number; // Effective shipping fee applied
   shippingAmount: number; // Alias for finalShipping
@@ -83,6 +88,7 @@ export interface OrderFinancialSummary {
   originalOrderTotal: number; // Order total before cancellations
   adjustedOrderTotal: number; // Order total after item cancellations
   finalOrderTotal: number; // Final payable amount (adjustedSubtotal + finalShipping + tax + otherCharges)
+  finalAmount: number; // Alias for finalOrderTotal (Final adjusted amount payable - Requirement 1.2)
   grandTotal: number; // Alias for finalOrderTotal
 
   // Payment Reconciliation
@@ -92,6 +98,7 @@ export interface OrderFinancialSummary {
   amountDue: number; // Alias for balanceAmount
   excessAmount: number; // Math.max(0, totalAmountReceived - finalOrderTotal)
   refundAmount: number; // Total refund required / due
+  refundDue: number; // Explicit refund due
   refundedAmount: number; // Amount actually refunded
   amountRefunded: number; // Alias for refundedAmount
   pendingRefundAmount: number; // Refund initiated but pending processing
@@ -148,12 +155,16 @@ export function calculateOrderFinancials(inputsOrOrder: any): OrderFinancialSumm
   if (!inputsOrOrder) {
     return {
       originalSubtotal: 0,
+      originalAmount: 0,
+      originalProductSubtotal: 0,
       productDiscount: 0,
       itemDiscount: 0,
       subtotalAfterItemDiscount: 0,
       orderDiscount: 0,
       couponDiscount: 0,
+      campaignDiscount: 0,
       totalDiscount: 0,
+      discountAmount: 0,
       cancelledGrossAmount: 0,
       cancelledAllocatedDiscount: 0,
       refundableCancelledAmount: 0,
@@ -167,12 +178,14 @@ export function calculateOrderFinancials(inputsOrOrder: any): OrderFinancialSumm
       gstAmount: 0,
       taxAmount: 0,
       calculatedShipping: 0,
+      shippingCharge: 0,
       finalShipping: 0,
       shippingAmount: 0,
       otherCharges: 0,
       originalOrderTotal: 0,
       adjustedOrderTotal: 0,
       finalOrderTotal: 0,
+      finalAmount: 0,
       grandTotal: 0,
       totalAmountReceived: 0,
       amountPaid: 0,
@@ -180,6 +193,7 @@ export function calculateOrderFinancials(inputsOrOrder: any): OrderFinancialSumm
       amountDue: 0,
       excessAmount: 0,
       refundAmount: 0,
+      refundDue: 0,
       refundedAmount: 0,
       amountRefunded: 0,
       pendingRefundAmount: 0,
@@ -230,26 +244,50 @@ export function calculateOrderFinancials(inputsOrOrder: any): OrderFinancialSumm
   }
 
   // Fallback if order has top-level subtotal but no items array populated
-  if (items.length === 0 && inputsOrOrder.subtotal !== undefined) {
-    grossSubtotal = roundToTwo(Number(inputsOrOrder.subtotal));
+  if (items.length === 0) {
+    if (inputsOrOrder.originalSubtotal !== undefined) {
+      grossSubtotal = roundToTwo(Number(inputsOrOrder.originalSubtotal));
+    } else if (inputsOrOrder.original_subtotal !== undefined) {
+      grossSubtotal = roundToTwo(Number(inputsOrOrder.original_subtotal));
+    } else if (inputsOrOrder.gross_subtotal !== undefined) {
+      grossSubtotal = roundToTwo(Number(inputsOrOrder.gross_subtotal));
+    } else if (inputsOrOrder.subtotal !== undefined) {
+      const rawSub = roundToTwo(Number(inputsOrOrder.subtotal));
+      const rawTot = inputsOrOrder.total !== undefined ? roundToTwo(Number(inputsOrOrder.total)) : undefined;
+      const rawDisc = inputsOrOrder.discount !== undefined ? roundToTwo(Number(inputsOrOrder.discount)) : 0;
+      // CRITICAL PREVENT DOUBLE DISCOUNT DEDUCTION (Section 2.3):
+      // If rawSub <= rawTot (or rawSub === rawTot) while rawDisc > 0, the stored subtotal
+      // was already recorded AFTER discount deduction!
+      // In that case, the original subtotal before discounts was rawSub + rawDisc.
+      if (rawTot !== undefined && rawDisc > 0 && Math.abs(rawSub - rawTot) <= 0.05) {
+        grossSubtotal = roundToTwo(rawSub + rawDisc);
+      } else {
+        grossSubtotal = rawSub;
+      }
+    }
   }
 
   const originalSubtotal = roundToTwo(grossSubtotal);
   const cancelledGrossAmount = roundToTwo(cancelledItemsVal);
   const productDiscount = roundToTwo(itemDiscountVal);
 
-  // 2. Order / Coupon Discount (Original Order Level)
+  // 2. Separate Discount Types (Section 2.4: Product, Coupon, Campaign)
   let originalOrderDiscount = 0;
+  const campaignDiscount = roundToTwo(Number(inputsOrOrder.campaign_discount || inputsOrOrder.campaignDiscount || 0));
+
   if (inputsOrOrder.fixedCouponDiscount && inputsOrOrder.fixedCouponDiscount > 0) {
     originalOrderDiscount = roundToTwo(inputsOrOrder.fixedCouponDiscount);
   } else if (inputsOrOrder.couponDiscountPercent && inputsOrOrder.couponDiscountPercent > 0) {
     originalOrderDiscount = roundToTwo((originalSubtotal * inputsOrOrder.couponDiscountPercent) / 100);
   } else if (inputsOrOrder.coupon_discount !== undefined) {
     originalOrderDiscount = roundToTwo(Number(inputsOrOrder.coupon_discount));
-  } else if (inputsOrOrder.discount !== undefined) {
-    originalOrderDiscount = roundToTwo(Number(inputsOrOrder.discount));
   } else if (inputsOrOrder.order_discount !== undefined) {
     originalOrderDiscount = roundToTwo(Number(inputsOrOrder.order_discount));
+  } else if (inputsOrOrder.discount_amount !== undefined) {
+    originalOrderDiscount = Math.max(0, roundToTwo(Number(inputsOrOrder.discount_amount) - productDiscount - campaignDiscount));
+  } else if (inputsOrOrder.discount !== undefined) {
+    // Prevent double counting if item-level or campaign discounts were already captured
+    originalOrderDiscount = Math.max(0, roundToTwo(Number(inputsOrOrder.discount) - productDiscount - campaignDiscount));
   }
 
   // 3. Proportional Discount Allocation on Cancelled Items (Requirements 1.1 - 1.7)
@@ -259,7 +297,7 @@ export function calculateOrderFinancials(inputsOrOrder: any): OrderFinancialSumm
   if (isOrderCancelled) {
     cancelledAllocatedDiscount = originalOrderDiscount;
   } else if (originalSubtotal > 0 && originalOrderDiscount > 0 && cancelledGrossAmount > 0) {
-    // Proportional order-level discount attributable to cancelled items
+    // Proportional order-level discount attributable to cancelled items (Section 2.5)
     const effectiveDiscountRate = originalOrderDiscount / originalSubtotal;
     const allocatedOrderDiscount = roundToTwo(cancelledGrossAmount * effectiveDiscountRate);
     cancelledAllocatedDiscount = Math.min(originalOrderDiscount, roundToTwo(allocatedOrderDiscount + cancelledItemDiscountVal));
@@ -279,12 +317,12 @@ export function calculateOrderFinancials(inputsOrOrder: any): OrderFinancialSumm
   // Adjusted Subtotal (Authoritative payable product subtotal)
   const adjustedSubtotal = isOrderCancelled
     ? 0
-    : Math.max(0, roundToTwo(adjustedProductTotal - adjustedDiscount - productDiscount));
+    : Math.max(0, roundToTwo(adjustedProductTotal - adjustedDiscount - productDiscount - campaignDiscount));
 
   const cancelledAmount = cancelledGrossAmount;
   const subtotalAfterItemDiscount = Math.max(0, roundToTwo(originalSubtotal - productDiscount));
   const orderDiscount = adjustedDiscount;
-  const totalDiscount = roundToTwo(productDiscount + orderDiscount);
+  const totalDiscount = roundToTwo(productDiscount + orderDiscount + campaignDiscount);
   const taxableAmount = adjustedSubtotal;
 
   // 4. GST Tax Calculation
@@ -295,6 +333,10 @@ export function calculateOrderFinancials(inputsOrOrder: any): OrderFinancialSumm
     gstRate = roundToTwo(inputsOrOrder.historicalGstRate);
     gstAmount = roundToTwo(inputsOrOrder.historicalGstAmount);
   } else if (inputsOrOrder.gst_amount !== undefined) {
+    gstRate = roundToTwo(Number(inputsOrOrder.gst_rate || 0));
+    gstAmount = roundToTwo(Number(inputsOrOrder.gst_amount || 0));
+  } else if (inputsOrOrder.total_amount !== undefined || inputsOrOrder.total !== undefined || inputsOrOrder.final_amount !== undefined) {
+    // Existing stored order without explicit gst_amount: preserve recorded tax rather than retroactively altering historical total
     gstRate = roundToTwo(Number(inputsOrOrder.gst_rate || 0));
     gstAmount = roundToTwo(Number(inputsOrOrder.gst_amount || 0));
   } else {
@@ -571,12 +613,16 @@ export function calculateOrderFinancials(inputsOrOrder: any): OrderFinancialSumm
 
   return {
     originalSubtotal,
+    originalAmount: originalSubtotal,
+    originalProductSubtotal: originalSubtotal,
     productDiscount,
     itemDiscount: productDiscount,
     subtotalAfterItemDiscount,
     orderDiscount,
     couponDiscount: orderDiscount,
+    campaignDiscount,
     totalDiscount,
+    discountAmount: totalDiscount,
     cancelledAmount,
     cancelledGrossAmount,
     cancelledAllocatedDiscount,
@@ -590,6 +636,7 @@ export function calculateOrderFinancials(inputsOrOrder: any): OrderFinancialSumm
     gstAmount,
     taxAmount: gstAmount,
     calculatedShipping,
+    shippingCharge: calculatedShipping,
     shippingOverride,
     finalShipping,
     shippingAmount: finalShipping,
@@ -598,6 +645,7 @@ export function calculateOrderFinancials(inputsOrOrder: any): OrderFinancialSumm
     originalOrderTotal,
     adjustedOrderTotal: finalOrderTotal,
     finalOrderTotal,
+    finalAmount: finalOrderTotal,
     grandTotal: finalOrderTotal,
     totalAmountReceived,
     amountPaid: totalAmountReceived,
@@ -605,6 +653,7 @@ export function calculateOrderFinancials(inputsOrOrder: any): OrderFinancialSumm
     amountDue: balanceAmount,
     excessAmount,
     refundAmount,
+    refundDue: excessAmount > 0 ? excessAmount : Math.max(0, refundAmount - refundedAmount),
     refundedAmount,
     amountRefunded: refundedAmount,
     pendingRefundAmount,

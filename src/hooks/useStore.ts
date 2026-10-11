@@ -25,6 +25,8 @@ interface CartStore {
   isOpen: boolean;
   couponCode: string;
   discount: number;
+  couponType?: 'percentage' | 'fixed';
+  fixedDiscountAmount?: number;
   addItem: (product: Product, variant: ProductVariant, quantity?: number) => { success: boolean; addedQty: number; message?: string };
   removeItem: (productId: string, weight: string) => void;
   updateQuantity: (productId: string, weight: string, quantity: number) => { success: boolean; newQty: number; message?: string };
@@ -50,6 +52,8 @@ export const useCartStore = create<CartStore>()(
       isOpen: false,
       couponCode: '',
       discount: 0,
+      couponType: 'percentage',
+      fixedDiscountAmount: 0,
 
       addItem: (product, variant, quantity = 1) => {
         const liveProducts = useProductStore.getState().products;
@@ -167,7 +171,7 @@ export const useCartStore = create<CartStore>()(
         };
       },
 
-      clearCart: () => set({ items: [], couponCode: '', discount: 0 }),
+      clearCart: () => set({ items: [], couponCode: '', discount: 0, couponType: 'percentage', fixedDiscountAmount: 0 }),
 
       openCart: () => set({ isOpen: true }),
       closeCart: () => set({ isOpen: false }),
@@ -178,7 +182,7 @@ export const useCartStore = create<CartStore>()(
 
         // Handle explicit clear
         if (!cleanCode || cleanCode === '__CLEAR__') {
-          set({ couponCode: '', discount: 0 });
+          set({ couponCode: '', discount: 0, couponType: 'percentage', fixedDiscountAmount: 0 });
           return true;
         }
 
@@ -199,6 +203,8 @@ export const useCartStore = create<CartStore>()(
           set({
             couponCode: ann.couponCode.toUpperCase(),
             discount: ann.discountPercent,
+            couponType: 'percentage',
+            fixedDiscountAmount: 0,
           });
           return true;
         }
@@ -210,26 +216,31 @@ export const useCartStore = create<CartStore>()(
             (get() as any)._lastCouponError = `Minimum order of ₹${dynamicCoupon.minOrder} required for ${dynamicCoupon.code}. (Cart: ₹${currentSubtotal})`;
             return false;
           }
+          const isFixed = dynamicCoupon.discountType === 'fixed' || (Boolean(dynamicCoupon.discountAmount) && (dynamicCoupon.discountAmount ?? 0) > 0);
+          const fixedVal = dynamicCoupon.discountAmount || dynamicCoupon.discountPercent;
           set({
             couponCode: dynamicCoupon.code,
-            discount: dynamicCoupon.discountPercent,
+            discount: isFixed ? fixedVal : dynamicCoupon.discountPercent,
+            couponType: isFixed ? 'fixed' : 'percentage',
+            fixedDiscountAmount: isFixed ? fixedVal : 0,
           });
           return true;
         }
 
         // 3. Fallback built-in coupons
-        const builtInCoupons: Record<string, { discount: number; minOrder: number }> = {
-          'AMMA10': { discount: 10, minOrder: 0 },
-          'SWAGRUHA15': { discount: 15, minOrder: 499 },
-          'WELCOME20': { discount: 20, minOrder: 799 },
-          'TELUGU5': { discount: 5, minOrder: 0 },
-          'FESTIVE15': { discount: 15, minOrder: 0 },
-          'SPECIAL10': { discount: 10, minOrder: 0 },
-          'SWAGRUHA': { discount: 10, minOrder: 0 },
-          'SAVE10': { discount: 10, minOrder: 0 },
-          'SAVE15': { discount: 15, minOrder: 0 },
-          'SAVE20': { discount: 20, minOrder: 0 },
-          'UGADI20': { discount: 20, minOrder: 999 },
+        const builtInCoupons: Record<string, { discount: number; minOrder: number; type?: 'percentage' | 'fixed' }> = {
+          'AMMA10': { discount: 10, minOrder: 0, type: 'percentage' },
+          'SWAGRUHA15': { discount: 15, minOrder: 499, type: 'percentage' },
+          'WELCOME20': { discount: 20, minOrder: 799, type: 'percentage' },
+          'TELUGU5': { discount: 5, minOrder: 0, type: 'percentage' },
+          'FESTIVE15': { discount: 15, minOrder: 0, type: 'percentage' },
+          'SPECIAL10': { discount: 10, minOrder: 0, type: 'percentage' },
+          'SWAGRUHA': { discount: 10, minOrder: 0, type: 'percentage' },
+          'SAVE10': { discount: 10, minOrder: 0, type: 'percentage' },
+          'SAVE15': { discount: 15, minOrder: 0, type: 'percentage' },
+          'SAVE20': { discount: 20, minOrder: 0, type: 'percentage' },
+          'UGADI20': { discount: 20, minOrder: 999, type: 'percentage' },
+          'FLAT140': { discount: 140, minOrder: 0, type: 'fixed' },
         };
 
         const found = builtInCoupons[cleanCode];
@@ -238,7 +249,13 @@ export const useCartStore = create<CartStore>()(
             (get() as any)._lastCouponError = `Minimum order of ₹${found.minOrder} required for ${cleanCode}. (Cart: ₹${currentSubtotal})`;
             return false;
           }
-          set({ couponCode: cleanCode, discount: found.discount });
+          const isFixed = found.type === 'fixed';
+          set({
+            couponCode: cleanCode,
+            discount: found.discount,
+            couponType: isFixed ? 'fixed' : 'percentage',
+            fixedDiscountAmount: isFixed ? found.discount : 0,
+          });
           return true;
         }
 
@@ -252,10 +269,15 @@ export const useCartStore = create<CartStore>()(
               .maybeSingle();
 
             if (!error && cloudCoupon) {
+              const isFixed = cloudCoupon.discount_type === 'fixed' || (Boolean(cloudCoupon.discount_amount) && Number(cloudCoupon.discount_amount) > 0);
+              const fixedAmount = Number(cloudCoupon.discount_amount || cloudCoupon.discount_percent || 0);
+
               const newC: CouponItem = {
                 id: cloudCoupon.id,
                 code: cloudCoupon.code,
-                discountPercent: Number(cloudCoupon.discount_percent),
+                discountType: isFixed ? 'fixed' : 'percentage',
+                discountAmount: isFixed ? fixedAmount : undefined,
+                discountPercent: Number(cloudCoupon.discount_percent || 0),
                 description: cloudCoupon.description,
                 minOrder: Number(cloudCoupon.min_order || 0),
                 isActive: Boolean(cloudCoupon.is_active),
@@ -285,7 +307,9 @@ export const useCartStore = create<CartStore>()(
 
               set({
                 couponCode: newC.code,
-                discount: newC.discountPercent,
+                discount: isFixed ? fixedAmount : newC.discountPercent,
+                couponType: isFixed ? 'fixed' : 'percentage',
+                fixedDiscountAmount: isFixed ? fixedAmount : 0,
               });
               return true;
             }
@@ -316,10 +340,12 @@ export const useCartStore = create<CartStore>()(
         });
         const shippingCharge = shippingResult.shippingCharge;
         const taxConfig = useSettingsStore.getState().settings.tax;
+        const isFixedCoupon = get().couponType === 'fixed';
 
         return calculateOrderFinancials({
           items: rawItems,
-          couponDiscountPercent: get().discount,
+          couponDiscountPercent: isFixedCoupon ? undefined : get().discount,
+          fixedCouponDiscount: isFixedCoupon ? (get().fixedDiscountAmount || get().discount) : undefined,
           shippingCharge,
           shippingResult,
           taxConfig,
@@ -348,6 +374,8 @@ export const useCartStore = create<CartStore>()(
         items: state.items,
         couponCode: state.couponCode,
         discount: state.discount,
+        couponType: state.couponType,
+        fixedDiscountAmount: state.fixedDiscountAmount,
       }),
     }
   )
