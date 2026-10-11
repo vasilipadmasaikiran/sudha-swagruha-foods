@@ -1,5 +1,6 @@
 import assert from 'node:assert';
 import { calculateOrderFinancials, roundToTwo } from '../src/services/orderCalculationService';
+import { normalizeOrderTracking } from '../src/services/supabase';
 import { generateCategorySlug } from '../src/hooks/useCategoryStore';
 import { isValidGstin, isValidFssai } from '../src/hooks/useSettingsStore';
 import { ROLE_DEFINITIONS, AdminRole } from '../src/hooks/useAdminAuthStore';
@@ -67,6 +68,24 @@ runTest('Test A: Discount Calculation (Subtotal ₹600, Coupon ₹140 -> Final �
   const recheckFinancials = calculateOrderFinancials(paymentInfoOrder);
   assert.strictEqual(recheckFinancials.finalOrderTotal, 460, 'Payment Info must use authoritative total ₹460, NOT ₹320');
   assert.notStrictEqual(recheckFinancials.finalOrderTotal, 320, 'Payment Info must NOT deduct discount twice!');
+
+  // Verify Screenshot Case (Subtotal ₹535, Shipping ₹80, Recorded Total ₹401 with DB discount 0)
+  const screenshotOrder = {
+    order_number: 'SSF-20261011-9016',
+    subtotal: 535,
+    delivery_charge: 80,
+    total: 401,
+    discount: 0,
+    items: [
+      { product_id: 'prod-item', unit_price: 535, quantity: 1, status: 'active' }
+    ]
+  };
+  const norm = normalizeOrderTracking(screenshotOrder as any);
+  assert.strictEqual(norm.discount, 214, 'Normalized discount must resolve to ₹214 (535 + 80 - 401)');
+  const finScreenshot = calculateOrderFinancials(norm);
+  assert.strictEqual(finScreenshot.totalDiscount, 214, 'Financial totalDiscount must be ₹214');
+  assert.strictEqual(finScreenshot.finalOrderTotal, 401, 'Authoritative finalOrderTotal must be ₹401, NOT ₹615');
+  assert.strictEqual(finScreenshot.adjustedSubtotal, 321, 'Adjusted subtotal must be ₹321 (535 - 214)');
 });
 
 // -------------------------------------------------------------

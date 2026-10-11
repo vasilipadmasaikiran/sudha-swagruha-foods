@@ -419,6 +419,11 @@ export function normalizeOrderTracking(rawOrder: DbOrder): DbOrder {
             if (meta.item_discount !== undefined && extractedItemDiscount === undefined) extractedItemDiscount = meta.item_discount;
             if (meta.amount_paid !== undefined && extractedAmountPaid === undefined) extractedAmountPaid = meta.amount_paid;
             if (meta.amount_due !== undefined && extractedAmountDue === undefined) extractedAmountDue = meta.amount_due;
+            if (meta.discount !== undefined && !order.discount) (order as any).discount = Number(meta.discount);
+            if (meta.discount_amount !== undefined && extractedCouponDiscount === undefined) extractedCouponDiscount = Number(meta.discount_amount);
+            if (meta.original_discount !== undefined && !order.original_discount) (order as any).original_discount = Number(meta.original_discount);
+            if (meta.original_coupon_discount !== undefined && !order.original_coupon_discount) (order as any).original_coupon_discount = Number(meta.original_coupon_discount);
+            if (meta.original_subtotal !== undefined && !order.original_subtotal) (order as any).original_subtotal = Number(meta.original_subtotal);
             // Shipping Snapshot & Override metadata
             if (meta.shipping_snapshot && !order.shipping_snapshot) (order as any).shipping_snapshot = meta.shipping_snapshot;
             if (meta.calculated_delivery_charge !== undefined && order.calculated_delivery_charge === undefined) (order as any).calculated_delivery_charge = meta.calculated_delivery_charge;
@@ -488,8 +493,15 @@ export function normalizeOrderTracking(rawOrder: DbOrder): DbOrder {
   // Defensive values for monetary calculations
   const subtotal = Number(order.subtotal || 0);
   const deliveryCharge = Number(order.delivery_charge || 0);
-  const discount = Number(order.discount || 0);
-  const total = Number(order.total || order.total_amount || Math.max(0, subtotal + deliveryCharge - discount));
+  const recordedTotal = order.total !== undefined ? Number(order.total) : order.total_amount !== undefined ? Number(order.total_amount) : undefined;
+  let discount = Number(order.discount || 0);
+
+  // If stored discount is 0 but recordedTotal is less than subtotal + deliveryCharge, reconcile implicit discount
+  if (discount === 0 && recordedTotal !== undefined && recordedTotal > 0 && recordedTotal < (subtotal + deliveryCharge)) {
+    discount = Math.round(((subtotal + deliveryCharge) - recordedTotal) * 100) / 100;
+  }
+
+  const total = Number(recordedTotal !== undefined ? recordedTotal : Math.max(0, subtotal + deliveryCharge - discount));
 
   // Determine amount paid with fallback
   const isMarkedPaid = order.payment_status === 'paid' || order.payment_status === 'partially_refunded';
@@ -524,14 +536,18 @@ export function normalizeOrderTracking(rawOrder: DbOrder): DbOrder {
     subtotal,
     delivery_charge: deliveryCharge,
     discount,
+    discount_amount: extractedCouponDiscount !== undefined && Number(extractedCouponDiscount) > 0 ? Number(extractedCouponDiscount) : discount,
     items: safeItems,
     delivery_address: safeDeliveryAddress,
     taxable_amount: extractedTaxableAmount !== undefined ? Number(extractedTaxableAmount) : Math.max(0, subtotal - discount),
     gst_rate: extractedGstRate !== undefined ? Number(extractedGstRate) : 0,
     gst_amount: extractedGstAmount !== undefined ? Number(extractedGstAmount) : 0,
     coupon_code: extractedCouponCode || null,
-    coupon_discount: extractedCouponDiscount !== undefined ? Number(extractedCouponDiscount) : discount,
-    item_discount: extractedItemDiscount !== undefined ? Number(extractedItemDiscount) : 0,
+    coupon_discount: extractedCouponDiscount !== undefined && Number(extractedCouponDiscount) > 0 ? Number(extractedCouponDiscount) : discount,
+    order_discount: extractedCouponDiscount !== undefined && Number(extractedCouponDiscount) > 0 ? Number(extractedCouponDiscount) : discount,
+    original_discount: order.original_discount !== undefined && Number(order.original_discount) > 0 ? Number(order.original_discount) : discount,
+    original_coupon_discount: order.original_coupon_discount !== undefined && Number(order.original_coupon_discount) > 0 ? Number(order.original_coupon_discount) : discount,
+    original_subtotal: order.original_subtotal !== undefined && Number(order.original_subtotal) > 0 ? Number(order.original_subtotal) : subtotal,
     amount_paid: effectivePaid,
     amount_due: effectiveDue,
     payments: extractedPayments,

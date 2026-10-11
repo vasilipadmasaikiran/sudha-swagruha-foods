@@ -96,7 +96,7 @@ export default function CheckoutPage() {
   const summary = getFinancialSummary();
   const subtotal = summary.originalSubtotal;
   const delivery = summary.shippingAmount;
-  const discountAmount = summary.couponDiscount;
+  const discountAmount = Number(summary.totalDiscount || summary.discountAmount || summary.couponDiscount || 0);
   const taxableAmount = summary.taxableAmount;
   const gstRate = summary.gstRate;
   const gstAmount = summary.gstAmount;
@@ -243,6 +243,10 @@ export default function CheckoutPage() {
       coupon_discount: discountAmount,
       item_discount: 0,
       order_discount: discountAmount,
+      discount_amount: discountAmount,
+      original_subtotal: subtotal,
+      original_discount: discountAmount,
+      original_coupon_discount: discountAmount,
       amount_paid: amountPaid,
       amount_due: amountDue,
       payments: paymentRecords,

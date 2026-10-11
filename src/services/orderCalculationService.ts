@@ -299,18 +299,46 @@ export function calculateOrderFinancials(inputsOrOrder: any): OrderFinancialSumm
     originalOrderDiscount = roundToTwo(inputsOrOrder.fixedCouponDiscount);
   } else if (inputsOrOrder.couponDiscountPercent && inputsOrOrder.couponDiscountPercent > 0) {
     originalOrderDiscount = roundToTwo((originalSubtotal * inputsOrOrder.couponDiscountPercent) / 100);
-  } else if (inputsOrOrder.coupon_discount !== undefined) {
+  } else if (inputsOrOrder.coupon_discount !== undefined && Number(inputsOrOrder.coupon_discount) > 0) {
     const rawC = roundToTwo(Number(inputsOrOrder.coupon_discount));
     originalOrderDiscount = storedAllocatedDiscountsSum > 0 ? roundToTwo(rawC + storedAllocatedDiscountsSum) : rawC;
-  } else if (inputsOrOrder.order_discount !== undefined) {
+  } else if (inputsOrOrder.order_discount !== undefined && Number(inputsOrOrder.order_discount) > 0) {
     const rawO = roundToTwo(Number(inputsOrOrder.order_discount));
     originalOrderDiscount = storedAllocatedDiscountsSum > 0 ? roundToTwo(rawO + storedAllocatedDiscountsSum) : rawO;
-  } else if (inputsOrOrder.discount_amount !== undefined) {
+  } else if (inputsOrOrder.discount_amount !== undefined && Number(inputsOrOrder.discount_amount) > 0) {
     const rawD = Math.max(0, roundToTwo(Number(inputsOrOrder.discount_amount) - productDiscount - campaignDiscount));
     originalOrderDiscount = storedAllocatedDiscountsSum > 0 ? roundToTwo(rawD + storedAllocatedDiscountsSum) : rawD;
-  } else if (inputsOrOrder.discount !== undefined) {
+  } else if (inputsOrOrder.discount !== undefined && Number(inputsOrOrder.discount) > 0) {
     const rawD = Math.max(0, roundToTwo(Number(inputsOrOrder.discount) - productDiscount - campaignDiscount));
     originalOrderDiscount = storedAllocatedDiscountsSum > 0 ? roundToTwo(rawD + storedAllocatedDiscountsSum) : rawD;
+  }
+
+  // Fallback reconciliation for existing orders where discount was 0 or unrecorded in DB
+  // but the recorded order total is lower than (originalSubtotal - productDiscount - campaignDiscount + finalShipping):
+  if (originalOrderDiscount === 0) {
+    const recordedTotal = inputsOrOrder.total !== undefined
+      ? roundToTwo(Number(inputsOrOrder.total))
+      : inputsOrOrder.total_amount !== undefined
+      ? roundToTwo(Number(inputsOrOrder.total_amount))
+      : undefined;
+
+    const shippingChargeVal = roundToTwo(
+      inputsOrOrder.calculated_delivery_charge !== undefined
+        ? Number(inputsOrOrder.calculated_delivery_charge)
+        : inputsOrOrder.admin_shipping_override !== undefined
+        ? Number(inputsOrOrder.admin_shipping_override)
+        : inputsOrOrder.shippingCharge !== undefined
+        ? Number(inputsOrOrder.shippingCharge)
+        : inputsOrOrder.delivery_charge !== undefined
+        ? Number(inputsOrOrder.delivery_charge)
+        : 0
+    );
+
+    const grossBase = roundToTwo(originalSubtotal - productDiscount - campaignDiscount + shippingChargeVal);
+
+    if (recordedTotal !== undefined && recordedTotal > 0 && recordedTotal < grossBase) {
+      originalOrderDiscount = roundToTwo(grossBase - recordedTotal);
+    }
   }
 
   // 3. Proportional Discount Allocation on Cancelled Items (Requirements 1.1 - 1.7)

@@ -1072,10 +1072,10 @@ export default function TrackOrderPage() {
                               <span className="font-mono font-bold">-₹{itemDiscount}</span>
                             </div>
                           )}
-                          {couponDiscount > 0 && (
+                          {(couponDiscount > 0 || totalDiscount > 0) && (
                             <div className="flex justify-between items-center text-emerald-700">
                               <span>Coupon Discount {activeOrder.coupon_code ? `(${activeOrder.coupon_code})` : ''}</span>
-                              <span className="font-mono font-bold">-₹{couponDiscount}</span>
+                              <span className="font-mono font-bold">-₹{couponDiscount || totalDiscount}</span>
                             </div>
                           )}
                           <div className="flex justify-between items-center text-gray-500 text-[11px]">
@@ -1314,10 +1314,10 @@ export default function TrackOrderPage() {
                                   <span>-₹{itemDiscount}</span>
                                 </div>
                               )}
-                              {couponDiscount > 0 && (
+                              {(couponDiscount > 0 || totalDiscount > 0) && (
                                 <div className="flex justify-between text-emerald-700">
-                                  <span>- Coupon Discount</span>
-                                  <span>-₹{couponDiscount}</span>
+                                  <span>- Coupon Discount {activeOrder.coupon_code ? `(${activeOrder.coupon_code})` : ''}</span>
+                                  <span>-₹{couponDiscount || totalDiscount}</span>
                                 </div>
                               )}
                               <div className="flex justify-between text-gray-600">

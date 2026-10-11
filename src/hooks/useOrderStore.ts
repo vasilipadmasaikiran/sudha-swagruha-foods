@@ -666,6 +666,8 @@ export const useOrderStore = create<OrderStore>()(
               const fallbackPayload: Record<string, unknown> = {
                 order_status: newStatus,
                 payment_status: safeDbStatus,
+                subtotal: newSubtotal,
+                discount: newDiscount,
                 delivery_charge: newDeliveryCharge,
                 total: newTotal,
                 notes: encodedNotes,
