@@ -92,9 +92,11 @@ runTest('Test B: Cancelled Item Proportional Discount Allocation & Refundability
   const financials = calculateOrderFinancials(orderWithCancelledItem);
 
   assert.strictEqual(financials.originalProductSubtotal, 600, 'Original Subtotal must be ₹600');
+  assert.strictEqual(financials.originalOrderDiscount, 140, 'Original Order Discount must be ₹140');
   assert.strictEqual(financials.cancelledGrossAmount, 140, 'Gross cancelled item value must be ₹140');
   assert.strictEqual(financials.cancelledAllocatedDiscount, 32.67, 'Allocated discount must be ₹32.67');
   assert.strictEqual(financials.refundableCancelledAmount, 107.33, 'Net refundable amount must be ₹107.33');
+  assert.strictEqual(financials.adjustedDiscount, 107.33, 'Remaining active coupon discount must be ₹107.33');
   
   // Remaining items: ₹260 + ₹200 = ₹460 gross.
   // Remaining active discount: 140 - 32.67 = 107.33.
@@ -105,6 +107,31 @@ runTest('Test B: Cancelled Item Proportional Discount Allocation & Refundability
   // Amount paid was 460, final is 352.67 -> excess paid / refund due is 460 - 352.67 = 107.33
   assert.strictEqual(financials.refundDue, 107.33, 'Refund due must equal ₹107.33');
   assert.strictEqual(financials.paymentStatus, 'excess_payment', 'Status must flag excess payment / refund due');
+
+  // Verify breakdown arithmetic trace matches adjustedSubtotal exactly:
+  // 600 (Subtotal) - 140 (Coupon) - 140 (Cancelled Gross) + 32.67 (Allocated Discount Returned) = 352.67
+  const stepSubtotal = financials.breakdown.find(s => s.step === '1')?.amount || 0;
+  const stepCoupon = financials.breakdown.find(s => s.step === '3')?.amount || 0;
+  const stepCancelled = financials.breakdown.find(s => s.step === '4')?.amount || 0;
+  const stepAllocated = financials.breakdown.find(s => s.step === '4b')?.amount || 0;
+  const calculatedSubtotal = roundToTwo(stepSubtotal - stepCoupon - stepCancelled + stepAllocated);
+  assert.strictEqual(calculatedSubtotal, 352.67, 'Breakdown arithmetic trace must sum exactly to 352.67');
+
+  // Verify Multiple Recalculation Stability (Prevent recursive discount degradation):
+  const orderAfterUpdate = {
+    ...orderWithCancelledItem,
+    discount: financials.adjustedDiscount,
+    coupon_discount: financials.adjustedDiscount,
+    original_discount: 140,
+    items: [
+      { product_id: 'prod-a', unit_price: 140, quantity: 1, status: 'cancelled', allocated_discount: 32.67 },
+      { product_id: 'prod-b', unit_price: 260, quantity: 1, status: 'active' },
+      { product_id: 'prod-c', unit_price: 200, quantity: 1, status: 'active' },
+    ],
+  };
+  const recheck = calculateOrderFinancials(orderAfterUpdate);
+  assert.strictEqual(recheck.adjustedDiscount, 107.33, 'Recalculating updated order must keep adjusted discount stable at ₹107.33');
+  assert.strictEqual(recheck.finalOrderTotal, 352.67, 'Recalculating updated order must keep final total stable at ₹352.67');
 });
 
 // -------------------------------------------------------------

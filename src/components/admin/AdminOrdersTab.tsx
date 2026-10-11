@@ -2116,17 +2116,28 @@ export default function AdminOrdersTab({ initialSubFilter }: { initialSubFilter?
                             <span>-₹{fin.productDiscount}</span>
                           </div>
                         )}
-                        {fin.orderDiscount > 0 && (
+                        {fin.originalOrderDiscount > 0 && (
                           <div className="flex justify-between text-emerald-400">
-                            <span className="font-sans">Coupon Discount {selectedOrder.coupon_code ? `(${selectedOrder.coupon_code})` : ''}</span>
-                            <span>-₹{fin.orderDiscount}</span>
+                            <span className="font-sans">
+                              Coupon Discount {selectedOrder.coupon_code ? `(${selectedOrder.coupon_code})` : ''}
+                              {fin.cancelledAllocatedDiscount > 0 ? ' (Original)' : ''}
+                            </span>
+                            <span>-₹{fin.originalOrderDiscount}</span>
                           </div>
                         )}
                         {fin.cancelledAmount > 0 && (
-                          <div className="flex justify-between text-rose-400 font-semibold">
-                            <span className="font-sans">Cancelled Items</span>
-                            <span>-₹{fin.cancelledAmount}</span>
-                          </div>
+                          <>
+                            <div className="flex justify-between text-rose-400 font-semibold">
+                              <span className="font-sans">Cancelled Items (Gross)</span>
+                              <span>-₹{fin.cancelledAmount}</span>
+                            </div>
+                            {fin.cancelledAllocatedDiscount > 0 && (
+                              <div className="flex justify-between text-amber-300 text-[11px]">
+                                <span className="font-sans">Allocated Discount Adjustment</span>
+                                <span>+₹{fin.cancelledAllocatedDiscount}</span>
+                              </div>
+                            )}
+                          </>
                         )}
                         <div className="flex justify-between text-slate-400 text-[11px] pt-1 border-t border-slate-800/60">
                           <span className="font-sans">Adjusted Subtotal</span>

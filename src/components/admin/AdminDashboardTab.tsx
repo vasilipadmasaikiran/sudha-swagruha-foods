@@ -157,7 +157,7 @@ export const AdminDashboardTab: React.FC<AdminDashboardTabProps> = ({ onNavigate
       totalPaid += fin.totalAmountReceived;
 
       if (!isCancelled) {
-        grossSales += fin.originalSubtotal;
+        grossSales += fin.adjustedProductTotal;
         totalDiscounts += fin.totalDiscount;
         totalTaxable += fin.taxableAmount;
         totalGST += fin.gstAmount;

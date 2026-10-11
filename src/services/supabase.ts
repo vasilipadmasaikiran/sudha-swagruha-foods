@@ -259,6 +259,9 @@ export interface DbOrder {
   pincode?: string;
   state?: string;
   // Authoritative Order Financial Snapshot
+  original_subtotal?: number;
+  original_discount?: number;
+  original_coupon_discount?: number;
   taxable_amount?: number;
   gst_rate?: number;
   gst_amount?: number;

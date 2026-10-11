@@ -35,6 +35,11 @@ export interface OrderUpdatePayload {
   refunded_amount?: number;
   subtotal?: number;
   delivery_charge?: number;
+  discount?: number;
+  discount_amount?: number;
+  coupon_discount?: number;
+  order_discount?: number;
+  item_discount?: number;
   total?: number;
   calculated_delivery_charge?: number;
   admin_shipping_override?: number;
@@ -549,10 +554,25 @@ export const useOrderStore = create<OrderStore>()(
         const newAmountPaid = payload.amount_paid !== undefined ? payload.amount_paid : existing.amount_paid;
         const newAmountDue = payload.amount_due !== undefined ? payload.amount_due : existing.amount_due;
         const newDeliveryCharge = payload.delivery_charge !== undefined ? payload.delivery_charge : existing.delivery_charge;
+        const newSubtotal = payload.subtotal !== undefined ? payload.subtotal : existing.subtotal;
+        const newDiscount = payload.discount !== undefined
+          ? payload.discount
+          : payload.discount_amount !== undefined
+          ? payload.discount_amount
+          : existing.discount;
+        const newCouponDiscount = payload.coupon_discount !== undefined
+          ? payload.coupon_discount
+          : payload.discount !== undefined
+          ? payload.discount
+          : existing.coupon_discount;
         const newTotal = payload.total !== undefined ? payload.total : existing.total;
 
         const updatedOrder: DbOrder = normalizeOrderTracking({
           ...existing,
+          subtotal: newSubtotal,
+          discount: newDiscount,
+          discount_amount: newDiscount,
+          coupon_discount: newCouponDiscount,
           delivery_charge: newDeliveryCharge,
           total: newTotal,
           total_amount: newTotal,
@@ -591,6 +611,8 @@ export const useOrderStore = create<OrderStore>()(
             const fullPayload: Record<string, unknown> = {
               order_status: newStatus,
               payment_status: newPaymentStatus,
+              subtotal: newSubtotal,
+              discount: newDiscount,
               delivery_charge: newDeliveryCharge,
               total: newTotal,
               notes: encodedNotes,
@@ -608,7 +630,7 @@ export const useOrderStore = create<OrderStore>()(
               taxable_amount: existing.taxable_amount !== undefined ? existing.taxable_amount : null,
               gst_rate: existing.gst_rate !== undefined ? existing.gst_rate : null,
               gst_amount: existing.gst_amount !== undefined ? existing.gst_amount : null,
-              coupon_discount: existing.coupon_discount !== undefined ? existing.coupon_discount : null,
+              coupon_discount: newCouponDiscount !== undefined ? newCouponDiscount : null,
             };
 
             let { error: fullError } = await supabase
@@ -1290,13 +1312,32 @@ export const useOrderStore = create<OrderStore>()(
           ...(refundRecord ? [refundRecord] : []),
         ];
 
+        const fin = calculateOrderFinancials({
+          ...order,
+          items: updatedItems,
+          original_discount: orderTotalDiscount,
+          original_coupon_discount: orderTotalDiscount,
+        });
+
         const updatedOrder: DbOrder = {
           ...order,
           items: updatedItems,
+          subtotal: fin.adjustedSubtotal,
+          discount: fin.adjustedDiscount,
+          discount_amount: fin.totalDiscount,
+          coupon_discount: fin.adjustedDiscount,
+          order_discount: fin.adjustedDiscount,
+          total: fin.finalOrderTotal,
+          total_amount: fin.finalOrderTotal,
+          original_subtotal: fin.originalSubtotal,
+          original_discount: fin.originalOrderDiscount,
+          original_coupon_discount: fin.originalOrderDiscount,
+          taxable_amount: fin.taxableAmount,
+          gst_amount: fin.gstAmount,
           order_status: nextOrderStatus,
           cancellation_reason: !hasActiveItems ? 'All products unavailable' : order.cancellation_reason,
           refunded_amount: newRefundedAmount,
-          payment_status: newPaymentStatus,
+          payment_status: fin.paymentStatus === 'excess_payment' ? 'partially_refunded' : newPaymentStatus,
           refunds: updatedRefunds,
           order_status_history: updatedHistory,
           updated_at: now,
@@ -1333,10 +1374,13 @@ export const useOrderStore = create<OrderStore>()(
               .from('orders')
               .update({
                 items: updatedItems,
+                subtotal: fin.adjustedSubtotal,
+                discount: fin.adjustedDiscount,
+                total: fin.finalOrderTotal,
                 order_status: nextOrderStatus,
                 cancellation_reason: updatedOrder.cancellation_reason,
                 refunded_amount: newRefundedAmount,
-                payment_status: newPaymentStatus,
+                payment_status: updatedOrder.payment_status,
                 refunds: updatedRefunds,
                 order_status_history: updatedHistory,
                 updated_at: now,

@@ -138,7 +138,7 @@ export const AdminSalesTab: React.FC = () => {
 
       // Aggregate non-cancelled orders towards gross/net sales
       if (!isCancelled) {
-        grossSales += fin.originalSubtotal;
+        grossSales += fin.adjustedProductTotal;
         totalDiscounts += fin.totalDiscount;
         totalTaxable += fin.taxableAmount;
         totalGST += fin.gstAmount;

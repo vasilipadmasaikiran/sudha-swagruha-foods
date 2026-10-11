@@ -137,33 +137,35 @@ export const OrderCalculationInspector: React.FC<OrderCalculationInspectorProps>
             <div className="p-3 bg-slate-900/70 rounded-xl border border-slate-800 space-y-2">
               <div className="flex items-center gap-1.5 pb-2 border-b border-slate-800 text-slate-300 font-semibold uppercase text-[10px] tracking-wider">
                 <Calculator className="w-3.5 h-3.5 text-amber-400" />
-                <span>2. Calculation Steps</span>
+                <span>2. Arithmetic Calculation Steps</span>
               </div>
               <div className="space-y-1 text-[11px] font-mono">
-                {fin.breakdown.slice(0, 7).map((step, sIdx) => {
-                  let opClass = 'text-slate-300';
-                  let prefix = '';
-                  if (step.operation === 'add') {
-                    opClass = 'text-slate-300';
-                    prefix = '+';
-                  } else if (step.operation === 'subtract') {
-                    opClass = 'text-emerald-400';
-                    prefix = '-';
-                  } else if (step.operation === 'result') {
-                    opClass = 'text-amber-300 font-bold';
-                    prefix = '=';
-                  }
-                  return (
-                    <div key={sIdx} className="flex justify-between items-baseline py-0.5">
-                      <span className="font-sans text-slate-400 text-[10px] truncate max-w-[140px]" title={step.label}>
-                        {step.label}
-                      </span>
-                      <span className={opClass}>
-                        {prefix}₹{step.amount}
-                      </span>
-                    </div>
-                  );
-                })}
+                {fin.breakdown
+                  .filter((step) => step.operation !== 'info')
+                  .map((step, sIdx) => {
+                    let opClass = 'text-slate-300';
+                    let prefix = '';
+                    if (step.operation === 'add') {
+                      opClass = 'text-slate-300';
+                      prefix = '+';
+                    } else if (step.operation === 'subtract') {
+                      opClass = 'text-emerald-400';
+                      prefix = '-';
+                    } else if (step.operation === 'result') {
+                      opClass = 'text-amber-300 font-bold';
+                      prefix = '=';
+                    }
+                    return (
+                      <div key={sIdx} className="flex justify-between items-baseline py-0.5">
+                        <span className="font-sans text-slate-400 text-[10px] truncate max-w-[150px]" title={step.label}>
+                          {step.step}. {step.label}
+                        </span>
+                        <span className={opClass}>
+                          {prefix}₹{step.amount}
+                        </span>
+                      </div>
+                    );
+                  })}
               </div>
             </div>
 
@@ -174,7 +176,29 @@ export const OrderCalculationInspector: React.FC<OrderCalculationInspectorProps>
                 <span>3. Financial Reconciliation</span>
               </div>
               <div className="space-y-1.5 font-mono text-[11px]">
-                <div className="flex justify-between text-slate-300 font-bold border-b border-slate-800 pb-1">
+                <div className="flex justify-between text-slate-400">
+                  <span className="font-sans">Product Subtotal:</span>
+                  <span className="text-white">₹{fin.originalSubtotal}</span>
+                </div>
+                {fin.originalOrderDiscount > 0 && (
+                  <div className="flex justify-between text-emerald-400">
+                    <span className="font-sans">Original Coupon:</span>
+                    <span>-₹{fin.originalOrderDiscount}</span>
+                  </div>
+                )}
+                {fin.cancelledAllocatedDiscount > 0 && (
+                  <div className="flex justify-between text-amber-300 text-[10px]">
+                    <span className="font-sans">Allocated Discount Returned:</span>
+                    <span>+₹{fin.cancelledAllocatedDiscount}</span>
+                  </div>
+                )}
+                {fin.cancelledGrossAmount > 0 && (
+                  <div className="flex justify-between text-rose-400 text-[10px]">
+                    <span className="font-sans">Net Cancelled Deduction:</span>
+                    <span>-₹{fin.refundableCancelledAmount}</span>
+                  </div>
+                )}
+                <div className="flex justify-between text-slate-300 font-bold border-t border-slate-800 pt-1">
                   <span className="font-sans">Final Order Total:</span>
                   <span className="text-emerald-400 text-xs">₹{fin.finalOrderTotal}</span>
                 </div>
