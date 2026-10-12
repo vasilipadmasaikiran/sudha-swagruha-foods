@@ -490,14 +490,37 @@ export function normalizeOrderTracking(rawOrder: DbOrder): DbOrder {
     }
   }
 
+  // Safe items array
+  const safeItems = Array.isArray(order.items) ? order.items : [];
+  const hasCancelledItems = safeItems.some((it: any) => it.status === 'cancelled' || it.status === 'removed') ||
+    (Array.isArray(order.cancelled_items) && order.cancelled_items.length > 0);
+
   // Defensive values for monetary calculations
   const subtotal = Number(order.subtotal || 0);
   const deliveryCharge = Number(order.delivery_charge || 0);
   const recordedTotal = order.total !== undefined ? Number(order.total) : order.total_amount !== undefined ? Number(order.total_amount) : undefined;
   let discount = Number(order.discount || 0);
 
+  // If order has NO coupon code and has cancelled items, any discount matching cancelled items gross is cancellation pollution
+  if (!extractedCouponCode && hasCancelledItems) {
+    const cancelledGross = safeItems
+      .filter((it: any) => it.status === 'cancelled' || it.status === 'removed')
+      .reduce((sum: number, it: any) => sum + Number(it.unit_price || (it.total_price / (it.quantity || 1)) || 0) * Number(it.cancelled_quantity || it.quantity || 1), 0);
+    if (cancelledGross > 0 && Math.abs(discount - cancelledGross) < 0.05) {
+      discount = 0;
+    }
+  }
+
   // If stored discount is 0 but recordedTotal is less than subtotal + deliveryCharge, reconcile implicit discount
-  if (discount === 0 && recordedTotal !== undefined && recordedTotal > 0 && recordedTotal < (subtotal + deliveryCharge)) {
+  // ONLY for orders WITH an active coupon code and NO cancelled items (cancelled items must never synthesize a discount)
+  if (
+    discount === 0 &&
+    Boolean(extractedCouponCode) &&
+    !hasCancelledItems &&
+    recordedTotal !== undefined &&
+    recordedTotal > 0 &&
+    recordedTotal < (subtotal + deliveryCharge)
+  ) {
     discount = Math.round(((subtotal + deliveryCharge) - recordedTotal) * 100) / 100;
   }
 
@@ -525,9 +548,6 @@ export function normalizeOrderTracking(rawOrder: DbOrder): DbOrder {
     state: order.delivery_address?.state || order.state || 'Andhra Pradesh',
     pincode: order.delivery_address?.pincode || order.pincode || '520010',
   };
-
-  // Safe items array
-  const safeItems = Array.isArray(order.items) ? order.items : [];
 
   return {
     ...order,

@@ -327,9 +327,19 @@ export default function AdminOrdersTab({ initialSubFilter }: { initialSubFilter?
         0
       ) || Number(o.original_subtotal || o.subtotal || 1);
 
-      const orderDisc = Number(
-        o.original_discount ?? o.original_coupon_discount ?? o.coupon_discount ?? o.discount ?? o.order_discount ?? 0
-      );
+      const hasCoupon = Boolean(o.coupon_code);
+      let orderDisc = 0;
+      if (hasCoupon) {
+        orderDisc = Number(
+          o.original_coupon_discount ?? o.original_discount ?? o.coupon_discount ?? 0
+        );
+        const rawDisc = Number(o.discount ?? 0);
+        if (orderDisc === 0 && rawDisc > 0) {
+          orderDisc = rawDisc;
+        }
+      } else if (o.original_coupon_discount && Number(o.original_coupon_discount) > 0) {
+        orderDisc = Number(o.original_coupon_discount);
+      }
 
       const discountRate = (orderOriginalSubtotal > 0 && orderDisc > 0)
         ? (orderDisc / orderOriginalSubtotal)
@@ -794,9 +804,20 @@ export default function AdminOrdersTab({ initialSubFilter }: { initialSubFilter?
       (sum, it) => sum + Number(it.unit_price || 0) * Number(it.quantity || 1),
       0
     ) || Number(order.original_subtotal || order.subtotal || 1);
-    const orderDisc = Number(
-      order.original_discount ?? order.original_coupon_discount ?? order.coupon_discount ?? order.discount ?? order.order_discount ?? 0
-    );
+    const hasCoupon = Boolean(order.coupon_code);
+    let orderDisc = 0;
+    if (hasCoupon) {
+      orderDisc = Number(
+        order.original_coupon_discount ?? order.original_discount ?? order.coupon_discount ?? 0
+      );
+      const rawDisc = Number(order.discount ?? 0);
+      if (orderDisc === 0 && rawDisc > 0 && Math.abs(rawDisc - itemGross) >= 0.05) {
+        orderDisc = rawDisc;
+      }
+    } else if (order.original_coupon_discount && Number(order.original_coupon_discount) > 0) {
+      orderDisc = Number(order.original_coupon_discount);
+    }
+
     const discountRate = (orderOriginalSubtotal > 0 && orderDisc > 0)
       ? (orderDisc / orderOriginalSubtotal)
       : 0;
@@ -1669,8 +1690,8 @@ export default function AdminOrdersTab({ initialSubFilter }: { initialSubFilter?
                           <div className="font-bold text-white text-sm font-mono">₹{o.total}</div>
                           <div className="text-[10px] text-slate-400 space-y-0.5 mt-0.5 font-mono">
                             <div>Subtotal: ₹{o.subtotal || o.total}</div>
-                            {o.discount > 0 && (
-                              <div className="text-emerald-400 font-semibold">Discount: -₹{o.discount}</div>
+                            {o.discount > 0 && o.coupon_code && (
+                              <div className="text-emerald-400 font-semibold">Discount ({o.coupon_code}): -₹{o.discount}</div>
                             )}
                             {o.gst_amount !== undefined && o.gst_amount > 0 && (
                               <div className="text-slate-400">GST ({o.gst_rate}%): +₹{o.gst_amount}</div>
@@ -2510,7 +2531,7 @@ export default function AdminOrdersTab({ initialSubFilter }: { initialSubFilter?
                         </span>
                       </div>
 
-                      <div className="space-y-1.5 text-xs font-mono">
+                      <div className="space-y-2 text-xs font-mono">
                         <div className="flex justify-between text-slate-300">
                           <span className="font-sans">Product Subtotal</span>
                           <span>₹{fin.originalSubtotal}</span>
@@ -2521,33 +2542,14 @@ export default function AdminOrdersTab({ initialSubFilter }: { initialSubFilter?
                             <span>-₹{fin.productDiscount}</span>
                           </div>
                         )}
-                        {fin.originalOrderDiscount > 0 && (
+                        {fin.originalOrderDiscount > 0 && selectedOrder.coupon_code && (
                           <div className="flex justify-between text-emerald-400">
                             <span className="font-sans">
-                              Coupon Discount {selectedOrder.coupon_code ? `(${selectedOrder.coupon_code})` : ''}
-                              {fin.cancelledAllocatedDiscount > 0 ? ' (Original)' : ''}
+                              Coupon Discount ({selectedOrder.coupon_code})
                             </span>
                             <span>-₹{fin.originalOrderDiscount}</span>
                           </div>
                         )}
-                        {fin.cancelledAmount > 0 && (
-                          <>
-                            <div className="flex justify-between text-rose-400 font-semibold">
-                              <span className="font-sans">Cancelled Items (Gross)</span>
-                              <span>-₹{fin.cancelledAmount}</span>
-                            </div>
-                            {fin.cancelledAllocatedDiscount > 0 && (
-                              <div className="flex justify-between text-amber-300 text-[11px]">
-                                <span className="font-sans">Allocated Discount Adjustment</span>
-                                <span>+₹{fin.cancelledAllocatedDiscount}</span>
-                              </div>
-                            )}
-                          </>
-                        )}
-                        <div className="flex justify-between text-slate-400 text-[11px] pt-1 border-t border-slate-800/60">
-                          <span className="font-sans">Adjusted Subtotal</span>
-                          <span>₹{fin.adjustedSubtotal}</span>
-                        </div>
                         {fin.gstAmount > 0 && (
                           <div className="flex justify-between text-slate-300">
                             <span className="font-sans">GST ({fin.gstRate}%)</span>
@@ -2561,33 +2563,69 @@ export default function AdminOrdersTab({ initialSubFilter }: { initialSubFilter?
                           </span>
                           <span>{fin.finalShipping === 0 ? 'FREE' : `+₹${fin.finalShipping}`}</span>
                         </div>
+
+                        {/* Authoritative Total Order Amount: Always original order amount post voucher discount applied, including delivery */}
                         <div className="flex justify-between pt-2 border-t border-slate-700 text-sm font-bold text-white">
-                          <span className="font-sans">Final Order Total</span>
-                          <span className="text-emerald-400">₹{fin.finalOrderTotal}</span>
+                          <span className="font-sans">Total Order Amount</span>
+                          <span className="text-emerald-400 font-mono text-base">₹{fin.originalOrderTotal}</span>
                         </div>
+
+                        {/* Cancelled Items & Refund Breakdown (Only shown when items are cancelled) */}
+                        {fin.cancelledAmount > 0 && (
+                          <div className="mt-2.5 pt-2.5 pb-2 px-3 bg-slate-900/90 rounded-xl border border-rose-500/20 space-y-1.5">
+                            <div className="text-[10px] font-bold uppercase tracking-wider text-rose-400 flex items-center justify-between">
+                              <span>Cancelled Items & Refund Breakdown</span>
+                              <span className="text-slate-400 font-normal">Formula Applied</span>
+                            </div>
+                            <div className="flex justify-between text-rose-300 text-xs font-semibold">
+                              <span className="font-sans">Cancelled Items (Gross)</span>
+                              <span className="font-mono">-₹{fin.cancelledAmount}</span>
+                            </div>
+                            {fin.cancelledAllocatedDiscount > 0 ? (
+                              <div className="flex justify-between text-amber-300 text-[11px]">
+                                <span className="font-sans">
+                                  Less Coupon Discount Applied ({roundToTwoDecimals((fin.originalOrderDiscount / (fin.originalSubtotal || 1)) * 100)}%)
+                                </span>
+                                <span className="font-mono">-₹{fin.cancelledAllocatedDiscount}</span>
+                              </div>
+                            ) : (
+                              <div className="text-[10px] text-slate-400 font-sans italic">
+                                No coupon discount applied to order (0% deduction)
+                              </div>
+                            )}
+                            <div className="flex justify-between text-purple-300 text-xs font-bold pt-1 border-t border-slate-800">
+                              <span className="font-sans">Refund Amount Due</span>
+                              <span className="font-mono text-purple-400 text-sm">₹{fin.refundableCancelledAmount}</span>
+                            </div>
+                            <div className="flex justify-between text-slate-400 text-[11px] pt-1 border-t border-slate-800/60">
+                              <span className="font-sans">Net Active Order Payable</span>
+                              <span className="font-mono text-slate-200 font-semibold">₹{fin.finalOrderTotal}</span>
+                            </div>
+                          </div>
+                        )}
                       </div>
 
                       {/* Payment Status Metric Cards (Requirement 20.7) */}
                       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-2 text-center text-xs">
                         <div className="p-2.5 bg-slate-900 rounded-xl border border-slate-800">
-                          <p className="text-[10px] text-slate-400 uppercase">Final Order Total</p>
-                          <p className="text-sm font-bold font-mono text-white mt-0.5">₹{fin.finalOrderTotal}</p>
+                          <p className="text-[10px] text-slate-400 uppercase">Total Order Amount</p>
+                          <p className="text-sm font-bold font-mono text-white mt-0.5">₹{fin.originalOrderTotal}</p>
                         </div>
                         <div className="p-2.5 bg-slate-900 rounded-xl border border-slate-800">
                           <p className="text-[10px] text-emerald-400 uppercase font-semibold">Total Received</p>
                           <p className="text-sm font-bold font-mono text-emerald-400 mt-0.5">₹{fin.totalAmountReceived}</p>
                         </div>
                         <div className="p-2.5 bg-slate-900 rounded-xl border border-slate-800">
-                          <p className="text-[10px] text-amber-400 uppercase font-semibold">Balance Due</p>
-                          <p className="text-sm font-bold font-mono text-amber-400 mt-0.5">₹{fin.balanceAmount}</p>
-                        </div>
-                        <div className="p-2.5 bg-slate-900 rounded-xl border border-slate-800">
                           <p className="text-[10px] text-purple-400 uppercase font-semibold">
-                            {fin.excessAmount > 0 ? 'Excess (Refund Due)' : 'Refund Processed'}
+                            {fin.excessAmount > 0 ? 'Excess (Refund Due)' : fin.refundedAmount > 0 ? 'Refund Processed' : 'Refund Due'}
                           </p>
                           <p className="text-sm font-bold font-mono text-purple-400 mt-0.5">
-                            {fin.excessAmount > 0 ? `₹${fin.excessAmount}` : `₹${fin.refundedAmount}`}
+                            ₹{fin.excessAmount > 0 ? fin.excessAmount : fin.refundedAmount > 0 ? fin.refundedAmount : fin.refundableCancelledAmount}
                           </p>
+                        </div>
+                        <div className="p-2.5 bg-slate-900 rounded-xl border border-slate-800">
+                          <p className="text-[10px] text-amber-400 uppercase font-semibold">Balance Due</p>
+                          <p className="text-sm font-bold font-mono text-amber-400 mt-0.5">₹{fin.balanceAmount}</p>
                         </div>
                       </div>
 

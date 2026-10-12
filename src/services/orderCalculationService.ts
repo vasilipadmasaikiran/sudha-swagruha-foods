@@ -289,28 +289,69 @@ export function calculateOrderFinancials(inputsOrOrder: any): OrderFinancialSumm
     }
   }
 
-  if (inputsOrOrder.original_discount !== undefined && Number(inputsOrOrder.original_discount) > 0) {
-    originalOrderDiscount = roundToTwo(Number(inputsOrOrder.original_discount));
-  } else if (inputsOrOrder.original_coupon_discount !== undefined && Number(inputsOrOrder.original_coupon_discount) > 0) {
-    originalOrderDiscount = roundToTwo(Number(inputsOrOrder.original_coupon_discount));
-  } else if (inputsOrOrder.originalOrderDiscount !== undefined && Number(inputsOrOrder.originalOrderDiscount) > 0) {
-    originalOrderDiscount = roundToTwo(Number(inputsOrOrder.originalOrderDiscount));
-  } else if (inputsOrOrder.fixedCouponDiscount && inputsOrOrder.fixedCouponDiscount > 0) {
+  const hasCouponCode = Boolean(
+    inputsOrOrder.coupon_code ||
+    inputsOrOrder.couponCode ||
+    inputsOrOrder.fixedCouponDiscount ||
+    inputsOrOrder.couponDiscountPercent
+  );
+
+  // Authoritative Coupon & Order Discount Resolution:
+  // Cancelled items must NEVER reflect in coupon discount.
+  // If an order has NO coupon code and has cancelled items, any discount equal to cancelled gross is cancellation pollution.
+  if (inputsOrOrder.fixedCouponDiscount && inputsOrOrder.fixedCouponDiscount > 0) {
     originalOrderDiscount = roundToTwo(inputsOrOrder.fixedCouponDiscount);
   } else if (inputsOrOrder.couponDiscountPercent && inputsOrOrder.couponDiscountPercent > 0) {
     originalOrderDiscount = roundToTwo((originalSubtotal * inputsOrOrder.couponDiscountPercent) / 100);
+  } else if (inputsOrOrder.original_coupon_discount !== undefined && Number(inputsOrOrder.original_coupon_discount) > 0) {
+    const rawOCD = roundToTwo(Number(inputsOrOrder.original_coupon_discount));
+    if (cancelledGrossAmount > 0 && !hasCouponCode && Math.abs(rawOCD - cancelledGrossAmount) < 0.05) {
+      originalOrderDiscount = 0;
+    } else {
+      originalOrderDiscount = rawOCD;
+    }
+  } else if (inputsOrOrder.original_discount !== undefined && Number(inputsOrOrder.original_discount) > 0) {
+    const rawOrig = roundToTwo(Number(inputsOrOrder.original_discount));
+    if (cancelledGrossAmount > 0 && !hasCouponCode && Math.abs(rawOrig - cancelledGrossAmount) < 0.05) {
+      originalOrderDiscount = 0;
+    } else {
+      originalOrderDiscount = rawOrig;
+    }
+  } else if (inputsOrOrder.originalOrderDiscount !== undefined && Number(inputsOrOrder.originalOrderDiscount) > 0) {
+    const rawOOD = roundToTwo(Number(inputsOrOrder.originalOrderDiscount));
+    if (cancelledGrossAmount > 0 && !hasCouponCode && Math.abs(rawOOD - cancelledGrossAmount) < 0.05) {
+      originalOrderDiscount = 0;
+    } else {
+      originalOrderDiscount = rawOOD;
+    }
   } else if (inputsOrOrder.coupon_discount !== undefined && Number(inputsOrOrder.coupon_discount) > 0) {
     const rawC = roundToTwo(Number(inputsOrOrder.coupon_discount));
-    originalOrderDiscount = storedAllocatedDiscountsSum > 0 ? roundToTwo(rawC + storedAllocatedDiscountsSum) : rawC;
+    if (cancelledGrossAmount > 0 && !hasCouponCode && Math.abs(rawC - cancelledGrossAmount) < 0.05) {
+      originalOrderDiscount = 0;
+    } else {
+      originalOrderDiscount = storedAllocatedDiscountsSum > 0 ? roundToTwo(rawC + storedAllocatedDiscountsSum) : rawC;
+    }
   } else if (inputsOrOrder.order_discount !== undefined && Number(inputsOrOrder.order_discount) > 0) {
     const rawO = roundToTwo(Number(inputsOrOrder.order_discount));
-    originalOrderDiscount = storedAllocatedDiscountsSum > 0 ? roundToTwo(rawO + storedAllocatedDiscountsSum) : rawO;
+    if (cancelledGrossAmount > 0 && !hasCouponCode && Math.abs(rawO - cancelledGrossAmount) < 0.05) {
+      originalOrderDiscount = 0;
+    } else {
+      originalOrderDiscount = storedAllocatedDiscountsSum > 0 ? roundToTwo(rawO + storedAllocatedDiscountsSum) : rawO;
+    }
   } else if (inputsOrOrder.discount_amount !== undefined && Number(inputsOrOrder.discount_amount) > 0) {
     const rawD = Math.max(0, roundToTwo(Number(inputsOrOrder.discount_amount) - productDiscount - campaignDiscount));
-    originalOrderDiscount = storedAllocatedDiscountsSum > 0 ? roundToTwo(rawD + storedAllocatedDiscountsSum) : rawD;
+    if (cancelledGrossAmount > 0 && !hasCouponCode && Math.abs(rawD - cancelledGrossAmount) < 0.05) {
+      originalOrderDiscount = 0;
+    } else {
+      originalOrderDiscount = storedAllocatedDiscountsSum > 0 ? roundToTwo(rawD + storedAllocatedDiscountsSum) : rawD;
+    }
   } else if (inputsOrOrder.discount !== undefined && Number(inputsOrOrder.discount) > 0) {
     const rawD = Math.max(0, roundToTwo(Number(inputsOrOrder.discount) - productDiscount - campaignDiscount));
-    originalOrderDiscount = storedAllocatedDiscountsSum > 0 ? roundToTwo(rawD + storedAllocatedDiscountsSum) : rawD;
+    if (cancelledGrossAmount > 0 && !hasCouponCode && Math.abs(rawD - cancelledGrossAmount) < 0.05) {
+      originalOrderDiscount = 0;
+    } else {
+      originalOrderDiscount = storedAllocatedDiscountsSum > 0 ? roundToTwo(rawD + storedAllocatedDiscountsSum) : rawD;
+    }
   }
 
   // Fallback reconciliation ONLY for legacy records where coupon discount was omitted from schema
@@ -348,24 +389,30 @@ export function calculateOrderFinancials(inputsOrOrder: any): OrderFinancialSumm
     }
   }
 
-  // 3. Proportional Discount Allocation on Cancelled Items (Requirements 1.1 - 1.7)
+  // 3. Proportional Discount Allocation on Cancelled Items:
+  // - If discount applied: Refund amount = Cancelled item gross - (Cancelled item gross * discounted percentage for respective order)
+  // - If discount not applied: Refund amount = Cancelled item gross
   let cancelledAllocatedDiscount = 0;
   const isOrderCancelled = inputsOrOrder.order_status === 'cancelled';
+
+  const couponDiscountPercentage = originalSubtotal > 0 && originalOrderDiscount > 0
+    ? originalOrderDiscount / originalSubtotal
+    : 0;
 
   if (isOrderCancelled) {
     cancelledAllocatedDiscount = originalOrderDiscount;
   } else if (storedAllocatedDiscountsSum > 0) {
     cancelledAllocatedDiscount = Math.min(originalOrderDiscount, roundToTwo(storedAllocatedDiscountsSum));
-  } else if (originalSubtotal > 0 && originalOrderDiscount > 0 && cancelledGrossAmount > 0) {
-    // Proportional order-level discount attributable to cancelled items (Section 2.5)
-    const effectiveDiscountRate = originalOrderDiscount / originalSubtotal;
-    const allocatedOrderDiscount = roundToTwo(cancelledGrossAmount * effectiveDiscountRate);
+  } else if (couponDiscountPercentage > 0 && cancelledGrossAmount > 0) {
+    // Cancelled item gross * Coupon discount applied %
+    const allocatedOrderDiscount = roundToTwo(cancelledGrossAmount * couponDiscountPercentage);
     cancelledAllocatedDiscount = Math.min(originalOrderDiscount, roundToTwo(allocatedOrderDiscount + cancelledItemDiscountVal));
   } else if (cancelledItemDiscountVal > 0) {
     cancelledAllocatedDiscount = roundToTwo(cancelledItemDiscountVal);
   }
 
-  // Net customer amount refundable for cancelled items
+  // Authoritative Refund Amount for Cancelled Items:
+  // Cancelled Item Gross - (Cancelled Item Gross * Coupon discount applied percentage)
   const refundableCancelledAmount = Math.max(0, roundToTwo(cancelledGrossAmount - cancelledAllocatedDiscount));
 
   // Adjusted active discount remaining on uncancelled items
@@ -436,7 +483,13 @@ export function calculateOrderFinancials(inputsOrOrder: any): OrderFinancialSumm
   }
 
   // 7. Grand Totals
-  const originalOrderTotal = roundToTwo(Math.max(0, originalSubtotal - totalDiscount + finalShipping + gstAmount + otherCharges));
+  // Authoritative Original Order Total: ALWAYS the original order amount post voucher discount applied, including Delivery charges & GST
+  const originalOrderTotal = roundToTwo(
+    Math.max(
+      0,
+      originalSubtotal - originalOrderDiscount - productDiscount - campaignDiscount + finalShipping + gstAmount + otherCharges
+    )
+  );
   const finalOrderTotal = roundToTwo(Math.max(0, adjustedSubtotal + finalShipping + gstAmount + otherCharges));
 
   // 8. Payments & Reconciliation
@@ -584,10 +637,10 @@ export function calculateOrderFinancials(inputsOrOrder: any): OrderFinancialSumm
     }
     breakdown.push({
       step: '4c',
-      label: 'Net Customer Deduction for Cancelled Items',
+      label: 'Refund Amount for Cancelled Items',
       amount: refundableCancelledAmount,
       operation: 'info',
-      description: `Net payable amount removed from order (Gross ₹${cancelledAmount} - Allocated Discount ₹${cancelledAllocatedDiscount} = ₹${refundableCancelledAmount})`,
+      description: `Authoritative Refund: Cancelled Gross (₹${cancelledAmount}) - (Cancelled Gross × Coupon Discount % [₹${cancelledAllocatedDiscount}]) = ₹${refundableCancelledAmount}`,
     });
   }
 

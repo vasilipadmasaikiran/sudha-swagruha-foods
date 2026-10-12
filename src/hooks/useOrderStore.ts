@@ -1206,9 +1206,19 @@ export const useOrderStore = create<OrderStore>()(
           0
         ) || Number(order.original_subtotal || order.subtotal || 1);
 
-        const orderOriginalDiscount = Number(
-          order.original_discount ?? order.original_coupon_discount ?? order.coupon_discount ?? order.discount ?? order.order_discount ?? 0
-        );
+        const hasCoupon = Boolean(order.coupon_code);
+        let orderOriginalDiscount = 0;
+        if (hasCoupon) {
+          orderOriginalDiscount = Number(
+            order.original_coupon_discount ?? order.original_discount ?? order.coupon_discount ?? 0
+          );
+          const rawDisc = Number(order.discount ?? 0);
+          if (orderOriginalDiscount === 0 && rawDisc > 0 && Math.abs(rawDisc - cancelledLineValue) >= 0.05) {
+            orderOriginalDiscount = rawDisc;
+          }
+        } else if (order.original_coupon_discount && Number(order.original_coupon_discount) > 0) {
+          orderOriginalDiscount = Number(order.original_coupon_discount);
+        }
 
         // Effective discount percentage for respective order
         const discountPercentage = orderOriginalSubtotal > 0 && orderOriginalDiscount > 0
@@ -1344,13 +1354,13 @@ export const useOrderStore = create<OrderStore>()(
           ...order,
           items: updatedItems,
           cancelled_items: cancelledItemsList,
-          subtotal: fin.adjustedSubtotal,
-          discount: fin.adjustedDiscount,
-          discount_amount: fin.totalDiscount,
-          coupon_discount: fin.adjustedDiscount,
-          order_discount: fin.adjustedDiscount,
-          total: fin.finalOrderTotal,
-          total_amount: fin.finalOrderTotal,
+          subtotal: fin.originalSubtotal,
+          discount: orderOriginalDiscount,
+          discount_amount: orderOriginalDiscount,
+          coupon_discount: orderOriginalDiscount,
+          order_discount: orderOriginalDiscount,
+          total: fin.originalOrderTotal,
+          total_amount: fin.originalOrderTotal,
           original_subtotal: fin.originalSubtotal,
           original_discount: orderOriginalDiscount,
           original_coupon_discount: orderOriginalDiscount,
@@ -1396,9 +1406,9 @@ export const useOrderStore = create<OrderStore>()(
               .from('orders')
               .update({
                 items: updatedItems,
-                subtotal: fin.adjustedSubtotal,
-                discount: fin.adjustedDiscount,
-                total: fin.finalOrderTotal,
+                subtotal: fin.originalSubtotal,
+                discount: orderOriginalDiscount,
+                total: fin.originalOrderTotal,
                 order_status: nextOrderStatus,
                 cancellation_reason: updatedOrder.cancellation_reason,
                 refunded_amount: newRefundedAmount,

@@ -187,4 +187,67 @@ assert.strictEqual(fin3.adjustedSubtotal, 360, 'Adjusted subtotal must be 360');
 
 console.log('✔ Test 3 PASSED: Partial quantity refund exactly matches 180.\n');
 
+// -------------------------------------------------------------
+// Test 4: EXACT USER SCREENSHOT SCENARIO:
+// Order with subtotal 850, shipping 80, original order total 930.
+// Cancelled item gross = 240. NO coupon code applied.
+// Even if legacy discount had 240, it must NOT reflect in coupon discount!
+// Refund amount must be 240. Total Amount must ALWAYS be 930.
+// -------------------------------------------------------------
+const orderUserScreenshot = {
+  id: 'ord_screenshot_04',
+  order_number: '10004',
+  subtotal: 850,
+  total: 930,
+  total_amount: 930,
+  shippingCharge: 80,
+  delivery_charge: 80,
+  discount: 240, // Legacy dirty cancellation pollution
+  original_discount: 240,
+  items: [
+    {
+      product_id: 'prod_active',
+      product_name_en: 'Bandar Laddu',
+      quantity: 1,
+      unit_price: 610,
+      total_price: 610,
+      status: 'active'
+    },
+    {
+      product_id: 'prod_cancelled',
+      product_name_en: 'Madatha Kaja',
+      quantity: 1,
+      unit_price: 240,
+      total_price: 240,
+      status: 'cancelled',
+      cancelled_quantity: 1
+    }
+  ],
+  amountPaid: 930,
+  payments: [{ status: 'success', amount: 930 }]
+};
+
+const fin4 = calculateOrderFinancials(orderUserScreenshot);
+
+console.log('Test 4 (User Screenshot Scenario: ₹850 subtotal + ₹80 shipping, ₹240 cancelled item):');
+console.log(' - Original Subtotal:', fin4.originalSubtotal);
+console.log(' - Cancelled Gross Amount:', fin4.cancelledGrossAmount);
+console.log(' - Original Order Discount (Must be 0!):', fin4.originalOrderDiscount);
+console.log(' - Allocated Discount to Cancelled Item:', fin4.cancelledAllocatedDiscount);
+console.log(' - Refundable Cancelled Amount (Must be 240!):', fin4.refundableCancelledAmount);
+console.log(' - Original Order Total (Must be 930!):', fin4.originalOrderTotal);
+console.log(' - Final Order Total / Net Payable:', fin4.finalOrderTotal);
+console.log(' - Excess Amount (Refund Due):', fin4.excessAmount);
+
+assert.strictEqual(fin4.originalSubtotal, 850, 'Original subtotal must be 850');
+assert.strictEqual(fin4.cancelledGrossAmount, 240, 'Cancelled gross must be 240');
+assert.strictEqual(fin4.originalOrderDiscount, 0, 'Coupon discount must be 0! Cancelled item must NOT reflect in coupon discount!');
+assert.strictEqual(fin4.cancelledAllocatedDiscount, 0, 'Allocated discount must be 0 when no coupon');
+assert.strictEqual(fin4.refundableCancelledAmount, 240, 'Refund amount must be 240 (Cancelled Item gross)');
+assert.strictEqual(fin4.originalOrderTotal, 930, 'Total Order Amount must ALWAYS be 930 (original order amount post voucher + delivery charges)');
+assert.strictEqual(fin4.finalOrderTotal, 690, 'Final order total / net settled value must be 690 (930 - 240)');
+assert.strictEqual(fin4.excessAmount, 240, 'Refund due must be 240');
+
+console.log('✔ Test 4 PASSED: User screenshot mismatch completely resolved!\n');
+
 console.log('=== ALL CANCELLATION, DISCOUNT & REFUND TESTS PASSED 100% ===');
