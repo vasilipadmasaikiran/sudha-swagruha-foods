@@ -313,9 +313,16 @@ export function calculateOrderFinancials(inputsOrOrder: any): OrderFinancialSumm
     originalOrderDiscount = storedAllocatedDiscountsSum > 0 ? roundToTwo(rawD + storedAllocatedDiscountsSum) : rawD;
   }
 
-  // Fallback reconciliation for existing orders where discount was 0 or unrecorded in DB
-  // but the recorded order total is lower than (originalSubtotal - productDiscount - campaignDiscount + finalShipping):
-  if (originalOrderDiscount === 0) {
+  // Fallback reconciliation ONLY for legacy records where coupon discount was omitted from schema
+  // CRITICAL: Must NEVER fire if items are cancelled (cancelledGrossAmount > 0) or if discount is already defined (0 or > 0)
+  // Cancelled item amounts must be reflected exclusively in the Refund section, never in discounts.
+  if (
+    originalOrderDiscount === 0 &&
+    cancelledGrossAmount === 0 &&
+    inputsOrOrder.discount === undefined &&
+    inputsOrOrder.original_discount === undefined &&
+    Boolean(inputsOrOrder.coupon_code)
+  ) {
     const recordedTotal = inputsOrOrder.total !== undefined
       ? roundToTwo(Number(inputsOrOrder.total))
       : inputsOrOrder.total_amount !== undefined

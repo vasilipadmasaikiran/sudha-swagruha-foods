@@ -35,6 +35,8 @@ import {
   CheckCircle2,
   FileSpreadsheet,
   Download,
+  Copy,
+  Phone,
 } from 'lucide-react';
 import { useOrderStore } from '@/hooks/useOrderStore';
 import { useAdminAuthStore } from '@/hooks/useAdminAuthStore';
@@ -177,6 +179,10 @@ export default function AdminOrdersTab({ initialSubFilter }: { initialSubFilter?
     order?: DbOrder;
   } | null>(null);
 
+  // Dedicated Refund Ledger Search & Filter States
+  const [refundSearchQuery, setRefundSearchQuery] = useState('');
+  const [refundStatusFilter, setRefundStatusFilter] = useState<'all' | 'success' | 'processing' | 'pending' | 'failed'>('all');
+
   // Manual / Offline Payment Recording State (Requirements 1-9)
   const [isRecordingPayment, setIsRecordingPayment] = useState(false);
   const [paymentInputAmount, setPaymentInputAmount] = useState<string>('');
@@ -294,33 +300,174 @@ export default function AdminOrdersTab({ initialSubFilter }: { initialSubFilter?
   // Aggregate all refunds for dedicated Refund Ledger
   const allRefundsLedger = useMemo(() => {
     const list: Array<{
+      id: string;
       orderId: string;
       orderNumber: string;
+      order: DbOrder;
       customerName: string;
       customerMobile: string;
-      refund: OrderRefundRecord;
-      orderStatus: string;
+      refundEligibleAmount: number;
+      grossAmount?: number;
+      discountPercentage?: number;
+      discountDeducted?: number;
+      hasDiscountApplied: boolean;
+      reason: string;
+      type: string;
+      paymentGatewayReference: string;
+      provider: string;
+      status: 'success' | 'processing' | 'pending' | 'eligible' | 'failed';
+      requestedAt: string;
+      refund?: OrderRefundRecord;
+      cancelledItems?: OrderItem[];
     }> = [];
 
     orders.forEach((o) => {
+      const orderOriginalSubtotal = (o.items || []).reduce(
+        (sum, it) => sum + Number(it.unit_price || 0) * Number(it.quantity || 1),
+        0
+      ) || Number(o.original_subtotal || o.subtotal || 1);
+
+      const orderDisc = Number(
+        o.original_discount ?? o.original_coupon_discount ?? o.coupon_discount ?? o.discount ?? o.order_discount ?? 0
+      );
+
+      const discountRate = (orderOriginalSubtotal > 0 && orderDisc > 0)
+        ? (orderDisc / orderOriginalSubtotal)
+        : 0;
+
+      const cancelledItems = (o.items || []).filter((it) => it.status === 'cancelled' || it.status === 'removed');
+
+      // 1. Explicit Refund Records in order.refunds
       if (o.refunds && o.refunds.length > 0) {
         o.refunds.forEach((r) => {
+          let matchedItem: OrderItem | undefined;
+          if (r.item_id) {
+            matchedItem = o.items.find((it) => it.product_id === r.item_id || it.sku === r.item_id);
+          } else if (cancelledItems.length === 1) {
+            matchedItem = cancelledItems[0];
+          }
+
+          let grossAmount = r.amount;
+          let discountDeducted = 0;
+          const hasDiscountApplied = discountRate > 0;
+
+          if (matchedItem) {
+            const unitPrice = Number(matchedItem.unit_price || (matchedItem.total_price / (matchedItem.quantity || 1)));
+            const qty = Number(matchedItem.cancelled_quantity || matchedItem.quantity || 1);
+            grossAmount = roundToTwoDecimals(unitPrice * qty);
+            discountDeducted = hasDiscountApplied ? roundToTwoDecimals(grossAmount * discountRate) : 0;
+          }
+
           list.push({
+            id: r.id,
             orderId: o.id,
             orderNumber: o.order_number,
+            order: o,
             customerName: o.customer_name,
-            customerMobile: o.customer_mobile,
+            customerMobile: o.customer_mobile || o.customer_phone || '',
+            refundEligibleAmount: r.amount,
+            grossAmount,
+            discountPercentage: roundToTwoDecimals(discountRate * 100),
+            discountDeducted,
+            hasDiscountApplied,
+            reason: r.reason || (matchedItem ? `Item Cancelled: ${matchedItem.product_name_en}` : 'Order Refund'),
+            type: r.type || (matchedItem ? 'Item Cancelled' : 'Order Refund'),
+            paymentGatewayReference: r.provider_refund_id || r.payment_id || o.payment_id || o.razorpay_order_id || ('sim_rfnd_' + r.id.slice(0, 8)),
+            provider: r.provider || 'razorpay',
+            status: r.status as any,
+            requestedAt: r.requested_at,
             refund: r,
-            orderStatus: o.order_status,
+            cancelledItems: cancelledItems.length > 0 ? cancelledItems : undefined,
           });
         });
       }
+
+      // 2. Unrecorded or Eligible Pending Refunds on cancelled items
+      const recordedRefundItemIds = new Set((o.refunds || []).map((r) => r.item_id).filter(Boolean));
+      cancelledItems.forEach((cItem) => {
+        const alreadyCovered = recordedRefundItemIds.has(cItem.product_id) ||
+          Boolean(o.refunds && o.refunds.some((r) => r.reason.toLowerCase().includes(cItem.product_name_en.toLowerCase())));
+        if (!alreadyCovered) {
+          const unitPrice = Number(cItem.unit_price || (cItem.total_price / (cItem.quantity || 1)));
+          const qty = Number(cItem.cancelled_quantity || cItem.quantity || 1);
+          const itemGross = roundToTwoDecimals(unitPrice * qty);
+          const hasDiscount = discountRate > 0;
+          const discDeducted = hasDiscount ? roundToTwoDecimals(itemGross * discountRate) : 0;
+          const eligibleAmt = hasDiscount ? Math.max(0, roundToTwoDecimals(itemGross - discDeducted)) : itemGross;
+
+          list.push({
+            id: `eligible_citem_${o.id}_${cItem.product_id}`,
+            orderId: o.id,
+            orderNumber: o.order_number,
+            order: o,
+            customerName: o.customer_name,
+            customerMobile: o.customer_mobile || o.customer_phone || '',
+            refundEligibleAmount: eligibleAmt,
+            grossAmount: itemGross,
+            discountPercentage: roundToTwoDecimals(discountRate * 100),
+            discountDeducted: discDeducted,
+            hasDiscountApplied: hasDiscount,
+            reason: cItem.removal_reason || `Item Cancelled: ${cItem.product_name_en} (Qty: ${qty})`,
+            type: 'Item Cancelled',
+            paymentGatewayReference: o.payment_id || o.razorpay_order_id || 'Pending Gateway Reference',
+            provider: 'razorpay',
+            status: 'eligible',
+            requestedAt: cItem.removed_at || o.cancelled_at || o.updated_at,
+            cancelledItems: [cItem],
+          });
+        }
+      });
     });
 
     return list.sort(
-      (a, b) => new Date(b.refund.requested_at).getTime() - new Date(a.refund.requested_at).getTime()
+      (a, b) => new Date(b.requestedAt).getTime() - new Date(a.requestedAt).getTime()
     );
   }, [orders]);
+
+  // Filtered Refunds Ledger for Search & Status Filter
+  const filteredRefundsLedger = useMemo(() => {
+    return allRefundsLedger.filter((row) => {
+      if (refundStatusFilter !== 'all') {
+        if (refundStatusFilter === 'pending') {
+          if (row.status !== 'pending' && row.status !== 'eligible') return false;
+        } else if (row.status !== refundStatusFilter) {
+          return false;
+        }
+      }
+      if (refundSearchQuery.trim()) {
+        const q = refundSearchQuery.toLowerCase().trim();
+        const matchOrder = row.orderNumber.toLowerCase().includes(q);
+        const matchCustomer = row.customerName.toLowerCase().includes(q);
+        const matchPhone = row.customerMobile.toLowerCase().includes(q);
+        const matchRef = row.paymentGatewayReference.toLowerCase().includes(q);
+        const matchReason = row.reason.toLowerCase().includes(q);
+        return matchOrder || matchCustomer || matchPhone || matchRef || matchReason;
+      }
+      return true;
+    });
+  }, [allRefundsLedger, refundSearchQuery, refundStatusFilter]);
+
+  // Executive KPI summary for Refunds
+  const refundStats = useMemo(() => {
+    const totalRefundedSum = allRefundsLedger
+      .filter((r) => r.status === 'success')
+      .reduce((sum, r) => sum + r.refundEligibleAmount, 0);
+    const pendingSum = allRefundsLedger
+      .filter((r) => r.status === 'pending' || r.status === 'eligible' || r.status === 'processing')
+      .reduce((sum, r) => sum + r.refundEligibleAmount, 0);
+    const successCount = allRefundsLedger.filter((r) => r.status === 'success').length;
+    const pendingCount = allRefundsLedger.filter((r) => r.status === 'pending' || r.status === 'eligible' || r.status === 'processing').length;
+    const failedCount = allRefundsLedger.filter((r) => r.status === 'failed').length;
+
+    return {
+      totalRefundedSum: roundToTwoDecimals(totalRefundedSum),
+      pendingSum: roundToTwoDecimals(pendingSum),
+      successCount,
+      pendingCount,
+      failedCount,
+      totalCount: allRefundsLedger.length,
+    };
+  }, [allRefundsLedger]);
 
   // Handle direct status change with Interceptions for Dispatch & Cancellation
   const handleStatusChange = async (order: DbOrder, newStatus: DbOrder['order_status']) => {
@@ -639,14 +786,26 @@ export default function AdminOrdersTab({ initialSubFilter }: { initialSubFilter?
     setItemCancelCustomReason('');
     setItemCancelCustomNotes('');
 
-    // Authoritative Section 1.1-1.5: Proportional discount allocation
+    // Authoritative Section: Proportional discount and refund calculation
+    // If discount applied: Cancelled item amount - (Cancelled item amount * discounted percentage for respective order)
+    // If discount not applied: Cancelled item amount is the refund amount
     const itemGross = item.unit_price ? (item.unit_price * item.quantity) : item.total_price;
-    const orderDisc = order.discount || order.discount_amount || 0;
-    const discountRate = (order.subtotal && order.subtotal > 0 && orderDisc > 0)
-      ? (orderDisc / order.subtotal)
+    const orderOriginalSubtotal = (order.items || []).reduce(
+      (sum, it) => sum + Number(it.unit_price || 0) * Number(it.quantity || 1),
+      0
+    ) || Number(order.original_subtotal || order.subtotal || 1);
+    const orderDisc = Number(
+      order.original_discount ?? order.original_coupon_discount ?? order.coupon_discount ?? order.discount ?? order.order_discount ?? 0
+    );
+    const discountRate = (orderOriginalSubtotal > 0 && orderDisc > 0)
+      ? (orderDisc / orderOriginalSubtotal)
       : 0;
-    const allocatedDiscount = roundToTwoDecimals(itemGross * discountRate);
-    const netRefundable = roundToTwoDecimals(Math.max(0, itemGross - allocatedDiscount));
+    const allocatedDiscount = orderDisc > 0
+      ? roundToTwoDecimals(itemGross * discountRate)
+      : 0;
+    const netRefundable = orderDisc > 0
+      ? roundToTwoDecimals(Math.max(0, itemGross - allocatedDiscount))
+      : itemGross;
     setItemCancelRefundAmount(String(netRefundable));
     setItemCancelInitiateRefund(true);
   };
@@ -1007,135 +1166,381 @@ export default function AdminOrdersTab({ initialSubFilter }: { initialSubFilter?
       {statusFilter === 'payment_info' ? (
         <AdminPaymentInfoSubTab onSelectOrder={(o) => setSelectedOrder(o)} />
       ) : statusFilter === 'refund_ledger' ? (
-        /* Dedicated Refund Ledger Table */
-        <div className="bg-slate-950/60 rounded-2xl border border-slate-800 overflow-hidden shadow-xl">
-          <div className="p-4 bg-slate-900/80 border-b border-slate-800 flex items-center justify-between">
-            <div>
-              <h3 className="font-bold text-white text-sm flex items-center gap-2">
-                <Receipt className="w-4 h-4 text-cyan-400" />
-                <span>Financial Refund Transactions & Audit Ledger</span>
-              </h3>
-              <p className="text-xs text-slate-400 mt-0.5">
-                Complete reconciliation of all full and partial refunds initiated through Razorpay & Gateway pipelines.
-              </p>
+        /* Dedicated Refund Ledger Structure with KPI Cards, Search & 8-Column Architecture */
+        <div className="space-y-4">
+          {/* Executive KPI Summary Header Cards */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <div className="p-3.5 bg-slate-900/90 rounded-2xl border border-slate-800 shadow-md">
+              <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block">Total Refunded Amount</span>
+              <p className="text-xl font-bold font-mono text-emerald-400 mt-1">₹{refundStats.totalRefundedSum.toLocaleString('en-IN')}</p>
+              <p className="text-[10px] text-slate-500 mt-0.5">{refundStats.successCount} completed refund{refundStats.successCount === 1 ? '' : 's'}</p>
             </div>
-            <div className="text-right">
-              <span className="text-xs text-slate-400">Total Refunded: </span>
-              <span className="font-mono font-bold text-cyan-400 text-sm">
-                ₹{orderStats.totalRefundedSum.toLocaleString('en-IN')}
-              </span>
+            <div className="p-3.5 bg-slate-900/90 rounded-2xl border border-slate-800 shadow-md">
+              <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block">Refund Eligible / Pending</span>
+              <p className="text-xl font-bold font-mono text-cyan-400 mt-1">₹{refundStats.pendingSum.toLocaleString('en-IN')}</p>
+              <p className="text-[10px] text-slate-500 mt-0.5">{refundStats.pendingCount} awaiting processing</p>
+            </div>
+            <div className="p-3.5 bg-slate-900/90 rounded-2xl border border-slate-800 shadow-md">
+              <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block">Successful Refunds</span>
+              <p className="text-xl font-bold font-mono text-white mt-1">{refundStats.successCount}</p>
+              <p className="text-[10px] text-emerald-400/80 mt-0.5">Settled via Razorpay / Gateway</p>
+            </div>
+            <div className="p-3.5 bg-slate-900/90 rounded-2xl border border-slate-800 shadow-md">
+              <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block">Action Required / Failed</span>
+              <p className="text-xl font-bold font-mono text-rose-400 mt-1">{refundStats.failedCount}</p>
+              <p className="text-[10px] text-slate-500 mt-0.5">{refundStats.failedCount === 0 ? 'All refunds healthy' : 'Requires retry'}</p>
             </div>
           </div>
 
-          {allRefundsLedger.length === 0 ? (
-            <div className="text-center py-16 px-4">
-              <RotateCcw className="w-12 h-12 text-slate-700 mx-auto mb-3" />
-              <p className="text-slate-300 font-semibold text-sm">No Refund Transactions Recorded</p>
-              <p className="text-xs text-slate-500 mt-1">
-                When cancellations or item removals are refunded, they will automatically appear in this ledger.
-              </p>
+          {/* Refund Toolbar: Search, Status Filter Chips & CSV Export */}
+          <div className="bg-slate-900/80 p-3 rounded-2xl border border-slate-800 flex flex-wrap items-center justify-between gap-3 shadow-md">
+            <div className="flex items-center gap-2 flex-1 min-w-[240px] max-w-md bg-slate-950 px-3 py-2 rounded-xl border border-slate-800">
+              <Search className="w-4 h-4 text-slate-400 flex-shrink-0" />
+              <input
+                type="text"
+                placeholder="Search by Order #, Customer, Phone, or Gateway Ref..."
+                value={refundSearchQuery}
+                onChange={(e) => setRefundSearchQuery(e.target.value)}
+                className="w-full bg-transparent text-xs text-white placeholder-slate-500 focus:outline-none"
+              />
+              {refundSearchQuery && (
+                <button
+                  type="button"
+                  onClick={() => setRefundSearchQuery('')}
+                  className="text-slate-400 hover:text-white"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
             </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs">
-                <thead className="bg-slate-900/90 text-slate-400 border-b border-slate-800 uppercase tracking-wider text-[11px]">
-                  <tr>
-                    <th className="px-4 py-3.5">Order Number</th>
-                    <th className="px-4 py-3.5">Customer & Phone</th>
-                    <th className="px-4 py-3.5">Refund Amount</th>
-                    <th className="px-4 py-3.5">Type & Reason</th>
-                    <th className="px-4 py-3.5">Gateway Reference</th>
-                    <th className="px-4 py-3.5">Status</th>
-                    <th className="px-4 py-3.5">Requested At</th>
-                    <th className="px-4 py-3.5 text-right">Actions</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-800/60">
-                  {allRefundsLedger.map((row, idx) => {
-                    const rf = row.refund;
-                    return (
-                      <tr key={idx} className="hover:bg-slate-900/50 transition-colors">
-                        <td className="px-4 py-3.5 align-middle">
-                          <span className="font-mono font-bold text-emerald-400">
-                            {row.orderNumber}
-                          </span>
-                        </td>
-                        <td className="px-4 py-3.5 align-middle">
-                          <p className="font-semibold text-white">{row.customerName}</p>
-                          <p className="text-slate-400 text-[11px] font-mono">{row.customerMobile}</p>
-                        </td>
-                        <td className="px-4 py-3.5 align-middle">
-                          <span className="font-mono font-bold text-cyan-400 text-sm">
-                            ₹{rf.amount}
-                          </span>
-                        </td>
-                        <td className="px-4 py-3.5 align-middle max-w-xs">
-                          <span className="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-slate-800 text-slate-300 mr-1.5">
-                            {rf.type}
-                          </span>
-                          <span className="text-slate-300">{rf.reason}</span>
-                        </td>
-                        <td className="px-4 py-3.5 align-middle">
-                          <span className="font-mono text-slate-400 text-[11px]">
-                            {rf.provider_refund_id || 'sim_rfnd_' + rf.id.slice(0, 8)}
-                          </span>
-                        </td>
-                        <td className="px-4 py-3.5 align-middle">
-                          <span
-                            className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${
-                              rf.status === 'success'
-                                ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
-                                : rf.status === 'processing'
-                                ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
-                                : 'bg-red-500/20 text-red-400 border border-red-500/30'
-                            }`}
-                          >
-                            {rf.status}
-                          </span>
-                        </td>
-                        <td className="px-4 py-3.5 align-middle text-slate-400 text-[11px]">
-                          {new Date(rf.requested_at).toLocaleString()}
-                        </td>
-                        <td className="px-4 py-3.5 align-middle text-right">
-                          <div className="flex items-center justify-end gap-1.5">
-                            <button
-                              onClick={() => {
-                                const found = orders.find((o) => o.id === row.orderId);
-                                setSelectedRefundDetail({
-                                  orderNumber: row.orderNumber,
-                                  customerName: row.customerName,
-                                  customerMobile: row.customerMobile,
-                                  orderId: row.orderId,
-                                  refund: row.refund,
-                                  cancelledItems: found?.cancelled_items,
-                                  order: found,
-                                });
-                              }}
-                              className="px-2.5 py-1 bg-cyan-950/70 hover:bg-cyan-900/70 text-cyan-300 hover:text-white border border-cyan-500/30 rounded-lg transition-colors cursor-pointer flex items-center gap-1 text-[11px] font-semibold"
-                              title="View Transparent Refund Breakdown (Section 5.3)"
-                            >
-                              <Receipt className="w-3.5 h-3.5 text-cyan-400" />
-                              <span className="hidden sm:inline">Details</span>
-                            </button>
-                            <button
-                              onClick={() => {
-                                const found = orders.find((o) => o.id === row.orderId);
-                                if (found) setSelectedOrder(found);
-                              }}
-                              className="p-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded-lg transition-colors cursor-pointer"
-                              title="View Full Order"
-                            >
-                              <Eye className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+
+            <div className="flex items-center gap-1.5 flex-wrap">
+              {(['all', 'success', 'processing', 'pending', 'failed'] as const).map((st) => (
+                <button
+                  key={st}
+                  type="button"
+                  onClick={() => setRefundStatusFilter(st)}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-semibold capitalize transition-all cursor-pointer ${
+                    refundStatusFilter === st
+                      ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 shadow-sm'
+                      : 'bg-slate-950 text-slate-400 hover:text-white border border-slate-800'
+                  }`}
+                >
+                  {st === 'all' ? 'All Refunds' : st === 'pending' ? 'Pending / Eligible' : st}
+                  {st === 'all' && (
+                    <span className="ml-1.5 px-1.5 py-0.2 rounded-full text-[10px] bg-black/40 font-mono">
+                      {allRefundsLedger.length}
+                    </span>
+                  )}
+                </button>
+              ))}
+
+              <button
+                type="button"
+                onClick={() => {
+                  if (filteredRefundsLedger.length === 0) {
+                    toast.error('No refund transactions to export');
+                    return;
+                  }
+                  const headers = [
+                    'Order Number',
+                    'Customer Name',
+                    'Customer Phone',
+                    'Refund Eligible Amount (INR)',
+                    'Discount Applied',
+                    'Reason',
+                    'Payment Gateway Reference',
+                    'Status',
+                    'Requested At',
+                  ];
+                  const rows = filteredRefundsLedger.map((r) => [
+                    `"${r.orderNumber}"`,
+                    `"${r.customerName.replace(/"/g, '""')}"`,
+                    `"${r.customerMobile}"`,
+                    r.refundEligibleAmount.toFixed(2),
+                    r.hasDiscountApplied ? `"Yes (${(r.discountPercentage || 0).toFixed(1)}%)"` : '"No (0%)"',
+                    `"${r.reason.replace(/"/g, '""')}"`,
+                    `"${r.paymentGatewayReference}"`,
+                    `"${r.status.toUpperCase()}"`,
+                    `"${new Date(r.requestedAt).toLocaleString('en-IN')}"`,
+                  ]);
+                  const csvContent = [headers.join(','), ...rows.map((e) => e.join(','))].join('\n');
+                  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+                  const url = URL.createObjectURL(blob);
+                  const link = document.createElement('a');
+                  link.setAttribute('href', url);
+                  link.setAttribute('download', `SudhaSwagruha_Refunds_${new Date().toISOString().slice(0, 10)}.csv`);
+                  document.body.appendChild(link);
+                  link.click();
+                  document.body.removeChild(link);
+                  toast.success(`Exported ${filteredRefundsLedger.length} refund records to CSV!`);
+                }}
+                className="px-3 py-1.5 rounded-xl text-xs font-semibold transition-all flex items-center gap-1.5 cursor-pointer bg-slate-950 hover:bg-slate-800 text-amber-300 hover:text-amber-200 border border-amber-500/40 shadow-sm ml-auto"
+                title="Export refund records to CSV"
+              >
+                <Download className="w-3.5 h-3.5 text-amber-400" />
+                <span>Export Refunds</span>
+              </button>
             </div>
-          )}
+          </div>
+
+          {/* Refund Ledger Table (Exact 8-Column Architecture) */}
+          <div className="bg-slate-950/60 rounded-2xl border border-slate-800 overflow-hidden shadow-xl">
+            {filteredRefundsLedger.length === 0 ? (
+              <div className="text-center py-16 px-4">
+                <RotateCcw className="w-12 h-12 text-slate-700 mx-auto mb-3" />
+                <p className="text-slate-300 font-semibold text-sm">No Refund Transactions Recorded</p>
+                <p className="text-xs text-slate-500 mt-1">
+                  {refundSearchQuery || refundStatusFilter !== 'all'
+                    ? 'No refund records match your search or filter criteria.'
+                    : 'When customer orders or items are cancelled, eligible refund records will appear here.'}
+                </p>
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs">
+                  <thead className="bg-slate-900/90 text-slate-400 border-b border-slate-800 uppercase tracking-wider text-[11px]">
+                    <tr>
+                      <th className="px-4 py-3.5 font-bold">Order Number</th>
+                      <th className="px-4 py-3.5 font-bold">Customer & Phone</th>
+                      <th className="px-4 py-3.5 font-bold">Refund Eligible Amount</th>
+                      <th className="px-4 py-3.5 font-bold">Reason</th>
+                      <th className="px-4 py-3.5 font-bold">Payment Gateway Reference</th>
+                      <th className="px-4 py-3.5 font-bold">Status</th>
+                      <th className="px-4 py-3.5 font-bold">Requested At</th>
+                      <th className="px-4 py-3.5 text-right font-bold">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-800/60">
+                    {filteredRefundsLedger.map((row) => {
+                      return (
+                        <tr key={row.id} className="hover:bg-slate-900/50 transition-colors">
+                          {/* 1. Order Number */}
+                          <td className="px-4 py-3.5 align-middle">
+                            <div className="flex items-center gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => setSelectedOrder(row.order)}
+                                className="font-mono font-bold text-emerald-400 hover:text-emerald-300 underline underline-offset-2 transition-colors cursor-pointer"
+                                title="Click to view full order"
+                              >
+                                #{row.orderNumber}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  navigator.clipboard.writeText(row.orderNumber);
+                                  toast.success(`Copied Order #${row.orderNumber}`);
+                                }}
+                                className="text-slate-500 hover:text-white transition-colors p-0.5"
+                                title="Copy Order Number"
+                              >
+                                <Copy className="w-3 h-3" />
+                              </button>
+                            </div>
+                          </td>
+
+                          {/* 2. Customer & Phone */}
+                          <td className="px-4 py-3.5 align-middle">
+                            <p className="font-semibold text-white">{row.customerName}</p>
+                            <div className="flex items-center gap-1.5 mt-0.5">
+                              <span className="text-slate-400 text-[11px] font-mono">{row.customerMobile || 'No Phone'}</span>
+                              {row.customerMobile && (
+                                <>
+                                  <a
+                                    href={`tel:${row.customerMobile}`}
+                                    className="text-slate-500 hover:text-emerald-400 transition-colors p-0.5"
+                                    title="Call Customer"
+                                  >
+                                    <Phone className="w-3 h-3" />
+                                  </a>
+                                  <a
+                                    href={`https://wa.me/91${row.customerMobile.replace(/\D/g, '').slice(-10)}`}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="text-slate-500 hover:text-emerald-400 transition-colors p-0.5"
+                                    title="WhatsApp Customer"
+                                  >
+                                    <MessageCircle className="w-3 h-3" />
+                                  </a>
+                                </>
+                              )}
+                            </div>
+                          </td>
+
+                          {/* 3. Refund Eligible Amount */}
+                          <td className="px-4 py-3.5 align-middle">
+                            <div className="font-mono font-bold text-cyan-400 text-sm">
+                              ₹{row.refundEligibleAmount.toFixed(2)}
+                            </div>
+                            {row.hasDiscountApplied && row.discountDeducted !== undefined && row.discountDeducted > 0 ? (
+                              <div className="text-[10px] text-amber-300 font-mono mt-0.5 flex items-center gap-1">
+                                <span>₹{row.grossAmount?.toFixed(0)}</span>
+                                <span>-</span>
+                                <span>{(row.discountPercentage || 0).toFixed(0)}% disc</span>
+                                <span>=</span>
+                                <span className="font-bold">₹{row.refundEligibleAmount.toFixed(0)}</span>
+                              </div>
+                            ) : (
+                              <div className="text-[10px] text-slate-500 font-mono mt-0.5">
+                                Gross ₹{row.grossAmount?.toFixed(0) || row.refundEligibleAmount.toFixed(0)} (0% disc)
+                              </div>
+                            )}
+                          </td>
+
+                          {/* 4. Reason */}
+                          <td className="px-4 py-3.5 align-middle max-w-xs">
+                            <div className="space-y-1">
+                              <span className="px-1.5 py-0.5 rounded text-[9px] font-bold uppercase bg-slate-800 text-slate-300 border border-slate-700 inline-block">
+                                {row.type}
+                              </span>
+                              <p className="text-slate-200 line-clamp-2 leading-relaxed">{row.reason}</p>
+                            </div>
+                          </td>
+
+                          {/* 5. Payment Gateway Reference */}
+                          <td className="px-4 py-3.5 align-middle">
+                            <div className="flex items-center gap-1.5">
+                              <span className="font-mono text-slate-300 text-[11px] bg-slate-900 px-2 py-0.5 rounded border border-slate-800">
+                                {row.paymentGatewayReference}
+                              </span>
+                              {row.paymentGatewayReference && row.paymentGatewayReference !== 'Pending Gateway Reference' && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    navigator.clipboard.writeText(row.paymentGatewayReference);
+                                    toast.success(`Copied Gateway Ref: ${row.paymentGatewayReference}`);
+                                  }}
+                                  className="text-slate-500 hover:text-white p-0.5 transition-colors"
+                                  title="Copy Gateway Reference"
+                                >
+                                  <Copy className="w-3 h-3" />
+                                </button>
+                              )}
+                            </div>
+                          </td>
+
+                          {/* 6. Status */}
+                          <td className="px-4 py-3.5 align-middle">
+                            <span
+                              className={`px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider inline-flex items-center gap-1 border ${
+                                row.status === 'success'
+                                  ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30'
+                                  : row.status === 'processing'
+                                  ? 'bg-amber-500/20 text-amber-400 border-amber-500/30'
+                                  : row.status === 'eligible' || row.status === 'pending'
+                                  ? 'bg-cyan-500/20 text-cyan-400 border-cyan-500/30'
+                                  : 'bg-red-500/20 text-red-400 border-red-500/30'
+                              }`}
+                            >
+                              {row.status === 'success' ? (
+                                <>
+                                  <CheckCircle className="w-3 h-3" />
+                                  <span>Refunded</span>
+                                </>
+                              ) : row.status === 'processing' ? (
+                                <>
+                                  <Clock className="w-3 h-3 animate-spin" />
+                                  <span>Processing</span>
+                                </>
+                              ) : row.status === 'eligible' || row.status === 'pending' ? (
+                                <>
+                                  <AlertCircle className="w-3 h-3" />
+                                  <span>Eligible / Pending</span>
+                                </>
+                              ) : (
+                                <>
+                                  <AlertTriangle className="w-3 h-3" />
+                                  <span>Failed</span>
+                                </>
+                              )}
+                            </span>
+                          </td>
+
+                          {/* 7. Requested At */}
+                          <td className="px-4 py-3.5 align-middle text-slate-300 text-[11px]">
+                            <div>
+                              {row.requestedAt ? new Date(row.requestedAt).toLocaleDateString('en-IN', {
+                                day: '2-digit',
+                                month: 'short',
+                                year: 'numeric',
+                              }) : 'N/A'}
+                            </div>
+                            <div className="text-slate-500 text-[10px]">
+                              {row.requestedAt ? new Date(row.requestedAt).toLocaleTimeString('en-IN', {
+                                hour: '2-digit',
+                                minute: '2-digit',
+                              }) : ''}
+                            </div>
+                          </td>
+
+                          {/* 8. Action */}
+                          <td className="px-4 py-3.5 align-middle text-right">
+                            <div className="flex items-center justify-end gap-1.5">
+                              {(row.status === 'eligible' || row.status === 'pending' || row.status === 'failed') && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setRefundModalOrder(row.order);
+                                    setRefundCustomAmount(String(row.refundEligibleAmount));
+                                    setRefundReason(row.reason);
+                                  }}
+                                  className="px-2.5 py-1 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white rounded-lg transition-all font-semibold text-[11px] shadow-sm flex items-center gap-1 cursor-pointer"
+                                  title="Process Refund through Payment Gateway"
+                                >
+                                  <RotateCcw className="w-3 h-3" />
+                                  <span>Process Refund</span>
+                                </button>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setSelectedRefundDetail({
+                                    orderNumber: row.orderNumber,
+                                    customerName: row.customerName,
+                                    customerMobile: row.customerMobile,
+                                    orderId: row.orderId,
+                                    refund: row.refund || {
+                                      id: row.id,
+                                      order_id: row.orderId,
+                                      order_number: row.orderNumber,
+                                      amount: row.refundEligibleAmount,
+                                      type: row.type as any,
+                                      reason: row.reason,
+                                      status: row.status as any,
+                                      provider: row.provider,
+                                      provider_refund_id: row.paymentGatewayReference,
+                                      requested_by: 'Store Admin',
+                                      requested_at: row.requestedAt,
+                                    },
+                                    cancelledItems: row.cancelledItems,
+                                    order: row.order,
+                                  });
+                                }}
+                                className="px-2.5 py-1 bg-cyan-950/70 hover:bg-cyan-900/70 text-cyan-300 hover:text-white border border-cyan-500/30 rounded-lg transition-colors cursor-pointer flex items-center gap-1 text-[11px] font-semibold"
+                                title="View Transparent Refund Breakdown"
+                              >
+                                <Receipt className="w-3.5 h-3.5 text-cyan-400" />
+                                <span className="hidden sm:inline">Details</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setSelectedOrder(row.order)}
+                                className="p-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded-lg transition-colors cursor-pointer"
+                                title="View Full Order"
+                              >
+                                <Eye className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
         </div>
       ) : (
         /* Orders List Table */
@@ -2851,12 +3256,22 @@ export default function AdminOrdersTab({ initialSubFilter }: { initialSubFilter?
                         setItemCancelQty(q);
                         const unitPrice = itemCancelTarget.unit_price || (itemCancelTarget.total_price / itemCancelTarget.quantity);
                         const itemGross = unitPrice * q;
-                        const orderDisc = itemCancelOrder?.discount || itemCancelOrder?.discount_amount || 0;
-                        const discountRate = (itemCancelOrder && itemCancelOrder.subtotal && itemCancelOrder.subtotal > 0 && orderDisc > 0)
-                          ? (orderDisc / itemCancelOrder.subtotal)
+                        const orderOriginalSubtotal = (itemCancelOrder?.items || []).reduce(
+                          (sum, it) => sum + Number(it.unit_price || 0) * Number(it.quantity || 1),
+                          0
+                        ) || Number(itemCancelOrder?.original_subtotal || itemCancelOrder?.subtotal || 1);
+                        const orderDisc = Number(
+                          itemCancelOrder?.original_discount ?? itemCancelOrder?.original_coupon_discount ?? itemCancelOrder?.coupon_discount ?? itemCancelOrder?.discount ?? itemCancelOrder?.order_discount ?? 0
+                        );
+                        const discountRate = (orderOriginalSubtotal > 0 && orderDisc > 0)
+                          ? (orderDisc / orderOriginalSubtotal)
                           : 0;
-                        const allocatedDiscount = roundToTwoDecimals(itemGross * discountRate);
-                        const netRefundable = roundToTwoDecimals(Math.max(0, itemGross - allocatedDiscount));
+                        const allocatedDiscount = orderDisc > 0
+                          ? roundToTwoDecimals(itemGross * discountRate)
+                          : 0;
+                        const netRefundable = orderDisc > 0
+                          ? roundToTwoDecimals(Math.max(0, itemGross - allocatedDiscount))
+                          : itemGross;
                         setItemCancelRefundAmount(String(netRefundable));
                       }}
                       className="w-full px-3 py-2.5 bg-slate-800 border border-slate-700 rounded-xl text-white text-xs font-mono focus:outline-none focus:border-amber-500"
@@ -2870,40 +3285,52 @@ export default function AdminOrdersTab({ initialSubFilter }: { initialSubFilter?
                   </div>
                 )}
 
-                {/* Authoritative Section 1.1-1.5: Proportional Discount & Net Refund Reconciliation */}
+                {/* Authoritative Proportional Discount & Refund Calculation Display */}
                 {(() => {
                   const unitPrice = itemCancelTarget.unit_price || (itemCancelTarget.total_price / itemCancelTarget.quantity);
                   const itemGross = unitPrice * itemCancelQty;
-                  const orderDisc = itemCancelOrder?.discount || itemCancelOrder?.discount_amount || 0;
-                  const discountRate = (itemCancelOrder && itemCancelOrder.subtotal && itemCancelOrder.subtotal > 0 && orderDisc > 0)
-                    ? (orderDisc / itemCancelOrder.subtotal)
+                  const orderOriginalSubtotal = (itemCancelOrder?.items || []).reduce(
+                    (sum, it) => sum + Number(it.unit_price || 0) * Number(it.quantity || 1),
+                    0
+                  ) || Number(itemCancelOrder?.original_subtotal || itemCancelOrder?.subtotal || 1);
+                  const orderDisc = Number(
+                    itemCancelOrder?.original_discount ?? itemCancelOrder?.original_coupon_discount ?? itemCancelOrder?.coupon_discount ?? itemCancelOrder?.discount ?? itemCancelOrder?.order_discount ?? 0
+                  );
+                  const discountRate = (orderOriginalSubtotal > 0 && orderDisc > 0)
+                    ? (orderDisc / orderOriginalSubtotal)
                     : 0;
-                  const allocatedDiscount = roundToTwoDecimals(itemGross * discountRate);
-                  const netRefundable = roundToTwoDecimals(Math.max(0, itemGross - allocatedDiscount));
+                  const allocatedDiscount = orderDisc > 0
+                    ? roundToTwoDecimals(itemGross * discountRate)
+                    : 0;
+                  const netRefundable = orderDisc > 0
+                    ? roundToTwoDecimals(Math.max(0, itemGross - allocatedDiscount))
+                    : itemGross;
 
                   return (
                     <div className="p-3.5 bg-slate-950 rounded-xl border border-slate-800 space-y-1.5 text-xs">
                       <div className="flex items-center justify-between text-slate-400">
-                        <span>Gross Price ({itemCancelQty} {itemCancelQty > 1 ? 'units' : 'unit'}):</span>
+                        <span>Cancelled Item Amount ({itemCancelQty} {itemCancelQty > 1 ? 'units' : 'unit'}):</span>
                         <span className="font-mono font-semibold text-white">₹{itemGross.toFixed(2)}</span>
                       </div>
                       {allocatedDiscount > 0 ? (
                         <div className="flex items-center justify-between text-amber-300">
-                          <span>Allocated Coupon Discount ({(discountRate * 100).toFixed(2)}%):</span>
+                          <span>Discount Applied ({(discountRate * 100).toFixed(1)}%):</span>
                           <span className="font-mono font-semibold">-₹{allocatedDiscount.toFixed(2)}</span>
                         </div>
                       ) : (
                         <div className="flex items-center justify-between text-slate-500 text-[11px]">
-                          <span>Order Coupon Discount:</span>
-                          <span className="font-mono">₹0.00</span>
+                          <span>Order Discount Status:</span>
+                          <span className="font-mono">None (0% Applied)</span>
                         </div>
                       )}
                       <div className="flex items-center justify-between pt-1.5 border-t border-slate-800/80 font-bold text-sm text-emerald-400">
-                        <span>Net Refundable Amount:</span>
+                        <span>Refund Eligible Amount:</span>
                         <span className="font-mono">₹{netRefundable.toFixed(2)}</span>
                       </div>
-                      <p className="text-[10px] text-slate-500 pt-0.5">
-                        Proportionally adjusted using original coupon discount rules. Preserves historical order totals.
+                      <p className="text-[10px] text-cyan-400/90 pt-0.5">
+                        {allocatedDiscount > 0
+                          ? `Refund amount = Cancelled item amount - (${(discountRate * 100).toFixed(1)}% discount). Updated in Refund section only.`
+                          : 'No discount applied. Cancelled item amount is 100% refundable. Updated in Refund section only.'}
                       </p>
                     </div>
                   );

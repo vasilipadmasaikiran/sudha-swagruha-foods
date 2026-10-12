@@ -1198,17 +1198,34 @@ export const useOrderStore = create<OrderStore>()(
         const unitPrice = Number(targetItem.unit_price || (targetItem.total_price / targetItem.quantity));
         const cancelledLineValue = roundToTwoDecimals(unitPrice * requestedCancelQty);
 
-        // Proportional discount allocation (Requirements 1.1 - 1.7)
+        // Authoritative Proportional Discount & Refund Calculation:
+        // If discount applied: Cancelled item amount - (Cancelled item amount * discounted percentage for respective order)
+        // If discount not applied: Cancelled item amount is the refund amount.
         const orderOriginalSubtotal = (order.items || []).reduce(
           (sum, it) => sum + Number(it.unit_price || 0) * Number(it.quantity || 1),
           0
+        ) || Number(order.original_subtotal || order.subtotal || 1);
+
+        const orderOriginalDiscount = Number(
+          order.original_discount ?? order.original_coupon_discount ?? order.coupon_discount ?? order.discount ?? order.order_discount ?? 0
         );
-        const orderTotalDiscount = Number(order.coupon_discount || order.discount || order.order_discount || 0);
-        const itemDiscountRate = orderOriginalSubtotal > 0 && orderTotalDiscount > 0
-          ? orderTotalDiscount / orderOriginalSubtotal
+
+        // Effective discount percentage for respective order
+        const discountPercentage = orderOriginalSubtotal > 0 && orderOriginalDiscount > 0
+          ? orderOriginalDiscount / orderOriginalSubtotal
           : 0;
-        const allocatedItemDiscount = roundToTwoDecimals(cancelledLineValue * itemDiscountRate);
-        const netRefundableCancelledAmount = Math.max(0, roundToTwoDecimals(cancelledLineValue - allocatedItemDiscount));
+
+        // Discount amount attributed to cancelled item = Cancelled item amount * discounted percentage
+        const allocatedItemDiscount = orderOriginalDiscount > 0
+          ? roundToTwoDecimals(cancelledLineValue * discountPercentage)
+          : 0;
+
+        // Refund amount:
+        // If discount applied => cancelledLineValue - (cancelledLineValue * discountPercentage)
+        // If discount not applied => cancelledLineValue
+        const netRefundableCancelledAmount = orderOriginalDiscount > 0
+          ? Math.max(0, roundToTwoDecimals(cancelledLineValue - allocatedItemDiscount))
+          : cancelledLineValue;
 
         // Calculate item refundable amount
         const customAmt = options?.customRefundAmount !== undefined ? Number(options.customRefundAmount) : undefined;
@@ -1317,13 +1334,16 @@ export const useOrderStore = create<OrderStore>()(
         const fin = calculateOrderFinancials({
           ...order,
           items: updatedItems,
-          original_discount: orderTotalDiscount,
-          original_coupon_discount: orderTotalDiscount,
+          original_discount: orderOriginalDiscount,
+          original_coupon_discount: orderOriginalDiscount,
         });
+
+        const cancelledItemsList = updatedItems.filter((it) => it.status === 'cancelled' || it.status === 'removed');
 
         const updatedOrder: DbOrder = {
           ...order,
           items: updatedItems,
+          cancelled_items: cancelledItemsList,
           subtotal: fin.adjustedSubtotal,
           discount: fin.adjustedDiscount,
           discount_amount: fin.totalDiscount,
@@ -1332,8 +1352,8 @@ export const useOrderStore = create<OrderStore>()(
           total: fin.finalOrderTotal,
           total_amount: fin.finalOrderTotal,
           original_subtotal: fin.originalSubtotal,
-          original_discount: fin.originalOrderDiscount,
-          original_coupon_discount: fin.originalOrderDiscount,
+          original_discount: orderOriginalDiscount,
+          original_coupon_discount: orderOriginalDiscount,
           taxable_amount: fin.taxableAmount,
           gst_amount: fin.gstAmount,
           order_status: nextOrderStatus,
