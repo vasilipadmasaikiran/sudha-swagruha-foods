@@ -115,39 +115,14 @@ export default function AdminLoginForm({ onLogin }: { onLogin?: () => void }) {
             </div>
           </div>
 
-          {/* Quick RBAC Role Selectors */}
-          <div className="bg-slate-800/80 border border-slate-700/60 rounded-xl p-3 text-xs space-y-2">
-            <span className="text-slate-400 block font-semibold uppercase text-[10px] tracking-wider">
-              Quick Role Switch (Demo Credentials):
-            </span>
-            <div className="grid grid-cols-3 gap-1.5">
-              <button
-                type="button"
-                onClick={() => handleFillRole('admin@sudhaswagruha.com', 'admin123')}
-                className="p-1.5 rounded-lg bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-[11px] font-bold flex flex-col items-center justify-center gap-1 transition-colors cursor-pointer"
-              >
-                <ShieldCheck className="w-3.5 h-3.5" />
-                <span>Root Admin</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => handleFillRole('store@sudhaswagruha.com', 'store123')}
-                className="p-1.5 rounded-lg bg-blue-500/10 hover:bg-blue-500/20 text-blue-300 border border-blue-500/30 text-[11px] font-bold flex flex-col items-center justify-center gap-1 transition-colors cursor-pointer"
-              >
-                <Package className="w-3.5 h-3.5" />
-                <span>Store Keeper</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => handleFillRole('orders@sudhaswagruha.com', 'orders123')}
-                className="p-1.5 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 text-[11px] font-bold flex flex-col items-center justify-center gap-1 transition-colors cursor-pointer"
-              >
-                <ShoppingBag className="w-3.5 h-3.5" />
-                <span>Order Proc.</span>
-              </button>
+          <div className="p-3 bg-slate-950/60 rounded-xl border border-slate-800 text-[11px] text-slate-400 space-y-1">
+            <div className="flex items-center gap-1.5 text-emerald-400 font-semibold">
+              <ShieldCheck className="w-3.5 h-3.5" />
+              <span>Enterprise Secure Access</span>
             </div>
+            <p>
+              Please enter your authorized corporate administrative credentials. All login actions are audited.
+            </p>
           </div>
 
           <button

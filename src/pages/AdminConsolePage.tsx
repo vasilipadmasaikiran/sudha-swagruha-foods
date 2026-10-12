@@ -379,35 +379,6 @@ export default function AdminConsolePage() {
   const currentRole = currentUser?.role || 'ROOT_ADMIN';
   const roleDef = ROLE_DEFINITIONS[currentRole] || ROLE_DEFINITIONS.ROOT_ADMIN;
 
-  // Handle Quick Switch Demo Role
-  const handleSwitchDemoRole = async (targetRole: AdminRole) => {
-    if (targetRole === 'ROOT_ADMIN') {
-      await rbacLogin('admin@sudhaswagruha.com', 'admin123');
-      setAdmin(true, 'admin@sudhaswagruha.com');
-      setActiveTab('dashboard');
-      toast.success('Switched to Root / Super Admin');
-    } else if (targetRole === 'STORE_KEEPER') {
-      await rbacLogin('store@sudhaswagruha.com', 'store123');
-      setAdmin(true, 'store@sudhaswagruha.com');
-      setActiveTab('inventory');
-      toast.success('Switched to Store Keeper (Inventory & Products only)');
-    } else if (targetRole === 'ORDER_PROCESSOR') {
-      await rbacLogin('orders@sudhaswagruha.com', 'orders123');
-      setAdmin(true, 'orders@sudhaswagruha.com');
-      setActiveTab('orders');
-      toast.success('Switched to Order Processor (Orders only)');
-    } else if (targetRole === 'PRODUCT_MANAGER') {
-      await rbacLogin('products@sudhaswagruha.com', 'prod123');
-      setAdmin(true, 'products@sudhaswagruha.com');
-      setActiveTab('products');
-      toast.success('Switched to Product Manager (Catalog & Categories)');
-    } else if (targetRole === 'FINANCE_MANAGER') {
-      await rbacLogin('finance@sudhaswagruha.com', 'finance123');
-      setAdmin(true, 'finance@sudhaswagruha.com');
-      setActiveTab('payments');
-      toast.success('Switched to Finance & Payment Manager (Payments & Ledger)');
-    }
-  };
 
   if (!isAdmin) {
     return <AdminLoginForm />;
@@ -717,23 +688,6 @@ export default function AdminConsolePage() {
           </div>
 
           <div className="flex items-center gap-2 sm:gap-3">
-            {/* Quick Role Tester Switcher */}
-            <div className="hidden md:flex items-center gap-1 bg-slate-900 p-1 rounded-xl border border-slate-800 text-xs">
-              <span className="text-[10px] text-slate-500 uppercase px-1 font-semibold">Role:</span>
-              {(['ROOT_ADMIN', 'STORE_KEEPER', 'ORDER_PROCESSOR'] as AdminRole[]).map((r) => (
-                <button
-                  key={r}
-                  onClick={() => handleSwitchDemoRole(r)}
-                  className={`px-2 py-0.5 rounded-lg text-[10px] font-bold transition-colors cursor-pointer ${
-                    currentRole === r
-                      ? 'bg-emerald-600 text-white'
-                      : 'text-slate-400 hover:text-white'
-                  }`}
-                >
-                  {r === 'ROOT_ADMIN' ? 'Admin' : r === 'STORE_KEEPER' ? 'Store' : 'Orders'}
-                </button>
-              ))}
-            </div>
 
             <Link
               to="/"

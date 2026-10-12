@@ -158,142 +158,7 @@ interface OrderStore {
   subscribeToOrders: () => () => void;
 }
 
-const initialOrders: DbOrder[] = [
-  {
-    id: 'order-101',
-    order_number: 'SSF-20261001-00101',
-    customer_id: null,
-    customer_name: 'Suresh Varma',
-    customer_mobile: '9876543210',
-    customer_whatsapp: '9876543210',
-    customer_email: 'suresh@example.com',
-    items: [
-      {
-        product_id: '1',
-        product_name_en: 'Andhra Avakaya Pickle',
-        product_name_te: 'ఆంధ్ర అవకాయ',
-        weight: '500g',
-        quantity: 2,
-        unit_price: 320,
-        total_price: 640,
-        sku: 'SSF-AVK-500',
-      },
-      {
-        product_id: '5',
-        product_name_en: 'Kandi Karam Podi',
-        product_name_te: 'కంది కారం పొడి',
-        weight: '250g',
-        quantity: 1,
-        unit_price: 180,
-        total_price: 180,
-        sku: 'SSF-KKP-250',
-      },
-    ],
-    subtotal: 820,
-    delivery_charge: 0,
-    discount: 0,
-    total: 820,
-    payment_status: 'paid',
-    payment_id: null,
-    razorpay_order_id: null,
-    order_status: 'preparing',
-    tracking_id: null,
-    courier_name: null,
-    tracking_url: null,
-    dispatched_at: null,
-    delivery_address: {
-      house_no: 'Plot 42, Green Meadows',
-      street: 'Madhapur Main Road',
-      area: 'Hitech City',
-      city: 'Hyderabad',
-      district: 'Hyderabad',
-      state: 'Telangana',
-      pincode: '500081',
-    },
-    notes: 'Please pack securely with extra bubble wrap',
-    order_status_history: [
-      {
-        status: 'placed',
-        timestamp: new Date(Date.now() - 3600000 * 24).toISOString(),
-        notes: 'Order placed by customer',
-      },
-      {
-        status: 'confirmed',
-        timestamp: new Date(Date.now() - 3600000 * 20).toISOString(),
-        updated_by: 'Order Processor',
-      },
-      {
-        status: 'preparing',
-        timestamp: new Date(Date.now() - 3600000 * 12).toISOString(),
-        updated_by: 'Kitchen Head',
-      },
-    ],
-    created_at: new Date(Date.now() - 3600000 * 24).toISOString(),
-    updated_at: new Date(Date.now() - 3600000 * 12).toISOString(),
-  },
-  {
-    id: 'order-102',
-    order_number: 'SSF-20261004-00102',
-    customer_id: null,
-    customer_name: 'Lakshmi Devi',
-    customer_mobile: '8374634989',
-    customer_whatsapp: '8374634989',
-    customer_email: 'lakshmi@example.com',
-    items: [
-      {
-        product_id: '3',
-        product_name_en: 'Gongura Pachadi',
-        product_name_te: 'గోంగూర పచ్చడి',
-        weight: '500g',
-        quantity: 1,
-        unit_price: 310,
-        total_price: 310,
-        sku: 'SSF-GNG-500',
-      },
-    ],
-    subtotal: 310,
-    delivery_charge: 60,
-    discount: 0,
-    total: 370,
-    payment_status: 'pending',
-    payment_id: null,
-    razorpay_order_id: null,
-    order_status: 'shipped',
-    tracking_id: 'DELH98726351',
-    courier_name: 'Delhivery',
-    tracking_url: 'https://www.delhivery.com/track/package/DELH98726351',
-    dispatched_at: new Date(Date.now() - 3600000 * 1).toISOString(),
-    delivery_address: {
-      house_no: 'D.No 12-4-5',
-      street: 'Brodipet 4th line',
-      area: 'Brodipet',
-      city: 'Guntur',
-      district: 'Guntur',
-      state: 'Andhra Pradesh',
-      pincode: '522002',
-    },
-    notes: 'Call before delivery',
-    order_status_history: [
-      {
-        status: 'placed',
-        timestamp: new Date(Date.now() - 3600000 * 6).toISOString(),
-      },
-      {
-        status: 'confirmed',
-        timestamp: new Date(Date.now() - 3600000 * 4).toISOString(),
-      },
-      {
-        status: 'shipped',
-        timestamp: new Date(Date.now() - 3600000 * 1).toISOString(),
-        tracking_id: 'DELH98726351',
-        courier_name: 'Delhivery',
-        notes: 'Handed over to Delhivery logistics',
-      },
-    ],
-    created_at: new Date(Date.now() - 3600000 * 6).toISOString(),
-    updated_at: new Date(Date.now() - 3600000 * 1).toISOString(),
-  },
-];
+const initialOrders: DbOrder[] = [];
 
 export const useOrderStore = create<OrderStore>()(
   persist(
@@ -2140,13 +2005,18 @@ export const useOrderStore = create<OrderStore>()(
         );
       },
 
-      // ─── Reset to demo data ────────────────────────────────────────
+      // ─── Reset orders ───────────────────────────────────────────────
       resetOrders: () => {
-        set({ orders: initialOrders });
+        set({ orders: [] });
       },
     }),
     {
       name: 'ssf-orders',
+      onRehydrateStorage: () => (state) => {
+        if (state) {
+          state.orders = (state.orders || []).filter((o) => !o.id.startsWith('order-10'));
+        }
+      },
     }
   )
 );

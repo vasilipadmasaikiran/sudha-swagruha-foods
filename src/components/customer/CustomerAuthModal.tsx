@@ -56,7 +56,6 @@ export default function CustomerAuthModal() {
   const [isSendingOtp, setIsSendingOtp] = useState(false);
   const [isVerifyingOtp, setIsVerifyingOtp] = useState(false);
   const [cooldown, setCooldown] = useState(0);
-  const [testCodeHint, setTestCodeHint] = useState<string | null>(null);
 
   // Profile Edit State
   const [editName, setEditName] = useState(customer?.name || '');
@@ -107,15 +106,11 @@ export default function CustomerAuthModal() {
     if (isSendingOtp || cooldown > 0) return;
 
     setIsSendingOtp(true);
-    setTestCodeHint(null);
     try {
       const res = await sendOtp(phoneNumber);
       if (res.success) {
         toast.success(`OTP sent to +91 ${phoneNumber}`);
         setCooldown(res.cooldownSeconds || 30);
-        if (res.testCode) {
-          setTestCodeHint(res.testCode);
-        }
       } else {
         toast.error(res.error || 'Failed to send OTP');
       }
@@ -324,12 +319,6 @@ export default function CustomerAuthModal() {
                 />
               </div>
 
-              {testCodeHint && (
-                <div className="p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs flex items-center justify-between">
-                  <span>Demo Sandbox Code:</span>
-                  <span className="font-mono font-bold text-sm tracking-wider">{testCodeHint}</span>
-                </div>
-              )}
 
               <button
                 type="submit"

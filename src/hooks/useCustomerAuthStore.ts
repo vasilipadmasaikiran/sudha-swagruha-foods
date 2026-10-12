@@ -184,8 +184,8 @@ export const useCustomerAuthStore = create<CustomerAuthStore>()(
           };
         }
 
-        // 3. Code match check (Allows demo '123456' or generated code)
-        if (code !== session.code && code !== '123456') {
+        // 3. Secure Enterprise Code match check
+        if (code !== session.code) {
           const remaining = (customerAuth.maxOtpRetries || 3) - session.attempts;
           return {
             success: false,
@@ -204,18 +204,7 @@ export const useCustomerAuthStore = create<CustomerAuthStore>()(
             name: `Customer ${phone.slice(-4)}`,
             phone,
             email: '',
-            savedAddresses: [
-              {
-                id: `addr_1`,
-                house_no: 'Plot 18',
-                street: 'Main Road',
-                area: 'Madhapur',
-                city: 'Hyderabad',
-                state: 'Telangana',
-                pincode: '500081',
-                isDefault: true,
-              },
-            ],
+            savedAddresses: [],
             authProvider: 'otp',
             createdAt: new Date().toISOString(),
           };
@@ -358,6 +347,16 @@ export const useCustomerAuthStore = create<CustomerAuthStore>()(
         customer: state.customer,
         isAuthenticated: state.isAuthenticated,
       }),
+      onRehydrateStorage: () => (state) => {
+        if (state?.customer?.savedAddresses) {
+          const nonDemoAddresses = state.customer.savedAddresses.filter(
+            (a) => a.id !== 'addr_1' && a.house_no !== 'Plot 18'
+          );
+          if (nonDemoAddresses.length !== state.customer.savedAddresses.length) {
+            state.customer.savedAddresses = nonDemoAddresses;
+          }
+        }
+      },
     }
   )
 );
