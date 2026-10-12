@@ -1489,7 +1489,24 @@ export const useOrderStore = create<OrderStore>()(
         const now = new Date().toISOString();
         const refundRecord = refundResult.refundRecord;
         const newRefundedAmount = roundToTwoDecimals((order.refunded_amount || 0) + refundRecord.amount);
-        const newPaymentStatus = newRefundedAmount >= order.total ? 'refunded' : 'partially_refunded';
+        const isOrderCancelled = order.order_status === 'cancelled';
+        const finAfterRefund = calculateOrderFinancials({ ...order, refunded_amount: newRefundedAmount });
+        let newPaymentStatus: DbOrder['payment_status'] = order.payment_status;
+
+        if (isOrderCancelled) {
+          newPaymentStatus = newRefundedAmount >= (finAfterRefund.totalAmountReceived > 0 ? finAfterRefund.totalAmountReceived : order.total)
+            ? 'refunded'
+            : 'partially_refunded';
+        } else {
+          // If order is active with active items and balance is settled
+          if (finAfterRefund.balanceAmount <= 0.05 && (finAfterRefund.totalAmountReceived > 0 || order.payment_status === 'paid')) {
+            newPaymentStatus = 'paid';
+          } else if (finAfterRefund.balanceAmount > 0.05 && finAfterRefund.totalAmountReceived > 0) {
+            newPaymentStatus = 'partially_paid';
+          } else {
+            newPaymentStatus = order.payment_status;
+          }
+        }
 
         const updatedHistory: OrderStatusHistoryItem[] = [
           ...(order.order_status_history || []),

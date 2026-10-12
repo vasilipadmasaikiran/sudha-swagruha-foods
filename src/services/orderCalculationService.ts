@@ -550,16 +550,19 @@ export function calculateOrderFinancials(inputsOrOrder: any): OrderFinancialSumm
       canonicalPaymentStatus = 'unpaid';
     }
   } else {
-    if (refundedAmount >= totalAmountReceived && totalAmountReceived > 0) {
-      canonicalPaymentStatus = 'refunded';
-    } else if (refundedAmount > 0) {
-      canonicalPaymentStatus = 'partially_refunded';
-    } else if (excessAmount > 0) {
-      canonicalPaymentStatus = 'excess_payment';
+    // Active order with active items
+    if (balanceAmount <= 0.05 && (totalAmountReceived > 0 || inputsOrOrder.payment_status === 'paid')) {
+      canonicalPaymentStatus = 'paid';
     } else if (totalAmountReceived >= finalOrderTotal && finalOrderTotal > 0) {
       canonicalPaymentStatus = 'paid';
-    } else if (totalAmountReceived > 0) {
+    } else if (excessAmount > 0) {
+      canonicalPaymentStatus = 'excess_payment';
+    } else if (balanceAmount > 0.05 && totalAmountReceived > 0) {
       canonicalPaymentStatus = 'partially_paid';
+    } else if (refundedAmount >= totalAmountReceived && totalAmountReceived > 0 && finalOrderTotal === 0) {
+      canonicalPaymentStatus = 'refunded';
+    } else if (refundedAmount > 0 && finalOrderTotal === 0) {
+      canonicalPaymentStatus = 'partially_refunded';
     } else {
       canonicalPaymentStatus = 'unpaid';
     }

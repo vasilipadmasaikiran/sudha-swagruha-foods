@@ -165,24 +165,26 @@ export default function AdminPaymentInfoSubTab({
       // 1. If explicit payments exist, add each payment entry
       if (Array.isArray(order.payments) && order.payments.length > 0) {
         for (const p of order.payments) {
+          const pAmount = roundToTwo(Number(p.amount || 0));
           let txStatus: PaymentTransactionItem['paymentStatus'] = 'Successful';
 
           if (isOrderCancelled) {
-            txStatus = pb.totalRefundedAmount >= pb.totalAmountReceived ? 'Refunded' : 'Cancelled';
+            txStatus = pb.totalRefundedAmount >= pb.totalAmountReceived && pb.totalAmountReceived > 0 ? 'Refunded' : 'Cancelled';
           } else if (p.status === 'failed') {
             txStatus = 'Failed';
           } else if (p.status === 'pending') {
             txStatus = 'Pending';
-          } else if (pb.refundStatus === 'REFUND PENDING') {
-            txStatus = 'Refund Pending';
-          } else if (pb.refundStatus === 'PARTIALLY REFUNDED') {
-            txStatus = 'Partially Refunded';
-          } else if (pb.refundStatus === 'REFUNDED') {
-            txStatus = 'Refunded';
+          } else if (pAmount > 0 || p.status === 'success') {
+            // Amount was paid
+            if (pb.balanceAmount > 0.05 && pb.totalAmountReceived < fin.finalOrderTotal) {
+              txStatus = 'Partially Paid';
+            } else {
+              txStatus = 'Successful';
+            }
           } else if (pb.paymentStatus === 'PARTIALLY PAID') {
             txStatus = 'Partially Paid';
-          } else if (pb.paymentStatus === 'FULLY PAID' || pb.paymentStatus === 'EXCESS AMOUNT') {
-            txStatus = 'Successful';
+          } else {
+            txStatus = 'Pending';
           }
 
           list.push({
@@ -201,7 +203,7 @@ export default function AdminPaymentInfoSubTab({
             shippingAmount: fin.shippingAmount,
             otherCharges: fin.otherCharges,
             finalPayable: fin.finalOrderTotal,
-            amountPaid: roundToTwo(Number(p.amount || 0)),
+            amountPaid: pAmount,
             balanceAmount: pb.balanceAmount,
             excessAmount: pb.excessAmount,
             paymentMethod: p.payment_method || p.provider || 'online',
@@ -219,26 +221,36 @@ export default function AdminPaymentInfoSubTab({
         }
       } else {
         // 2. Synthesize row for orders without explicit sub-payments
+        const hasPaymentIndicator = order.payment_status === 'paid' ||
+                                    (order.amount_paid !== undefined && Number(order.amount_paid) > 0) ||
+                                    Boolean(order.payment_id && !order.payment_id.startsWith('cod_') && order.payment_id !== 'Pending Settlement');
+
+        const paidVal = (order.amount_paid !== undefined && Number(order.amount_paid) > 0)
+          ? roundToTwo(Number(order.amount_paid))
+          : hasPaymentIndicator
+          ? roundToTwo(fin.totalAmountReceived > 0 ? fin.totalAmountReceived : fin.finalOrderTotal)
+          : 0;
+
         let txStatus: PaymentTransactionItem['paymentStatus'] = 'Pending';
 
         if (isOrderCancelled) {
-          txStatus = pb.totalRefundedAmount > 0 ? 'Refunded' : 'Cancelled';
-        } else if (order.payment_status === 'paid') {
-          txStatus = 'Successful';
-        } else if (order.payment_status === 'partially_paid') {
-          txStatus = 'Partially Paid';
-        } else if (order.payment_status === 'refunded') {
-          txStatus = 'Refunded';
-        } else if (order.payment_status === 'partially_refunded') {
-          txStatus = 'Partially Refunded';
+          txStatus = pb.totalRefundedAmount >= (paidVal > 0 ? paidVal : fin.originalOrderTotal) && pb.totalRefundedAmount > 0
+            ? 'Refunded'
+            : 'Cancelled';
         } else if (order.payment_status === 'failed') {
           txStatus = 'Failed';
+        } else if (paidVal > 0 || order.payment_status === 'paid' || fin.paymentStatus === 'paid' || pb.paymentStatus === 'FULLY PAID' || pb.paymentStatus === 'EXCESS AMOUNT') {
+          // Amount was paid
+          if (pb.balanceAmount > 0.05 && paidVal < fin.finalOrderTotal) {
+            txStatus = 'Partially Paid';
+          } else {
+            txStatus = 'Successful';
+          }
+        } else if (order.payment_status === 'partially_paid' || pb.paymentStatus === 'PARTIALLY PAID' || (paidVal > 0 && pb.balanceAmount > 0.05)) {
+          txStatus = 'Partially Paid';
         } else {
           txStatus = 'Pending';
         }
-
-        const isCollected = order.payment_status === 'paid' || (order.amount_paid !== undefined && order.amount_paid > 0);
-        const paidVal = isCollected ? Number(order.amount_paid || fin.finalOrderTotal) : 0;
 
         list.push({
           paymentId: order.payment_id || `PAY-${order.order_number}`,
