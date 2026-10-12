@@ -167,6 +167,7 @@ export default function AdminOrdersTab({ initialSubFilter }: { initialSubFilter?
   const [refundCustomAmount, setRefundCustomAmount] = useState<string>('');
   const [refundReason, setRefundReason] = useState('Administrative compensation / partial refund');
   const [isProcessingRefund, setIsProcessingRefund] = useState(false);
+  const [refundModalItemId, setRefundModalItemId] = useState<string | null>(null);
 
   // Section 5.3: Dedicated Refund Detail View Modal State
   const [selectedRefundDetail, setSelectedRefundDetail] = useState<{
@@ -322,25 +323,9 @@ export default function AdminOrdersTab({ initialSubFilter }: { initialSubFilter?
     }> = [];
 
     orders.forEach((o) => {
-      const orderOriginalSubtotal = (o.items || []).reduce(
-        (sum, it) => sum + Number(it.unit_price || 0) * Number(it.quantity || 1),
-        0
-      ) || Number(o.original_subtotal || o.subtotal || 1);
-
-      const hasCoupon = Boolean(o.coupon_code);
-      let orderDisc = 0;
-      if (hasCoupon) {
-        orderDisc = Number(
-          o.original_coupon_discount ?? o.original_discount ?? o.coupon_discount ?? 0
-        );
-        const rawDisc = Number(o.discount ?? 0);
-        if (orderDisc === 0 && rawDisc > 0) {
-          orderDisc = rawDisc;
-        }
-      } else if (o.original_coupon_discount && Number(o.original_coupon_discount) > 0) {
-        orderDisc = Number(o.original_coupon_discount);
-      }
-
+      const fin = calculateOrderFinancials(o);
+      const orderOriginalSubtotal = fin.originalSubtotal;
+      const orderDisc = fin.originalOrderDiscount;
       const discountRate = (orderOriginalSubtotal > 0 && orderDisc > 0)
         ? (orderDisc / orderOriginalSubtotal)
         : 0;
@@ -394,39 +379,47 @@ export default function AdminOrdersTab({ initialSubFilter }: { initialSubFilter?
 
       // 2. Unrecorded or Eligible Pending Refunds on cancelled items
       const recordedRefundItemIds = new Set((o.refunds || []).map((r) => r.item_id).filter(Boolean));
-      cancelledItems.forEach((cItem) => {
-        const alreadyCovered = recordedRefundItemIds.has(cItem.product_id) ||
-          Boolean(o.refunds && o.refunds.some((r) => r.reason.toLowerCase().includes(cItem.product_name_en.toLowerCase())));
-        if (!alreadyCovered) {
-          const unitPrice = Number(cItem.unit_price || (cItem.total_price / (cItem.quantity || 1)));
-          const qty = Number(cItem.cancelled_quantity || cItem.quantity || 1);
-          const itemGross = roundToTwoDecimals(unitPrice * qty);
-          const hasDiscount = discountRate > 0;
-          const discDeducted = hasDiscount ? roundToTwoDecimals(itemGross * discountRate) : 0;
-          const eligibleAmt = hasDiscount ? Math.max(0, roundToTwoDecimals(itemGross - discDeducted)) : itemGross;
+      const totalRefundsRecordedOnOrder = (o.refunds || []).reduce((sum, r) => sum + Number(r.amount || 0), 0) + Number(o.refunded_amount || 0);
+      const isCancellationFullyRefunded = totalRefundsRecordedOnOrder >= fin.refundableCancelledAmount && fin.refundableCancelledAmount > 0;
 
-          list.push({
-            id: `eligible_citem_${o.id}_${cItem.product_id}`,
-            orderId: o.id,
-            orderNumber: o.order_number,
-            order: o,
-            customerName: o.customer_name,
-            customerMobile: o.customer_mobile || o.customer_phone || '',
-            refundEligibleAmount: eligibleAmt,
-            grossAmount: itemGross,
-            discountPercentage: roundToTwoDecimals(discountRate * 100),
-            discountDeducted: discDeducted,
-            hasDiscountApplied: hasDiscount,
-            reason: cItem.removal_reason || `Item Cancelled: ${cItem.product_name_en} (Qty: ${qty})`,
-            type: 'Item Cancelled',
-            paymentGatewayReference: o.payment_id || o.razorpay_order_id || 'Pending Gateway Reference',
-            provider: 'razorpay',
-            status: 'eligible',
-            requestedAt: cItem.removed_at || o.cancelled_at || o.updated_at,
-            cancelledItems: [cItem],
-          });
-        }
-      });
+      if (!isCancellationFullyRefunded) {
+        cancelledItems.forEach((cItem) => {
+          const alreadyCovered =
+            recordedRefundItemIds.has(cItem.product_id) ||
+            Boolean(o.refunds && o.refunds.some((r) => r.reason.toLowerCase().includes(cItem.product_name_en.toLowerCase()))) ||
+            (cancelledItems.length === 1 && totalRefundsRecordedOnOrder > 0);
+
+          if (!alreadyCovered) {
+            const unitPrice = Number(cItem.unit_price || (cItem.total_price / (cItem.quantity || 1)));
+            const qty = Number(cItem.cancelled_quantity || cItem.quantity || 1);
+            const itemGross = roundToTwoDecimals(unitPrice * qty);
+            const hasDiscount = discountRate > 0;
+            const discDeducted = hasDiscount ? roundToTwoDecimals(itemGross * discountRate) : 0;
+            const eligibleAmt = hasDiscount ? Math.max(0, roundToTwoDecimals(itemGross - discDeducted)) : itemGross;
+
+            list.push({
+              id: `eligible_citem_${o.id}_${cItem.product_id}`,
+              orderId: o.id,
+              orderNumber: o.order_number,
+              order: o,
+              customerName: o.customer_name,
+              customerMobile: o.customer_mobile || o.customer_phone || '',
+              refundEligibleAmount: eligibleAmt,
+              grossAmount: itemGross,
+              discountPercentage: roundToTwoDecimals(discountRate * 100),
+              discountDeducted: discDeducted,
+              hasDiscountApplied: hasDiscount,
+              reason: cItem.removal_reason || `Item Cancelled: ${cItem.product_name_en} (Qty: ${qty})`,
+              type: 'Item Cancelled',
+              paymentGatewayReference: o.payment_id || o.razorpay_order_id || 'Pending Gateway Reference',
+              provider: 'razorpay',
+              status: 'eligible',
+              requestedAt: cItem.removed_at || o.cancelled_at || o.updated_at,
+              cancelledItems: [cItem],
+            });
+          }
+        });
+      }
     });
 
     return list.sort(
@@ -907,7 +900,7 @@ export default function AdminOrdersTab({ initialSubFilter }: { initialSubFilter?
         amt,
         refundReason.trim(),
         'partial',
-        null,
+        refundModalItemId || null,
         currentUser?.full_name || 'Order Processor'
       );
 
@@ -917,6 +910,7 @@ export default function AdminOrdersTab({ initialSubFilter }: { initialSubFilter?
           setSelectedOrder(res.order);
         }
         setRefundModalOrder(null);
+        setRefundModalItemId(null);
         setRefundCustomAmount('');
         setRefundReason('Administrative compensation / partial refund');
       } else {
@@ -1505,6 +1499,7 @@ export default function AdminOrdersTab({ initialSubFilter }: { initialSubFilter?
                                     setRefundModalOrder(row.order);
                                     setRefundCustomAmount(String(row.refundEligibleAmount));
                                     setRefundReason(row.reason);
+                                    setRefundModalItemId(row.cancelledItems?.[0]?.product_id || null);
                                   }}
                                   className="px-2.5 py-1 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white rounded-lg transition-all font-semibold text-[11px] shadow-sm flex items-center gap-1 cursor-pointer"
                                   title="Process Refund through Payment Gateway"
@@ -3504,7 +3499,10 @@ export default function AdminOrdersTab({ initialSubFilter }: { initialSubFilter?
                   </div>
                 </div>
                 <button
-                  onClick={() => setRefundModalOrder(null)}
+                  onClick={() => {
+                    setRefundModalOrder(null);
+                    setRefundModalItemId(null);
+                  }}
                   className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800"
                 >
                   <X className="w-4 h-4" />
@@ -3512,21 +3510,41 @@ export default function AdminOrdersTab({ initialSubFilter }: { initialSubFilter?
               </div>
 
               {(() => {
+                const fin = calculateOrderFinancials(refundModalOrder);
                 const metrics = calculateOrderRefundableMetrics(refundModalOrder);
+                const effectivePaid = metrics.paidAmount > 0
+                  ? metrics.paidAmount
+                  : (fin.totalAmountReceived > 0
+                      ? fin.totalAmountReceived
+                      : (fin.originalOrderTotal > 0
+                          ? fin.originalOrderTotal
+                          : Number(refundModalOrder.total || refundModalOrder.total_amount || 0)));
+                const maxAllowed = Math.max(
+                  metrics.refundableAmount,
+                  fin.refundableCancelledAmount,
+                  roundToTwoDecimals(effectivePaid - metrics.alreadyRefunded),
+                  parseFloat(refundCustomAmount) || 0
+                );
                 return (
                   <form onSubmit={handleCustomRefundSubmit} className="space-y-4">
                     <div className="p-3 bg-cyan-950/30 border border-cyan-500/30 rounded-xl text-xs space-y-1">
                       <div className="flex justify-between">
-                        <span className="text-slate-400">Total Paid Amount:</span>
-                        <span className="font-mono font-bold text-emerald-400">₹{metrics.paidAmount}</span>
+                        <span className="text-slate-400">Total Order / Paid Amount:</span>
+                        <span className="font-mono font-bold text-emerald-400">₹{effectivePaid}</span>
                       </div>
+                      {fin.refundableCancelledAmount > 0 && (
+                        <div className="flex justify-between">
+                          <span className="text-slate-400">Cancelled Items Eligible:</span>
+                          <span className="font-mono font-bold text-cyan-300">₹{fin.refundableCancelledAmount}</span>
+                        </div>
+                      )}
                       <div className="flex justify-between">
                         <span className="text-slate-400">Already Refunded:</span>
                         <span className="font-mono font-bold text-amber-400">₹{metrics.alreadyRefunded}</span>
                       </div>
                       <div className="flex justify-between border-t border-cyan-500/20 pt-1">
                         <span className="text-white font-bold">Max Refundable Balance:</span>
-                        <span className="font-mono font-bold text-cyan-400">₹{metrics.refundableAmount}</span>
+                        <span className="font-mono font-bold text-cyan-400">₹{maxAllowed}</span>
                       </div>
                     </div>
 
@@ -3537,12 +3555,12 @@ export default function AdminOrdersTab({ initialSubFilter }: { initialSubFilter?
                       <input
                         type="number"
                         step="0.01"
-                        min="1"
-                        max={metrics.refundableAmount}
+                        min="0.01"
+                        max={maxAllowed > 0 ? Math.max(maxAllowed, parseFloat(refundCustomAmount) || 0) : undefined}
                         required
                         value={refundCustomAmount}
                         onChange={(e) => setRefundCustomAmount(e.target.value)}
-                        placeholder={`Max ₹${metrics.refundableAmount}`}
+                        placeholder={maxAllowed > 0 ? `Max ₹${maxAllowed}` : 'Enter refund amount'}
                         className="w-full px-4 py-3 bg-slate-800 border border-slate-700 rounded-xl text-white font-mono text-sm focus:outline-none focus:border-cyan-500"
                       />
                     </div>
@@ -3574,7 +3592,10 @@ export default function AdminOrdersTab({ initialSubFilter }: { initialSubFilter?
                     <div className="flex gap-2 pt-2">
                       <button
                         type="button"
-                        onClick={() => setRefundModalOrder(null)}
+                        onClick={() => {
+                          setRefundModalOrder(null);
+                          setRefundModalItemId(null);
+                        }}
                         className="flex-1 py-3 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold rounded-xl transition-colors cursor-pointer"
                       >
                         Cancel

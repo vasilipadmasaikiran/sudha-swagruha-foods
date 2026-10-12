@@ -54,22 +54,45 @@ export function calculateOrderRefundableMetrics(order: DbOrder): RefundCalculati
   }
 
   const fin = calculateOrderFinancials(order);
-  const isPaid = fin.totalAmountReceived > 0;
-  const originalPaidAmount = fin.totalAmountReceived;
   const totalAlreadyRefunded = fin.refundedAmount;
-  const remainingRefundableAmount = fin.remainingRefundable;
+
+  // Determine effective paid amount:
+  // If verified gateway payments exist, use totalAmountReceived.
+  // Otherwise, fallback to original order total or raw order total.
+  const rawOrderTotal = roundToTwoDecimals(Number(order.total || order.total_amount || 0));
+  const effectiveOrderTotal = fin.originalOrderTotal > 0 ? fin.originalOrderTotal : rawOrderTotal;
+  const paidAmount = fin.totalAmountReceived > 0
+    ? fin.totalAmountReceived
+    : effectiveOrderTotal > 0
+    ? effectiveOrderTotal
+    : fin.refundableCancelledAmount;
+  const isPaid = paidAmount > 0;
+
+  // Max refundable balance:
+  // If cancelled items exist, at least the cancelled items eligible amount minus already refunded;
+  // Otherwise, the remaining order total minus already refunded.
+  const refundableAmount = Math.max(
+    0,
+    fin.totalAmountReceived > 0
+      ? roundToTwoDecimals(Math.max(0, fin.totalAmountReceived - totalAlreadyRefunded))
+      : fin.refundableCancelledAmount > 0
+      ? roundToTwoDecimals(Math.max(0, fin.refundableCancelledAmount - totalAlreadyRefunded))
+      : roundToTwoDecimals(Math.max(0, paidAmount - totalAlreadyRefunded))
+  );
+
+  const remainingRefundableAmount = refundableAmount;
   const remainingOrderValue = fin.finalOrderTotal;
 
   return {
-    originalPaidAmount,
+    originalPaidAmount: paidAmount,
     totalAlreadyRefunded,
     remainingRefundableAmount,
     remainingOrderValue,
-    isRefundable: isPaid && remainingRefundableAmount > 0,
+    isRefundable: refundableAmount > 0 || fin.refundableCancelledAmount > 0 || effectiveOrderTotal > totalAlreadyRefunded,
     isPaid,
-    paidAmount: originalPaidAmount,
+    paidAmount,
     alreadyRefunded: totalAlreadyRefunded,
-    refundableAmount: remainingRefundableAmount,
+    refundableAmount,
   };
 }
 
@@ -81,23 +104,32 @@ export const RefundService = {
     order: DbOrder,
     requestedAmount: number
   ): { valid: boolean; error?: string } {
-    const metrics = calculateOrderRefundableMetrics(order);
-
     if (requestedAmount <= 0) {
       return { valid: false, error: 'Refund amount must be greater than zero' };
     }
 
-    if (!metrics.isRefundable && requestedAmount > 0) {
+    const fin = calculateOrderFinancials(order);
+    const metrics = calculateOrderRefundableMetrics(order);
+    const rawOrderTotal = roundToTwoDecimals(Number(order.total || order.total_amount || 0));
+    const effectiveTotal = fin.originalOrderTotal > 0 ? fin.originalOrderTotal : rawOrderTotal;
+    const maxCapacity = Math.max(
+      metrics.refundableAmount,
+      fin.refundableCancelledAmount,
+      roundToTwoDecimals(effectiveTotal - metrics.alreadyRefunded),
+      effectiveTotal
+    );
+
+    if (maxCapacity > 0 && fin.refundedAmount >= maxCapacity && fin.refundedAmount > 0) {
       return {
         valid: false,
-        error: 'Order payment status is not paid or order has already been fully refunded',
+        error: `Order has already been fully refunded (Total: ₹${maxCapacity}, Refunded: ₹${fin.refundedAmount})`,
       };
     }
 
-    if (roundToTwoDecimals(requestedAmount) > metrics.remainingRefundableAmount) {
+    if (maxCapacity > 0 && roundToTwoDecimals(requestedAmount) > maxCapacity + 0.05) {
       return {
         valid: false,
-        error: `Requested refund amount (₹${requestedAmount}) exceeds remaining refundable balance (₹${metrics.remainingRefundableAmount})`,
+        error: `Requested refund amount (₹${requestedAmount}) exceeds maximum eligible balance (₹${maxCapacity})`,
       };
     }
 

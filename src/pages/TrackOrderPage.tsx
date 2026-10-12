@@ -1238,8 +1238,8 @@ export default function TrackOrderPage() {
                               <span className="font-sans">Total Refunded:</span>
                               <span>₹{totalRefunded}</span>
                             </div>
-                            <div className="flex justify-between text-gray-700">
-                              <span className="font-sans">Remaining Refundable:</span>
+                            <div className="flex justify-between text-gray-700 font-semibold">
+                              <span className="font-sans">Net Amount:</span>
                               <span>₹{remainingRefundable}</span>
                             </div>
                           </div>
@@ -1349,7 +1349,7 @@ export default function TrackOrderPage() {
                                 <span>₹{totalRefunded}</span>
                               </div>
                               <div className="flex justify-between pt-1 text-gray-800 font-bold">
-                                <span>= Remaining Refundable</span>
+                                <span>= Net Amount</span>
                                 <span>₹{remainingRefundable}</span>
                               </div>
                               <p className="text-[10px] text-gray-400 font-sans pt-2 leading-relaxed">
