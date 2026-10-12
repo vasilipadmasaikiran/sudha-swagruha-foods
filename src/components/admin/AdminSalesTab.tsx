@@ -533,14 +533,18 @@ export const AdminSalesTab: React.FC = () => {
                 </tr>
               ) : (
                 filteredOrders.slice(0, 50).map((o) => {
-                  const subtotal = roundToTwo(o.subtotal || o.total);
-                  const discount = roundToTwo((o.discount || 0) + (o.coupon_discount || 0));
-                  const gst = roundToTwo(o.gst_amount || 0);
-                  const shipping = roundToTwo(o.delivery_charge || 0);
-                  const total = roundToTwo(o.total);
-                  const paid = roundToTwo(o.amount_paid !== undefined ? o.amount_paid : (o.payment_status === 'paid' ? total : 0));
-                  const due = roundToTwo(o.amount_due !== undefined ? o.amount_due : Math.max(0, total - paid));
-                  const refunded = roundToTwo(o.refunded_amount || 0);
+                  const fin = calculateOrderFinancials(o);
+                  const subtotal = fin.originalSubtotal > 0 ? fin.originalSubtotal : roundToTwo(o.subtotal || o.total);
+                  const discount = fin.totalDiscount > 0 ? fin.totalDiscount : (fin.originalOrderDiscount > 0 ? fin.originalOrderDiscount : 0);
+                  const gst = fin.gstAmount;
+                  const shipping = fin.finalShipping;
+                  const total = fin.finalOrderTotal > 0 ? fin.finalOrderTotal : roundToTwo(o.total);
+                  const paid = fin.totalAmountReceived > 0
+                    ? fin.totalAmountReceived
+                    : roundToTwo(o.amount_paid !== undefined ? o.amount_paid : (o.payment_status === 'paid' ? total : 0));
+                  const due = fin.balanceAmount;
+                  const refunded = fin.refundedAmount > 0 ? fin.refundedAmount : roundToTwo(o.refunded_amount || 0);
+                  const paymentStatus = fin.paymentStatus || o.payment_status;
 
                   return (
                     <tr key={o.id || o.order_number} className="hover:bg-slate-800/40 transition-colors">
@@ -576,23 +580,34 @@ export const AdminSalesTab: React.FC = () => {
                       <td className="py-3 px-4 font-sans">
                         <span
                           className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${
-                            o.payment_status === 'paid'
+                            paymentStatus === 'paid'
                               ? 'bg-emerald-950 text-emerald-400 border border-emerald-800'
-                              : o.payment_status === 'refunded'
+                              : paymentStatus === 'refunded'
                               ? 'bg-red-950 text-red-400 border border-red-800'
-                              : o.payment_status === 'partially_refunded'
+                              : paymentStatus === 'partially_refunded'
                               ? 'bg-amber-950 text-amber-400 border border-amber-800'
-                              : o.payment_status === 'partially_paid'
+                              : paymentStatus === 'partially_paid'
                               ? 'bg-blue-950 text-blue-400 border border-blue-800'
                               : 'bg-slate-800 text-slate-400 border border-slate-700'
                           }`}
                         >
-                          {o.payment_status}
+                          {paymentStatus.replace('_', ' ')}
                         </span>
                       </td>
                       <td className="py-3 px-4 text-right text-slate-300">₹{subtotal.toLocaleString('en-IN')}</td>
                       <td className="py-3 px-4 text-right text-amber-400">
-                        {discount > 0 ? `-₹${discount.toLocaleString('en-IN')}` : '₹0'}
+                        {discount > 0 ? (
+                          <div>
+                            <span className="font-semibold">-₹{discount.toLocaleString('en-IN')}</span>
+                            {o.coupon_code && (
+                              <span className="block text-[9px] text-amber-500/80 uppercase font-sans">
+                                {o.coupon_code}
+                              </span>
+                            )}
+                          </div>
+                        ) : (
+                          <span className="text-slate-600">₹0</span>
+                        )}
                       </td>
                       <td className="py-3 px-4 text-right text-blue-400">
                         {gst > 0 ? `+₹${gst.toLocaleString('en-IN')}` : '₹0'}
