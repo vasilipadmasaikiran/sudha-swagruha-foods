@@ -409,7 +409,7 @@ export default function AdminUsersTab() {
                             </button>
 
                             {/* Delete User */}
-                            {u.role !== 'ROOT_ADMIN' && (
+                            {!isSelf && u.email.toLowerCase() !== 'admin@sudhaswagruha.com' && (
                               <button
                                 onClick={() => setDeleteTargetUser(u)}
                                 className="p-1.5 bg-slate-800/80 hover:bg-red-500/20 text-slate-400 hover:text-red-400 rounded-lg transition-colors cursor-pointer"
@@ -824,6 +824,7 @@ export default function AdminUsersTab() {
                 <button
                   onClick={async () => {
                     await deleteUser(deleteTargetUser.id);
+                    await fetchUsers();
                     toast.success('User deleted successfully');
                     setDeleteTargetUser(null);
                   }}

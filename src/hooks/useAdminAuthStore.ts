@@ -344,50 +344,96 @@ export const useAdminAuthStore = create<AdminAuthStore>()(
         if (!isSupabaseConfigured()) return;
         set({ isLoadingUsers: true });
         try {
-          const [usersRes, settingsRes] = await Promise.all([
+          const [usersRes, settingsRes, deletedRes] = await Promise.all([
             supabase.from('admin_users').select('*').order('created_at', { ascending: true }),
             supabase.from('store_settings').select('value').eq('key', 'admin_users_registry').maybeSingle(),
+            supabase.from('store_settings').select('value').eq('key', 'admin_users_deleted_list').maybeSingle(),
           ]);
+
+          // Collect all deleted tombstones from local storage and cloud settings
+          let localDeleted: string[] = [];
+          try {
+            localDeleted = JSON.parse(localStorage.getItem('ssf_deleted_admin_emails') || '[]');
+          } catch {
+            localDeleted = [];
+          }
+          const cloudDeleted: string[] = Array.isArray(deletedRes.data?.value) ? deletedRes.data.value : [];
+          const allDeletedEmails = new Set(
+            [...localDeleted, ...cloudDeleted].map((e) => (typeof e === 'string' ? e.toLowerCase().trim() : ''))
+          );
+          allDeletedEmails.delete('');
+
+          // Update local storage with complete tombstone set
+          try {
+            localStorage.setItem('ssf_deleted_admin_emails', JSON.stringify(Array.from(allDeletedEmails)));
+          } catch {
+            // ignore localStorage quota errors
+          }
 
           // Extract username map from registry backup so custom usernames are never lost
           const usernameMap = new Map<string, string>();
           if (settingsRes.data?.value && Array.isArray(settingsRes.data.value)) {
             for (const item of settingsRes.data.value) {
               if (item.email && item.username) {
-                usernameMap.set(item.email.toLowerCase(), item.username);
+                usernameMap.set(item.email.toLowerCase().trim(), item.username);
               }
             }
           }
 
+          let cloudUsers: AdminUser[] = [];
           if (!usersRes.error && usersRes.data && usersRes.data.length > 0) {
-            const cloudUsers = usersRes.data.map((row) =>
-              mapDbUser(row, usernameMap.get(row.email?.toLowerCase()))
-            );
+            cloudUsers = usersRes.data
+              .filter((row: any) => {
+                const em = (row.email || '').toLowerCase().trim();
+                // Exclude any deleted prefix, test records, or blacklisted tombstones
+                if (!em || em.startsWith('deleted_') || em.startsWith('temp_to_delete')) return false;
+                if (allDeletedEmails.has(em)) return false;
+                if (row.status === 'inactive' && row.full_name?.startsWith('[DELETED]')) return false;
+                return true;
+              })
+              .map((row) => mapDbUser(row, usernameMap.get((row.email || '').toLowerCase().trim())));
+          }
 
-            // Merge cloud users, keeping default accounts as fallback if not present in DB
-            const merged = [...cloudUsers];
-            for (const def of DEFAULT_ADMIN_USERS) {
-              if (!merged.some((u) => u.email.toLowerCase() === def.email.toLowerCase())) {
-                merged.push(def);
+          // Merge registry users from store_settings that might not be in admin_users table
+          if (settingsRes.data?.value && Array.isArray(settingsRes.data.value)) {
+            for (const regUser of settingsRes.data.value) {
+              const regEmail = (regUser.email || '').toLowerCase().trim();
+              if (
+                regEmail &&
+                !allDeletedEmails.has(regEmail) &&
+                !regEmail.startsWith('deleted_') &&
+                !cloudUsers.some((u) => u.email.toLowerCase().trim() === regEmail)
+              ) {
+                cloudUsers.push(regUser);
               }
             }
-
-            set((state) => {
-              let updatedCurrentUser = state.currentUser;
-              if (state.currentUser) {
-                const matched = merged.find(
-                  (cu) => cu.email.toLowerCase() === state.currentUser?.email.toLowerCase()
-                );
-                if (matched) {
-                  updatedCurrentUser = { ...state.currentUser, ...matched };
-                }
-              }
-              return {
-                users: merged,
-                currentUser: updatedCurrentUser,
-              };
-            });
           }
+
+          // Ensure Primary System Root Admin exists if list is completely empty
+          if (!cloudUsers.some((u) => u.role === 'ROOT_ADMIN')) {
+            cloudUsers.unshift(DEFAULT_ADMIN_USERS[0]);
+          }
+
+          // Final filter against deleted tombstones
+          const finalUsers = cloudUsers.filter(
+            (u) => !allDeletedEmails.has(u.email.toLowerCase().trim()) && !u.email.startsWith('deleted_')
+          );
+
+          set((state) => {
+            let updatedCurrentUser = state.currentUser;
+            if (state.currentUser) {
+              const matched = finalUsers.find(
+                (cu) => cu.email.toLowerCase().trim() === state.currentUser?.email.toLowerCase().trim()
+              );
+              if (matched) {
+                updatedCurrentUser = { ...state.currentUser, ...matched };
+              }
+            }
+            return {
+              users: finalUsers,
+              currentUser: updatedCurrentUser,
+            };
+          });
         } catch (err) {
           console.warn('Error fetching admin users from Supabase:', err);
         } finally {
@@ -411,14 +457,25 @@ export const useAdminAuthStore = create<AdminAuthStore>()(
               },
               (payload) => {
                 if (payload.eventType === 'INSERT' && payload.new) {
+                  const rawEmail = ((payload.new as any).email || '').toLowerCase().trim();
+                  if (rawEmail.startsWith('deleted_')) return;
                   const newUser = mapDbUser(payload.new);
                   set((state) => ({
                     users: [
-                      ...state.users.filter((u) => u.id !== newUser.id && u.email !== newUser.email),
+                      ...state.users.filter((u) => u.id !== newUser.id && u.email.toLowerCase() !== rawEmail),
                       newUser,
                     ],
                   }));
                 } else if (payload.eventType === 'UPDATE' && payload.new) {
+                  const rawEmail = ((payload.new as any).email || '').toLowerCase().trim();
+                  const updatedId = (payload.new as any).id;
+                  if (rawEmail.startsWith('deleted_')) {
+                    // Row was marked deleted -> remove immediately from local state
+                    set((state) => ({
+                      users: state.users.filter((u) => u.id !== updatedId && !u.email.toLowerCase().includes(rawEmail.replace(/^deleted_\d+_/, ''))),
+                    }));
+                    return;
+                  }
                   const updatedUser = mapDbUser(payload.new);
                   set((state) => ({
                     users: state.users.map((u) => (u.id === updatedUser.id ? { ...u, ...updatedUser } : u)),
@@ -841,32 +898,96 @@ export const useAdminAuthStore = create<AdminAuthStore>()(
 
       deleteUser: async (userId) => {
         const activeUser = get().currentUser;
-        if (activeUser?.role !== 'ROOT_ADMIN') return;
+        if (activeUser?.role !== 'ROOT_ADMIN') {
+          return;
+        }
 
-        const target = get().users.find((u) => u.id === userId);
-        if (!target || target.role === 'ROOT_ADMIN') return; // Cannot delete root admin
+        const target = get().users.find((u) => u.id === userId || u.email.toLowerCase() === userId.toLowerCase());
+        if (!target) return;
 
+        // Protection: Cannot delete primary system admin or current logged-in user
+        if (target.email.toLowerCase() === 'admin@sudhaswagruha.com' || target.id === 'user-root-01') {
+          return;
+        }
+        if (activeUser.id === target.id || activeUser.email.toLowerCase() === target.email.toLowerCase()) {
+          return;
+        }
+
+        const cleanEmail = target.email.toLowerCase().trim();
+        const targetId = target.id;
+
+        // 1. Immediately update local Zustand state
         set((state) => ({
-          users: state.users.filter((u) => u.id !== userId),
+          users: state.users.filter((u) => u.id !== targetId && u.email.toLowerCase().trim() !== cleanEmail),
         }));
 
-        if (isSupabaseConfigured()) {
+        // 2. Track deleted email in local & cloud tombstone blacklist
+        let deletedTombstones: string[] = [];
+        try {
+          deletedTombstones = JSON.parse(localStorage.getItem('ssf_deleted_admin_emails') || '[]');
+        } catch {
+          deletedTombstones = [];
+        }
+        if (!deletedTombstones.includes(cleanEmail)) {
+          deletedTombstones.push(cleanEmail);
           try {
-            const query = supabase.from('admin_users').delete();
-            if (isUuid(userId)) {
-              await query.eq('id', userId);
-            } else {
-              await query.eq('email', target.email);
-            }
-          } catch (err) {
-            console.warn('DB delete user error:', err);
+            localStorage.setItem('ssf_deleted_admin_emails', JSON.stringify(deletedTombstones));
+          } catch {
+            // ignore
           }
         }
 
-        await logAdminAction(activeUser.email, activeUser.role, 'DELETE_USER', 'ADMIN_USER', userId, {
+        // 3. Database Deletion (Multi-layer hard delete + neutralization)
+        if (isSupabaseConfigured()) {
+          try {
+            // A. Attempt Hard Delete
+            if (isUuid(targetId)) {
+              await supabase.from('admin_users').delete().eq('id', targetId);
+            }
+            await supabase.from('admin_users').delete().ilike('email', cleanEmail);
+
+            // B. Also update / neutralize record in admin_users so even if RLS blocked DELETE,
+            // the user is inactive and permanently de-indexed with a deleted_ prefix
+            const nowIso = new Date().toISOString();
+            if (isUuid(targetId)) {
+              await supabase
+                .from('admin_users')
+                .update({
+                  email: `deleted_${Date.now()}_${cleanEmail}`,
+                  status: 'inactive',
+                  full_name: `[DELETED] ${target.full_name}`,
+                  updated_at: nowIso,
+                })
+                .eq('id', targetId);
+            }
+            await supabase
+              .from('admin_users')
+              .update({
+                email: `deleted_${Date.now()}_${cleanEmail}`,
+                status: 'inactive',
+                full_name: `[DELETED] ${target.full_name}`,
+                updated_at: nowIso,
+              })
+              .ilike('email', cleanEmail);
+
+            // C. Sync deleted blacklist to store_settings
+            await supabase.from('store_settings').upsert({
+              key: 'admin_users_deleted_list',
+              value: deletedTombstones,
+              updated_at: nowIso,
+            });
+          } catch (err) {
+            console.warn('DB delete user notice:', err);
+          }
+        }
+
+        await logAdminAction(activeUser.email, activeUser.role, 'DELETE_USER', 'ADMIN_USER', targetId, {
           email: target.email,
+          username: target.username,
         });
-        get().syncWithCloud();
+
+        // 4. Sync remaining users registry to cloud
+        await get().syncWithCloud();
       },
 
       syncWithCloud: async () => {
